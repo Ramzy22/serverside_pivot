@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = ROOT_DIR / "dash_tanstack_pivot"
+PACKAGE_ROOT = ROOT_DIR / "serverside_pivot"
 ENGINE_ROOT = PACKAGE_ROOT / "pivot_engine"
 for candidate in (PACKAGE_ROOT, ENGINE_ROOT, ROOT_DIR):
     if candidate.exists() and str(candidate) not in sys.path:

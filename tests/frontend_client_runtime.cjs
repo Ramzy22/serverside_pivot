@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
 
-const frontend = path.resolve(__dirname, '../dash_tanstack_pivot');
+const frontend = path.resolve(__dirname, '../serverside_pivot');
 const localRequire = createRequire(path.join(frontend, 'package.json'));
 const babel = localRequire('@babel/core');
 const presets = [
@@ -543,5 +543,293 @@ if (process.env.PIVOT_CLIENT_BATCH_INPUT && process.env.PIVOT_CLIENT_BATCH_OUTPU
         assert.equal(executed.engineUsed, 'memory');
         assert.equal(executor.getTelemetry().activeEngine, 'memory');
         assert.equal(executor.getTelemetry().wasmReady, false);
+    });
+
+    test('ClientPivotTransport supports UI export_job lifecycle for CSV and real XLSX workbooks', async () => {
+        const { ClientPivotTransport } = loadClientModule();
+        const xlsxLib = localRequire('xlsx/dist/xlsx.mini.min.js');
+        const transport = new ClientPivotTransport({
+            executionMode: 'client',
+            data: SAMPLE_DATASET,
+            tableName: 'sales',
+            xlsxLoader: async () => xlsxLib,
+        });
+
+        // 1. UI export_job CSV with colIds including hierarchy, allRows: true, and custom headerLabels
+        const csvJobRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'export-job-csv-1',
+            kind: 'export',
+            state: {
+                viewMode: 'pivot',
+                layoutMode: 'outline',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                expanded: {},
+                showRowTotals: true,
+                showColTotals: true,
+            },
+            payload: {
+                action: 'start',
+                format: 'csv',
+                allRows: true,
+                colIds: ['hierarchy', '2024_revenue_sum', '2025_revenue_sum', '__RowTotal__revenue_sum'],
+                styleOptions: {
+                    includeHeaders: true,
+                    headerLabels: {
+                        hierarchy: 'Geography',
+                        '2024_revenue_sum': '2024 Revenue',
+                        '2025_revenue_sum': '2025 Revenue',
+                        '__RowTotal__revenue_sum': 'Total Revenue',
+                    },
+                },
+            },
+        });
+        assert.equal(csvJobRes.status, 'export_job');
+        assert.equal(csvJobRes.payload.phase, 'completed');
+        assert.ok(typeof csvJobRes.payload.jobId === 'string' && csvJobRes.payload.jobId.length > 0);
+        assert.ok(csvJobRes.payload.rowsWritten >= 6);
+        assert.ok(csvJobRes.payload.payloadRef && csvJobRes.payload.payloadRef.url);
+        assert.match(csvJobRes.payload.payloadRef.filename, /\.csv$/);
+
+        const csvBlob = await transport.fetchExportPayload(csvJobRes.payload.payloadRef);
+        const csvText = await csvBlob.text();
+        assert.match(csvText, /^Geography,2024 Revenue,2025 Revenue,Total Revenue/m);
+        assert.match(csvText, /AMER/);
+        assert.match(csvText, /  USA/);
+        assert.match(csvText, /Grand Total/);
+
+        // 2. status & cancel polling for known and missing job IDs
+        const statusRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'export-job-status-1',
+            kind: 'export',
+            payload: { action: 'status', jobId: csvJobRes.payload.jobId, table: 'sales' },
+        });
+        assert.equal(statusRes.status, 'export_job');
+        assert.equal(statusRes.payload.phase, 'completed');
+
+        const missingRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'export-job-status-missing',
+            kind: 'export',
+            payload: { action: 'status', jobId: 'nonexistent-job', table: 'sales' },
+        });
+        assert.equal(missingRes.status, 'error');
+        assert.equal(missingRes.payload.code, 'export_job_not_found');
+
+        // 3. UI export_job XLSX generates genuine ZIP/OOXML workbook with merged headers & numeric values
+        const xlsxJobRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'export-job-xlsx-1',
+            kind: 'export',
+            state: {
+                viewMode: 'pivot',
+                layoutMode: 'outline',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                expanded: {},
+                showRowTotals: true,
+                showColTotals: true,
+            },
+            payload: {
+                action: 'start',
+                format: 'xlsx',
+                allRows: true,
+                colIds: ['hierarchy', '2024_revenue_sum', '2025_revenue_sum', '__RowTotal__revenue_sum'],
+                styleOptions: {
+                    includeHeaders: true,
+                    mergedHeaders: true,
+                    headerLabels: {
+                        hierarchy: 'Geography',
+                        '2024_revenue_sum': '2024 Revenue',
+                        '2025_revenue_sum': '2025 Revenue',
+                        '__RowTotal__revenue_sum': 'Total Revenue',
+                    },
+                    mergedHeaderRows: [
+                        [
+                            { label: 'Geography', columnIds: ['hierarchy'], colSpan: 1, rowSpan: 2 },
+                            { label: 'Fiscal Years', columnIds: ['2024_revenue_sum', '2025_revenue_sum'], colSpan: 2, rowSpan: 1 },
+                            { label: 'Total', columnIds: ['__RowTotal__revenue_sum'], colSpan: 1, rowSpan: 2 },
+                        ],
+                        [
+                            { label: '2024', columnIds: ['2024_revenue_sum'], colSpan: 1, rowSpan: 1 },
+                            { label: '2025', columnIds: ['2025_revenue_sum'], colSpan: 1, rowSpan: 1 },
+                        ],
+                    ],
+                },
+            },
+        });
+        assert.equal(xlsxJobRes.status, 'export_job');
+        assert.equal(xlsxJobRes.payload.phase, 'completed');
+        assert.match(xlsxJobRes.payload.payloadRef.filename, /\.xlsx$/);
+
+        const xlsxBlob = await transport.fetchExportPayload(xlsxJobRes.payload.payloadRef);
+        const xlsxBytes = new Uint8Array(await xlsxBlob.arrayBuffer());
+        // Valid ZIP/OOXML magic header "PK\x03\x04"
+        assert.equal(xlsxBytes[0], 0x50);
+        assert.equal(xlsxBytes[1], 0x4b);
+
+        const xlsxFull = localRequire('xlsx');
+        const wb = xlsxFull.read(xlsxBytes, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        assert.ok(Array.isArray(ws['!merges']) && ws['!merges'].length >= 2);
+        const sheetRows = xlsxFull.utils.sheet_to_json(ws, { header: 1 });
+        assert.equal(sheetRows[0][0], 'Geography');
+        assert.equal(sheetRows[0][1], 'Fiscal Years');
+        assert.equal(sheetRows[1][1], '2024');
+        assert.equal(sheetRows[1][2], '2025');
+        assert.ok(sheetRows.some((r) => String(r[0]).includes('AMER') && r[3] === 3700));
+
+        // 4. Tabular part export expands hierarchy -> rowFields and respects rowStart/rowEnd
+        const tabularPartRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'export-part-tabular-1',
+            kind: 'export',
+            state: {
+                viewMode: 'pivot',
+                layoutMode: 'tabular',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                showRowTotals: true,
+                showColTotals: false,
+            },
+            payload: {
+                action: 'start',
+                format: 'csv',
+                partId: 'r0_c0',
+                partLabel: 'rows1-2',
+                rowStart: 0,
+                rowEnd: 2,
+                allRows: false,
+                colIds: ['hierarchy', '2024_revenue_sum', '__RowTotal__revenue_sum'],
+            },
+        });
+        assert.equal(tabularPartRes.status, 'export_job');
+        assert.equal(tabularPartRes.payload.rowsWritten, 2);
+        const partCsv = await (await transport.fetchExportPayload(tabularPartRes.payload.payloadRef)).text();
+        assert.match(partCsv, /^region,country,/i);
+    });
+
+    test('createRuntimeExportCommands + useRuntimeResponseLifecycle delivers client XLSX/CSV exports end-to-end', async () => {
+        const { ClientPivotTransport } = loadClientModule();
+        const xlsxLib = localRequire('xlsx/dist/xlsx.mini.min.js');
+        const transport = new ClientPivotTransport({
+            executionMode: 'client',
+            data: SAMPLE_DATASET,
+            tableName: 'sales',
+            xlsxLoader: async () => xlsxLib,
+        });
+
+        const cache = new Map();
+        const presets = [
+            [localRequire('@babel/preset-env'), { targets: { node: 'current' }, modules: 'commonjs' }],
+            localRequire('@babel/preset-typescript'),
+            localRequire('@babel/preset-react'),
+        ];
+        function loadRuntime(name) {
+            const base = path.join(frontend, 'src/lib/runtime', name);
+            const filename = ['', '.js', '.ts', '.tsx'].map((ext) => base + ext).find((f) => fs.existsSync(f));
+            if (cache.has(filename)) return cache.get(filename).exports;
+            const mod = { exports: {} };
+            cache.set(filename, mod);
+            const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), { filename, presets }).code;
+            const requireSource = (spec) => spec === 'react'
+                ? { useEffect: (ef) => ef(), useRef: (init) => ({ current: init }) }
+                : (spec.startsWith('.') ? loadRuntime(path.relative(path.join(frontend, 'src/lib/runtime'), path.resolve(path.dirname(filename), spec))) : localRequire(spec));
+            new Function('module', 'exports', 'require', code)(mod, mod.exports, requireSource);
+            return mod.exports;
+        }
+
+        const { createRuntimeExportCommands } = loadRuntime('createRuntimeExportCommands');
+        const { useRuntimeResponseLifecycle } = loadRuntime('useRuntimeResponseLifecycle');
+
+        const downloads = [];
+        const notices = [];
+        const exportState = { exporting: false, progress: null };
+        const exportJobControllerRef = { current: null };
+        const handledKeys = { current: new Set() };
+        const originalCreateObjectURL = URL.createObjectURL;
+        const originalRevokeObjectURL = URL.revokeObjectURL;
+        const createdBlobs = [];
+        URL.createObjectURL = (blob) => {
+            const idx = createdBlobs.push(blob);
+            return `blob:client-test-${idx}`;
+        };
+        URL.revokeObjectURL = () => {};
+
+        const pendingPromises = [];
+        const opts = {
+            abortGenerationRef: { current: 1 },
+            activeExportRequestIdRef: { current: null },
+            cancelledExportRequestIdsRef: { current: new Set() },
+            clientInstanceRef: { current: 'client-test' },
+            exportRequestSequenceRef: { current: 0 },
+            exportJobControllerRef,
+            pendingCopyIntentRef: { current: null },
+            buildExportStyleProfile: () => ({ includeHeaders: true, headerLabels: { hierarchy: 'Region', revenue_sum: 'Revenue' } }),
+            getServerExportColumnTarget: () => ({ mode: 'ids', colIds: ['hierarchy', 'revenue_sum'], knownColIds: ['hierarchy', 'revenue_sum'], totalCols: 2 }),
+            dispatchServerSideRuntimeSetProps: (update) => {
+                const req = {
+                    ...update.runtimeRequest,
+                    state: {
+                        viewMode: 'pivot',
+                        layoutMode: 'outline',
+                        rowFields: ['region'],
+                        colFields: [],
+                        valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                        expanded: {},
+                    },
+                };
+                const p = transport.request(req).then((response) => {
+                    useRuntimeResponseLifecycle({
+                        ...opts,
+                        payloadTransport: transport,
+                        runtimeResponse: response,
+                        handledRuntimeResponseKeysRef: handledKeys,
+                        recordProfilerResponse: () => {},
+                        showNotification: (...args) => notices.push(args),
+                        triggerExportDownload: (url, filename) => downloads.push({ url, filename }),
+                    });
+                });
+                pendingPromises.push(p);
+            },
+            COPY_ROW_LIMIT: 10,
+            EXPORT_ROW_LIMIT: 1000,
+            rowCount: 4,
+            tableName: 'sales',
+            layoutMode: 'outline',
+            serverSide: true,
+            partModal: null,
+            setExportProgress: (v) => { exportState.progress = v; },
+            setIsExporting: (v) => { exportState.exporting = v; },
+            setIsCopying: () => {},
+            setPartModal: () => {},
+        };
+
+        try {
+            const commands = createRuntimeExportCommands(opts);
+            commands.exportPivot('xlsx');
+            await Promise.all(pendingPromises);
+            await new Promise((resolve) => setImmediate(resolve));
+
+            assert.equal(exportState.exporting, false);
+            assert.equal(exportState.progress.phase, 'completed');
+            assert.equal(exportState.progress.delivery, 'delivered');
+            assert.equal(downloads.length, 1);
+            assert.match(downloads[0].filename, /\.xlsx$/);
+            assert.equal(createdBlobs.length, 1);
+            const downloadedBytes = new Uint8Array(await createdBlobs[0].arrayBuffer());
+            assert.equal(downloadedBytes[0], 0x50);
+            assert.equal(downloadedBytes[1], 0x4b);
+            assert.ok(notices.some(([, level]) => level === 'success'));
+        } finally {
+            exportJobControllerRef.current?.dispose();
+            URL.createObjectURL = originalCreateObjectURL;
+            URL.revokeObjectURL = originalRevokeObjectURL;
+        }
     });
 }

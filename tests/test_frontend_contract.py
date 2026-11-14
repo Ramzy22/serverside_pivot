@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Add root and pivot_engine source to path
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), 'pivot_engine'))
-sys.path.append(os.path.join(os.getcwd(), 'dash_tanstack_pivot'))
+sys.path.append(os.path.join(os.getcwd(), 'serverside_pivot'))
 
 from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation
 from pivot_engine.column_layout import UnknownLayoutRevision
@@ -25,7 +25,7 @@ def with_pivot_workspace_shell(component_source):
     component_root = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -320,20 +320,20 @@ def test_dash_app_import_and_layout_valid():
 
 def test_dash_app_registers_local_component_bundle():
     from dash.fingerprint import build_fingerprint
-    import dash_tanstack_pivot as component_pkg
+    import serverside_pivot as component_pkg
     from dash_presentation.app import app
 
     resources = app._collect_and_register_resources(app.scripts.get_all_scripts())
     component_scripts = [
         resource for resource in resources
-        if "dash_tanstack_pivot" in resource and resource.endswith(".min.js")
+        if "serverside_pivot" in resource and resource.endswith(".min.js")
     ]
 
     bundle_rel_path = next(
         entry["relative_package_path"]
         for entry in component_pkg.DashTanstackPivot._js_dist
         if entry.get("relative_package_path", "").endswith(
-            "dash_tanstack_pivot.min.js"
+            "serverside_pivot.min.js"
         )
         and not entry.get("dynamic")
     )
@@ -357,12 +357,12 @@ def test_dash_app_registers_local_component_bundle():
     assert bundle_path is not None, "Generated Dash component bundle is missing"
     expected = (
         f"{app.config.requests_pathname_prefix}"
-        f"_dash-component-suites/dash_tanstack_pivot/"
+        f"_dash-component-suites/serverside_pivot/"
         f"{build_fingerprint(bundle_rel_path, component_pkg.__version__, int(bundle_path.stat().st_mtime))}"
     )
 
     assert Path(component_pkg.__file__).resolve().is_relative_to(
-        (Path(os.getcwd()) / "dash_tanstack_pivot").resolve()
+        (Path(os.getcwd()) / "serverside_pivot").resolve()
     )
     assert component_scripts == [expected]
 
@@ -371,7 +371,7 @@ def test_server_side_sorting_is_emitted_with_runtime_request_only():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -390,7 +390,7 @@ def test_server_side_sorting_starts_a_new_structural_cache_epoch():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -414,7 +414,7 @@ def test_expansion_anchor_uses_configured_server_side_block_size():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -431,7 +431,7 @@ def test_server_side_single_collapse_preserves_expand_all_default_for_offscreen_
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -453,7 +453,7 @@ def test_expansion_shifted_cache_blocks_are_removed_before_repaint():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -509,7 +509,7 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -520,7 +520,7 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     export_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -541,7 +541,7 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
 
 
 def test_heavy_client_dependencies_are_loaded_only_by_the_features_that_need_them():
-    root = Path(os.getcwd()) / "dash_tanstack_pivot"
+    root = Path(os.getcwd()) / "serverside_pivot"
     export_source = (root / "src" / "lib" / "utils" / "exportUtils.js").read_text(encoding="utf-8")
     export_command_source = (root / "src" / "lib" / "runtime" / "createRuntimeExportCommands.js").read_text(encoding="utf-8")
     chart_renderer_source = (root / "src" / "lib" / "components" / "Charts" / "ChartRenderers.js").read_text(encoding="utf-8")
@@ -585,11 +585,14 @@ def test_heavy_client_dependencies_are_loaded_only_by_the_features_that_need_the
     assert 'webpackChunkName: "pivot-detail-drawer"' in workspace_canvas_source
     assert 'webpackChunkName: "pivot-detail-sidepanel"' in workspace_canvas_source
     assert 'webpackChunkName: "pivot-edit-panel"' in workspace_canvas_source
-    assert "chunkFilename: '[name].dash_tanstack_pivot.min.js'" in webpack_source
+    assert (
+        "chunkFilename: '[name].serverside_pivot.min.js'" in webpack_source
+        or "chunkFilename: `[name].${dashLibraryName}.min.js`" in webpack_source
+    )
     assert "DEFAULT_MAX_MAIN_BYTES = 1_100_000" in bundle_contract_source
     assert "DEFAULT_MAX_STANDARD_ASYNC_BYTES = 300_000" in bundle_contract_source
     assert "OPTIONAL_ASYNC_BUDGETS" in bundle_contract_source
-    assert "dash_tanstack_pivot_shared" in bundle_contract_source
+    assert "serverside_pivot_shared" in bundle_contract_source
     assert "pivot-xlsx-html" in bundle_contract_source
     assert "pivot-echarts-2d" in bundle_contract_source
     assert "pivot-echarts-3d" in bundle_contract_source
@@ -599,7 +602,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -610,7 +613,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     helpers_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -620,7 +623,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     export_commands_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "runtime",
@@ -630,7 +633,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     export_presentation_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "runtime",
@@ -663,7 +666,7 @@ def test_export_ui_exposes_xlsx_and_csv_and_cancel_ignores_late_responses():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -674,7 +677,7 @@ def test_export_ui_exposes_xlsx_and_csv_and_cancel_ignores_late_responses():
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -701,7 +704,7 @@ def test_context_menu_retains_zero_argument_xlsx_export():
     viewport_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "runtime",
@@ -716,7 +719,7 @@ def test_chart_csv_neutralizes_formula_text_and_emits_excel_utf8_bom():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -727,7 +730,7 @@ def test_chart_csv_neutralizes_formula_text_and_emits_excel_utf8_bom():
     chart_export_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -765,7 +768,7 @@ def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -776,7 +779,7 @@ def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -816,7 +819,7 @@ def test_value_formula_editor_brackets_field_names_that_are_not_identifiers():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -838,7 +841,7 @@ def test_report_editor_lists_outline_and_uses_row_override_language():
     report_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -875,7 +878,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     report_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -886,7 +889,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     column_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -896,7 +899,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     render_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -906,7 +909,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -916,7 +919,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -927,7 +930,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     report_selection_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -982,7 +985,7 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -993,7 +996,7 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1003,7 +1006,7 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
     render_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -1031,7 +1034,7 @@ def test_sidebar_field_panels_allow_compact_minimum_sizes():
     field_layout_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -1041,7 +1044,7 @@ def test_sidebar_field_panels_allow_compact_minimum_sizes():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1062,7 +1065,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1073,7 +1076,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1084,7 +1087,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     workspace_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1095,7 +1098,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -1139,7 +1142,7 @@ def test_chart_canvas_pane_full_settings_settable_from_props():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -1149,7 +1152,7 @@ def test_chart_canvas_pane_full_settings_settable_from_props():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1160,8 +1163,8 @@ def test_chart_canvas_pane_full_settings_settable_from_props():
     python_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
-            "dash_tanstack_pivot",
+            "serverside_pivot",
+            "serverside_pivot",
             "DashTanstackPivot.py",
         )
     ).read_text(encoding="utf-8")
@@ -1224,7 +1227,7 @@ def test_chart_panel_settings_budget_survives_parent_rerenders():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1246,7 +1249,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1257,7 +1260,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1268,7 +1271,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     workspace_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1279,7 +1282,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -1289,7 +1292,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     chart_math_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1317,7 +1320,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
 
 
 def test_frontend_has_no_unintegrated_refactor_scaffolding():
-    source_root = Path(os.getcwd()) / "dash_tanstack_pivot" / "src" / "lib"
+    source_root = Path(os.getcwd()) / "serverside_pivot" / "src" / "lib"
 
     assert not (source_root / "hooks" / "usePivotData.js").exists()
     assert not (source_root / "components" / "PivotChartRenderer.js").exists()
@@ -1327,7 +1330,7 @@ def test_resized_chart_panel_samples_dense_axis_labels():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1338,7 +1341,7 @@ def test_resized_chart_panel_samples_dense_axis_labels():
     renderer_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1360,7 +1363,7 @@ def test_chart_panel_immersive_chrome_lock_and_export_menu_are_explicit():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1385,7 +1388,7 @@ def test_chart_copy_and_exports_compose_visible_title_and_legend():
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -1396,7 +1399,7 @@ def test_chart_copy_and_exports_compose_visible_title_and_legend():
     renderer_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3199,7 +3202,7 @@ def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3209,7 +3212,7 @@ def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
     cache_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3249,7 +3252,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3260,7 +3263,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     hook_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3270,7 +3273,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     viewport_hook_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3280,7 +3283,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     horizontal_viewport_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3290,7 +3293,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     body_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3351,7 +3354,7 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3362,7 +3365,7 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
     status_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3373,7 +3376,7 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3393,7 +3396,7 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3404,7 +3407,7 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     row_model_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3414,7 +3417,7 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     viewport_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3424,7 +3427,7 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     col_virtualizer_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3459,7 +3462,7 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3470,7 +3473,7 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     column_order_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3480,7 +3483,7 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3490,7 +3493,7 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     context_menu_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3501,7 +3504,7 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     field_interactions_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3547,7 +3550,7 @@ def test_header_coloring_contract_exposes_prop_and_render_path():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3558,7 +3561,7 @@ def test_header_coloring_contract_exposes_prop_and_render_path():
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3568,7 +3571,7 @@ def test_header_coloring_contract_exposes_prop_and_render_path():
     column_defs_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3591,7 +3594,7 @@ def test_frontend_profiler_source_tracks_request_ids_and_global_history():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3602,7 +3605,7 @@ def test_frontend_profiler_source_tracks_request_ids_and_global_history():
     row_model_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3612,7 +3615,7 @@ def test_frontend_profiler_source_tracks_request_ids_and_global_history():
     profiler_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3638,7 +3641,7 @@ def test_grid_clipboard_shortcuts_preserve_native_editable_input_behavior():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3649,7 +3652,7 @@ def test_grid_clipboard_shortcuts_preserve_native_editable_input_behavior():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3667,7 +3670,7 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3678,7 +3681,7 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     transaction_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3699,7 +3702,7 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     assert "handleConfirmPropagation" in component_source
     assert "handleCancelPropagation" in component_source
     assert "describeTransactionPropagation" in Path(
-        os.path.join(os.getcwd(), "dash_tanstack_pivot", "src", "lib", "hooks", "usePivotNormalization.js")
+        os.path.join(os.getcwd(), "serverside_pivot", "src", "lib", "hooks", "usePivotNormalization.js")
     ).read_text(encoding="utf-8")
     assert "transactionUndoStackRef" not in component_source
     assert "transactionRedoStackRef" not in component_source
@@ -3734,7 +3737,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     column_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3744,7 +3747,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     sparkline_utils_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3754,7 +3757,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     helper_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3764,7 +3767,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     sparkline_cell_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3775,7 +3778,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3786,7 +3789,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3797,7 +3800,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3807,8 +3810,8 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     python_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
-            "dash_tanstack_pivot",
+            "serverside_pivot",
+            "serverside_pivot",
             "DashTanstackPivot.py",
         )
     ).read_text(encoding="utf-8")
@@ -3876,7 +3879,7 @@ def test_sparse_schema_row_totals_do_not_render_blank_placeholders():
     column_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3900,7 +3903,7 @@ def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3911,7 +3914,7 @@ def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
     sorting_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -3931,7 +3934,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     column_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -3941,7 +3944,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     editable_cell_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -3961,7 +3964,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4051,7 +4054,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     report_selection_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4065,7 +4068,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4078,7 +4081,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     styles_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4115,7 +4118,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     editing_utils_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4129,7 +4132,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     status_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4162,7 +4165,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "data-rowid={row.id}" in Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4175,7 +4178,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     chart_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4186,7 +4189,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4197,7 +4200,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4207,7 +4210,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     column_virtualizer_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4217,7 +4220,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     renderer_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4258,7 +4261,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "data-colid={col.id}" in Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4268,7 +4271,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4278,7 +4281,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     render_helper_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4288,7 +4291,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     formatting_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4311,7 +4314,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "data-pivot-loading-indicator=\"global\"" in Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4322,7 +4325,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "data-pivot-loading-indicator=\"status\"" in Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4336,7 +4339,7 @@ def test_frontend_toolbar_exposes_transaction_undo_redo_controls():
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4363,7 +4366,7 @@ def test_expansion_request_includes_anchor_block_from_overscan_boundary():
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4380,7 +4383,7 @@ def test_runtime_data_drop_resolves_pending_viewport_request():
     transport_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "runtime",
@@ -4390,7 +4393,7 @@ def test_runtime_data_drop_resolves_pending_viewport_request():
     response_lifecycle_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "runtime",
@@ -4400,7 +4403,7 @@ def test_runtime_data_drop_resolves_pending_viewport_request():
     runtime_data_commit_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4423,7 +4426,7 @@ def test_expansion_requests_preserve_latest_horizontal_window():
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4434,7 +4437,7 @@ def test_expansion_requests_preserve_latest_horizontal_window():
     viewport_hook_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4452,7 +4455,7 @@ def test_structural_requests_restart_from_top_window_after_field_changes():
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4470,7 +4473,7 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4481,7 +4484,7 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     callback_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "pivot_engine",
             "pivot_engine",
             "runtime",
@@ -4517,7 +4520,7 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     column_defs_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4527,7 +4530,7 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     appbar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4537,7 +4540,7 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4548,7 +4551,7 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4558,7 +4561,7 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     layout_rows_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4598,7 +4601,7 @@ def test_client_side_custom_categories_materialize_before_filtering():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4609,7 +4612,7 @@ def test_client_side_custom_categories_materialize_before_filtering():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4620,7 +4623,7 @@ def test_client_side_custom_categories_materialize_before_filtering():
     field_interactions_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4646,7 +4649,7 @@ def test_custom_categories_are_selectable_report_dimensions():
     report_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4663,7 +4666,7 @@ def test_report_rows_do_not_render_level_label_chips():
     column_defs_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4680,7 +4683,7 @@ def test_custom_category_editor_uses_modal_and_validates_rules():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4720,7 +4723,7 @@ def test_available_fields_search_only_appears_for_larger_field_lists():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4742,7 +4745,7 @@ def test_custom_dimensions_support_date_and_number_grouping_workflows():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4753,7 +4756,7 @@ def test_custom_dimensions_support_date_and_number_grouping_workflows():
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4780,7 +4783,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4791,7 +4794,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4802,7 +4805,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     measure_axis_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4812,7 +4815,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     callbacks_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "pivot_engine",
             "pivot_engine",
             "runtime",
@@ -4822,7 +4825,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     request_factory_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "pivot_engine",
             "pivot_engine",
             "runtime",
@@ -4832,7 +4835,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     column_defs_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4843,7 +4846,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     field_interactions_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -4877,7 +4880,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4888,7 +4891,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     filter_options_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "utils",
@@ -4898,7 +4901,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     filter_popover_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4909,7 +4912,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     column_filter_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4920,7 +4923,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     date_filter_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4931,7 +4934,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     numeric_filter_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4942,7 +4945,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     multi_select_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4953,7 +4956,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     sidebar_filter_item_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -4964,7 +4967,7 @@ def test_filter_open_requests_and_responses_are_idempotent():
     sidebar_panel_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -5034,7 +5037,7 @@ def test_sidebar_group_selection_uses_leaf_selection_state():
     column_tree_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -5055,7 +5058,7 @@ def test_row_cache_merges_rows_by_stable_identity_when_column_windows_shift():
     source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -5072,7 +5075,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     row_model_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -5082,7 +5085,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -5092,7 +5095,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     safe_cell_content_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "presentation",
@@ -5102,7 +5105,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -5113,7 +5116,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     component_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",
@@ -5125,7 +5128,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     field_interactions_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",

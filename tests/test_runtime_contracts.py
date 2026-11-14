@@ -80,6 +80,61 @@ def test_v1_request_rejects_unknown_view_state_members():
     assert "unreviewedState" in request["error"]
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        {
+            "rowFields": ["region"],
+            "groupAllowUnbalanced": True,
+            "unbalancedValues": [None, "", "N/A"],
+            "showGrandTotal": False,
+        },
+        {
+            "groupAllowUnbalanced": False,
+            "unbalancedValues": None,
+            "showGrandTotal": None,
+        },
+    ],
+)
+def test_v1_request_accepts_unbalanced_and_grand_total_view_state_fields(state):
+    request = normalize_runtime_request(
+        pivot_id="pivot-grid",
+        runtime_request={
+            "schemaVersion": RUNTIME_SCHEMA_VERSION,
+            "kind": "data",
+            "requestId": "v1-unbalanced-state",
+            "state": state,
+            "payload": {"start": 0, "end": 10},
+        },
+    )
+
+    assert "error_code" not in request
+    assert request["payload"]["state_override"] == state
+
+
+@pytest.mark.parametrize(
+    "bad_state",
+    [
+        {"groupAllowUnbalanced": "yes"},
+        {"unbalancedValues": "not-a-list"},
+        {"showGrandTotal": "true"},
+    ],
+)
+def test_v1_request_rejects_invalid_unbalanced_or_grand_total_types(bad_state):
+    request = normalize_runtime_request(
+        pivot_id="pivot-grid",
+        runtime_request={
+            "schemaVersion": RUNTIME_SCHEMA_VERSION,
+            "kind": "data",
+            "requestId": "v1-bad-unbalanced-state",
+            "state": bad_state,
+            "payload": {},
+        },
+    )
+
+    assert request["error_code"] == "invalid_runtime_request"
+
+
 def test_unknown_schema_version_is_not_silently_treated_as_legacy():
     request = normalize_runtime_request(
         pivot_id="pivot-grid",
@@ -202,8 +257,8 @@ def test_typescript_boundary_guards_enforce_export_job_contract():
     root = Path(__file__).resolve().parents[1]
     script = r"""
 const fs = require('node:fs');
-const ts = require('./dash_tanstack_pivot/node_modules/typescript');
-const source = fs.readFileSync('./dash_tanstack_pivot/src/lib/runtime/runtimeContract.ts', 'utf8');
+const ts = require('./serverside_pivot/node_modules/typescript');
+const source = fs.readFileSync('./serverside_pivot/src/lib/runtime/runtimeContract.ts', 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS }}).outputText;
 const output = { exports: {} };
 new Function('module', 'exports', compiled)(output, output.exports);
@@ -228,14 +283,19 @@ def test_generated_types_reject_unknown_runtime_envelope_fields():
     root = Path(__file__).resolve().parents[1]
     script = r"""
 const path = require('node:path');
-const ts = require('./dash_tanstack_pivot/node_modules/typescript');
-const probe = path.resolve('dash_tanstack_pivot/src/lib/runtime/contract-type-probe.ts');
+const ts = require('./serverside_pivot/node_modules/typescript');
+const probe = path.resolve('serverside_pivot/src/lib/runtime/contract-type-probe.ts');
 const source = `
 import type { PivotRuntimeProtocolRequestV1 as Request } from './runtime-contract.generated';
 import type { PivotRuntimeProtocolResponseV1 as Response } from './runtime-response-contract.generated';
 const requestHasClosedEnvelope: false = null as unknown as (string extends keyof Request ? true : false);
 const responseHasClosedEnvelope: false = null as unknown as (string extends keyof Response ? true : false);
 const request: Request = { schemaVersion: 1, kind: 'data', requestId: 'id', payload: {},
+    state: {
+        groupAllowUnbalanced: true,
+        unbalancedValues: [null, 'N/A'],
+        showGrandTotal: false,
+    },
     // @ts-expect-error Runtime envelope members are explicitly enumerated.
     unreviewedField: true,
 };

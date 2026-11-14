@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
-const frontendRoot = path.join(repoRoot, 'dash_tanstack_pivot');
+const frontendRoot = path.join(repoRoot, 'serverside_pivot');
 const babel = require(path.join(frontendRoot, 'node_modules', '@babel', 'core'));
 const presetEnv = require(path.join(frontendRoot, 'node_modules', '@babel', 'preset-env'));
 const sourcePath = path.join(frontendRoot, 'src', 'lib', 'components', 'Sidebar', 'formulaUtils.js');

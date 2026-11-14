@@ -9,7 +9,7 @@
     "preview": "vite preview --config vite.config.ts --host 127.0.0.1 --port 5174 --strictPort"
   },
   "dependencies": {
-    "dash_tanstack_pivot": "file:release-package.tgz",
+    "serverside_pivot": "file:release-package.tgz",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "styled-components": "^6.1.17"

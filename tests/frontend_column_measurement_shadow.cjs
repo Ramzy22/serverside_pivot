@@ -7,7 +7,7 @@ const path = require('node:path');
 const net = require('node:net');
 
 const repoRoot = path.resolve(__dirname, '..');
-const frontendRoot = path.join(repoRoot, 'dash_tanstack_pivot');
+const frontendRoot = path.join(repoRoot, 'serverside_pivot');
 const babel = require(path.join(frontendRoot, 'node_modules', '@babel', 'core'));
 const sourcePath = path.join(frontendRoot, 'src/lib/runtime/useRuntimeColumnMeasurement.js');
 const hookSource = babel.transformSync(fs.readFileSync(sourcePath, 'utf8'), {

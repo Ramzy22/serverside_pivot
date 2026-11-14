@@ -46,7 +46,7 @@ def html_fallback_browser():
 
 
 def _html_fallback_script():
-    source_path = Path(__file__).resolve().parents[1] / "dash_tanstack_pivot/src/lib/utils/exportUtils.js"
+    source_path = Path(__file__).resolve().parents[1] / "serverside_pivot/src/lib/utils/exportUtils.js"
     source = source_path.read_text(encoding="utf-8")
     functions = []
     for name in ("escapeTsv", "htmlTableToTsv"):

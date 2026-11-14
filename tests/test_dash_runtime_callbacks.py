@@ -17,7 +17,7 @@ import pivot_engine.runtime.dash_callbacks as dash_callbacks_module
 from pivot_engine import register_pivot_app
 from pivot_engine.grid_hierarchy import build_org_hierarchy_paths
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine.runtime import (
     DashPivotInstanceConfig,
     register_dash_callbacks_for_instances,
@@ -93,7 +93,7 @@ def _make_app():
 def _payload_owner_client(app, subject: str):
     client = app.server.test_client()
     with client.session_transaction() as session:
-        session["_dash_tanstack_pivot_payload_subject"] = subject
+        session["_serverside_pivot_payload_subject"] = subject
     return client
 
 
@@ -432,7 +432,7 @@ def test_dash_payload_download_requires_the_issuing_browser_session():
 
     owner = app.server.test_client()
     with owner.session_transaction() as session:
-        session["_dash_tanstack_pivot_payload_subject"] = "owner-session"
+        session["_serverside_pivot_payload_subject"] = "owner-session"
     stranger = app.server.test_client()
 
     assert owner.get(payload_ref["url"]).status_code == 200
@@ -789,7 +789,7 @@ def test_async_bridge_can_force_coroutine_to_worker_thread():
 
 
 def test_legacy_aio_callback_uses_loop_safe_async_bridge():
-    source = Path("dash_tanstack_pivot/pivot_engine/pivot_engine/dash_component.py").read_text(encoding="utf-8")
+    source = Path("serverside_pivot/pivot_engine/pivot_engine/dash_component.py").read_text(encoding="utf-8")
 
     assert "async def _update_grid_async" in source
     assert "run_awaitable_sync(_update_grid_async(spec_data))" in source
@@ -798,8 +798,8 @@ def test_legacy_aio_callback_uses_loop_safe_async_bridge():
 
 
 def test_legacy_aio_org_hierarchy_paths_skip_row_wise_apply_and_nulls():
-    component_source = Path("dash_tanstack_pivot/pivot_engine/pivot_engine/dash_component.py").read_text(encoding="utf-8")
-    helper_source = Path("dash_tanstack_pivot/pivot_engine/pivot_engine/grid_hierarchy.py").read_text(encoding="utf-8")
+    component_source = Path("serverside_pivot/pivot_engine/pivot_engine/dash_component.py").read_text(encoding="utf-8")
+    helper_source = Path("serverside_pivot/pivot_engine/pivot_engine/grid_hierarchy.py").read_text(encoding="utf-8")
     frame = pd.DataFrame(
         {
             "region": ["North", "South", None],
@@ -818,7 +818,7 @@ def test_legacy_aio_org_hierarchy_paths_skip_row_wise_apply_and_nulls():
 
 
 def test_drill_through_rest_route_uses_worker_thread_bridge():
-    source = Path("dash_tanstack_pivot/pivot_engine/pivot_engine/dash_integration.py").read_text(encoding="utf-8")
+    source = Path("serverside_pivot/pivot_engine/pivot_engine/dash_integration.py").read_text(encoding="utf-8")
 
     assert "async def _load_drill_through_data" in source
     assert "run_awaitable_in_worker_thread(_load_drill_through_data())" in source

@@ -97,10 +97,10 @@ def test_scroll_scenario_has_independent_row_and_column_windows(monkeypatch):
 
 
 def test_reference_is_outside_product_distributions():
-    npm_package = json.loads((ROOT / "dash_tanstack_pivot" / "package.json").read_text(encoding="utf-8"))
+    npm_package = json.loads((ROOT / "serverside_pivot" / "package.json").read_text(encoding="utf-8"))
     assert all(not path.startswith("reference") for path in npm_package["files"])
     assert REFERENCE.is_relative_to(ROOT)
-    assert not REFERENCE.is_relative_to(ROOT / "dash_tanstack_pivot")
+    assert not REFERENCE.is_relative_to(ROOT / "serverside_pivot")
     ignored = subprocess.run(
         ["git", "check-ignore", "reference/ag_grid_36_2/dist/index.html"],
         cwd=ROOT,

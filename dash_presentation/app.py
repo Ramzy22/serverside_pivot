@@ -13,7 +13,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 # Ensure the local pivot_engine package takes priority over any stale installs.
-_PE_DIR = _REPO_ROOT / "dash_tanstack_pivot" / "pivot_engine"
+_PE_DIR = _REPO_ROOT / "serverside_pivot" / "pivot_engine"
 if _PE_DIR.is_dir() and str(_PE_DIR) not in sys.path:
     sys.path.insert(0, str(_PE_DIR))
 
@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from dash import Dash, Input, Output, dcc, html, no_update
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 _DEBUG_OUTPUT = os.environ.get("PIVOT_DEBUG_OUTPUT", "0").lower() in {"1", "true", "yes"}

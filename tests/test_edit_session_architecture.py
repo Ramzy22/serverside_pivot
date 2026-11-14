@@ -9,7 +9,7 @@ import pytest
 
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
-sys.path.append(os.path.join(os.getcwd(), "dash_tanstack_pivot"))
+sys.path.append(os.path.join(os.getcwd(), "serverside_pivot"))
 
 from pivot_engine import create_tanstack_adapter
 from pivot_engine.editing.models import EditSessionState, OverlayIndex, OverlayIndexByGrouping, PreparedEventAction, ScopeLock, SessionEventRecord
@@ -893,7 +893,7 @@ def test_runtime_service_clears_overlay_after_parent_edit_is_undone():
 
 
 def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
-    frontend_root = Path(os.getcwd()) / "dash_tanstack_pivot" / "src" / "lib"
+    frontend_root = Path(os.getcwd()) / "serverside_pivot" / "src" / "lib"
     component_source = "\n".join(
         (frontend_root / relative_path).read_text(encoding="utf-8")
         for relative_path in (
@@ -908,7 +908,7 @@ def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
     transaction_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "hooks",
@@ -918,7 +918,7 @@ def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
     side_panel_source = Path(
         os.path.join(
             os.getcwd(),
-            "dash_tanstack_pivot",
+            "serverside_pivot",
             "src",
             "lib",
             "components",

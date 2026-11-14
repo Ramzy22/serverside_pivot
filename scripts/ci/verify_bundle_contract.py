@@ -3,10 +3,10 @@
 verify_bundle_contract.py
 --------------------------
 Asserts that the expected minified bundle files exist after `npm run build`
-inside dash_tanstack_pivot/.
+inside serverside_pivot/.
 
 The contract: after a successful build, these files must be present:
-  dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.min.js
+  serverside_pivot/serverside_pivot/serverside_pivot.min.js
 
 The contract establishes separate budgets for the initial bundle, normal lazy
 features, and the two intentionally heavy opt-in dependencies. Keeping them
@@ -26,7 +26,7 @@ from pathlib import Path
 
 # Required artifacts — build is considered broken if any of these are missing.
 REQUIRED_ARTIFACTS = [
-    "dash_tanstack_pivot.min.js",
+    "serverside_pivot.min.js",
     "metadata.json",
     "package-info.json",
 ]
@@ -41,15 +41,15 @@ OPTIONAL_ASYNC_BUDGETS = {
     # ECharts shares its rendering core between 2D and WebGL feature chunks.
     # The shared chunk is still marked `dynamic` in the Dash package metadata,
     # so it is fetched only after a chart feature is selected.
-    "dash_tanstack_pivot_shared.dash_tanstack_pivot.min.js": 550_000,
-    "dash_tanstack_pivot_async_pivot-echarts-2d.dash_tanstack_pivot.min.js": 100_000,
-    "dash_tanstack_pivot_async_pivot-echarts-3d.dash_tanstack_pivot.min.js": 500_000,
+    "serverside_pivot_shared.serverside_pivot.min.js": 550_000,
+    "serverside_pivot_async_pivot-echarts-2d.serverside_pivot.min.js": 100_000,
+    "serverside_pivot_async_pivot-echarts-3d.serverside_pivot.min.js": 500_000,
     # Standard workbook export is writer-only; the legacy HTML-table parser
     # is emitted as a second, explicitly requested compatibility chunk.
     # Current writer and legacy-parser releases require these tightly bounded
     # limits. Both dependencies remain opt-in lazy chunks.
-    "dash_tanstack_pivot_async_pivot-xlsx.dash_tanstack_pivot.min.js": 275_000,
-    "dash_tanstack_pivot_async_pivot-xlsx-html.dash_tanstack_pivot.min.js": 500_000,
+    "serverside_pivot_async_pivot-xlsx.serverside_pivot.min.js": 275_000,
+    "serverside_pivot_async_pivot-xlsx-html.serverside_pivot.min.js": 500_000,
 }
 
 
@@ -60,7 +60,7 @@ def main() -> None:
         default=None,
         help=(
             "Path to the directory containing built artifacts. "
-            "Default: dash_tanstack_pivot/dash_tanstack_pivot/ relative to repo root."
+            "Default: serverside_pivot/serverside_pivot/ relative to repo root."
         ),
     )
     parser.add_argument(
@@ -88,7 +88,7 @@ def main() -> None:
     if args.bundle_dir:
         bundle_dir = Path(args.bundle_dir)
     else:
-        bundle_dir = repo_root / "dash_tanstack_pivot" / "dash_tanstack_pivot"
+        bundle_dir = repo_root / "serverside_pivot" / "serverside_pivot"
 
     if not bundle_dir.is_dir():
         print(
@@ -107,7 +107,7 @@ def main() -> None:
             errors.append(f"MISSING (required): {artifact}")
             print(f"  MISSING (required): {artifact}", file=sys.stderr)
 
-    main_bundle = bundle_dir / "dash_tanstack_pivot.min.js"
+    main_bundle = bundle_dir / "serverside_pivot.min.js"
     if main_bundle.exists():
         main_size = main_bundle.stat().st_size
         print(f"  SIZE (main): {main_size / 1024 / 1024:.2f} MiB")
@@ -118,7 +118,7 @@ def main() -> None:
 
     async_bundles = sorted(
         path
-        for path in bundle_dir.glob("*.dash_tanstack_pivot.min.js")
+        for path in bundle_dir.glob("*.serverside_pivot.min.js")
         if path.name != main_bundle.name
     )
     if not async_bundles:

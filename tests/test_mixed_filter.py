@@ -79,5 +79,5 @@ if __name__ == "__main__":
     import os
     import sys
     # Add pivot_engine to sys.path
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "dash_tanstack_pivot", "pivot_engine")))
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "serverside_pivot", "pivot_engine")))
     test_mixed_composite_filter()

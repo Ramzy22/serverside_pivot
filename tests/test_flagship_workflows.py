@@ -27,7 +27,7 @@ def test_export_qualification_fixture_is_flat_and_does_not_replace_parity(monkey
     monkeypatch.setenv("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", "1")
     config = demo.workspace_config("react")
     assert config.get("viewState", {}).get("layoutMode") == "tabular"
-    from dash_tanstack_pivot import DashTanstackPivot
+    from serverside_pivot import DashTanstackPivot
     assert DashTanstackPivot(**config).id == "flagship-react-pivot"
     assert config["colFields"] == [] and config["showSubtotals"] is False
     table = demo.build_demo_table()
@@ -273,9 +273,9 @@ def test_payload_network_evidence_records_delivery_without_exposing_token():
 
     events = [
         {"method": "Network.requestWillBeSent", "params": {"requestId": "1",
-            "request": {"url": "http://host/_dash_tanstack_pivot/payload/private-token"}}},
+            "request": {"url": "http://host/_serverside_pivot/payload/private-token"}}},
         {"method": "Network.responseReceived", "params": {"requestId": "1",
-            "response": {"url": "http://host/_dash_tanstack_pivot/payload/private-token", "status": 200}}},
+            "response": {"url": "http://host/_serverside_pivot/payload/private-token", "status": 200}}},
         {"method": "Network.responseReceived", "params": {"requestId": "2",
             "response": {"url": "http://host/health", "status": 200}}},
     ]

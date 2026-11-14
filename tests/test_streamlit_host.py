@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-_PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "dash_tanstack_pivot"
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "serverside_pivot"
 
 
 def _module(monkeypatch):

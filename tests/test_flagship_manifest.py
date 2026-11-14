@@ -412,8 +412,8 @@ def _served_alias_evidence(qualification, host, representation="alias/alias", da
     """Model Task 4's wheel paths and actual served URLs without a web server."""
     requirements, binding, cases = qualification
     canonical, alias = {
-        "dash": ("/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.min.js",
-                 "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_88mabc123.min.js"),
+        "dash": ("/_dash-component-suites/serverside_pivot/serverside_pivot.min.js",
+                 "/_dash-component-suites/serverside_pivot/serverside_pivot.v0_0_88mabc123.min.js"),
         "streamlit": ("/streamlit_pivot/frontend/build/pivot-workspace-123.js",
                       "/_stcore/component/serverside-pivot/pivot-workspace-123.js"),
     }[host]

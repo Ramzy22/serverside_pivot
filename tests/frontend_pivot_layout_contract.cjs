@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const root = path.resolve(__dirname, '..', 'dash_tanstack_pivot');
+const root = path.resolve(__dirname, '..', 'serverside_pivot');
 const babel = require(path.join(root, 'node_modules', '@babel/core'));
 
 function load(relativePath) {

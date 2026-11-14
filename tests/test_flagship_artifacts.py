@@ -43,7 +43,7 @@ def test_wheel_metadata_declares_engine_runtime_dependencies(tmp_path, requireme
     package = tmp_path / "package"
     package.mkdir()
     for filename in ("pyproject.toml", "README.md", "setup.py"):
-        shutil.copy2(ROOT / "dash_tanstack_pivot" / filename, package / filename)
+        shutil.copy2(ROOT / "serverside_pivot" / filename, package / filename)
     configuration = tomllib.loads((package / "pyproject.toml").read_text(encoding="utf-8"))
     for name in configuration["tool"]["setuptools"]["packages"]:
         relative = name.replace(".", "/")
@@ -110,7 +110,7 @@ def test_build_wheelhouse_ignores_vendored_dependency_metadata(tmp_path):
     hashes[target.name] = hashlib.sha256(target.read_bytes()).hexdigest()
     manifest.write_text(json.dumps(hashes))
     output = tmp_path / "output"
-    env = flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "dash_tanstack_pivot", output)
+    env = flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "serverside_pivot", output)
     assert (Path(env["PIP_FIND_LINKS"]) / target.name).read_bytes() == target.read_bytes()
 
 
@@ -138,14 +138,14 @@ def test_build_wheelhouse_rejects_missing_or_altered_requirements(tmp_path, dama
         hashes[target.name] = hashlib.sha256(target.read_bytes()).hexdigest()
         (wheelhouse / "wheelhouse-sha256.json").write_text(json.dumps(hashes))
     with pytest.raises(ValueError, match="wheelhouse"):
-        flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "dash_tanstack_pivot", tmp_path / "output")
+        flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "serverside_pivot", tmp_path / "output")
 
 
 @pytest.mark.parametrize("offline", [False, True])
 def test_build_wheelhouse_environment_does_not_leak_to_npm_or_runtime_install(tmp_path, monkeypatch, offline):
     from scripts import flagship_artifacts
     wheelhouse = _test_build_wheelhouse(tmp_path / "wheelhouse")
-    package = tmp_path / "snapshot" / "dash_tanstack_pivot"
+    package = tmp_path / "snapshot" / "serverside_pivot"
     package.mkdir(parents=True)
     (package / "pyproject.toml").write_text('[build-system]\nrequires=["setuptools>=61.0", "wheel"]\n')
     output = tmp_path / "output"
@@ -265,9 +265,9 @@ def test_loaded_asset_requires_a_recorded_path() -> None:
 def test_dash_fingerprinted_asset_verifies_the_wheel_bytes() -> None:
     digest = hashlib.sha256(b"installed Dash component").hexdigest()
     binding = ArtifactBinding(expected_loaded_assets={
-        "dash": {"/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.min.js": digest},
+        "dash": {"/_dash-component-suites/serverside_pivot/serverside_pivot.min.js": digest},
     })
-    url = "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_88mabc123.min.js"
+    url = "/_dash-component-suites/serverside_pivot/serverside_pivot.v0_0_88mabc123.min.js"
     assert verify_loaded_asset(binding, "dash", url, b"installed Dash component") == digest
     with pytest.raises(ValueError, match="hash mismatch"):
         verify_loaded_asset(binding, "dash", url, b"stale component")
@@ -288,8 +288,8 @@ def test_streamlit_component_url_verifies_the_wheel_asset_bytes() -> None:
 
 
 @pytest.mark.parametrize("host,canonical,alias", [
-    ("dash", "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.min.js",
-     "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_88mabc123.min.js"),
+    ("dash", "/_dash-component-suites/serverside_pivot/serverside_pivot.min.js",
+     "/_dash-component-suites/serverside_pivot/serverside_pivot.v0_0_88mabc123.min.js"),
     ("streamlit", "/streamlit_pivot/frontend/build/pivot-workspace-123.js",
      "/_stcore/component/serverside-pivot/pivot-workspace-123.js"),
 ])
@@ -784,7 +784,7 @@ def test_clean_artifacts_serve_installed_hosts_and_match_loaded_bytes(tmp_path: 
     with zipfile.ZipFile(binding.paths["wheel"]) as wheel:
         names = wheel.namelist()
         assert any(name.startswith("streamlit_pivot/frontend/build/") and name.endswith(".js") for name in names)
-        assert any(name.startswith("dash_tanstack_pivot/") and name.endswith(".min.js") for name in names)
+        assert any(name.startswith("serverside_pivot/") and name.endswith(".min.js") for name in names)
 
     installed_origin = subprocess.check_output(
         [str(binding.paths["python"]), "-c", "import streamlit_pivot; print(streamlit_pivot.__file__)"],

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from dash import Dash, html
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 np.random.seed(42)

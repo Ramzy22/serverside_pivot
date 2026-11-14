@@ -17,7 +17,7 @@ Then open http://127.0.0.1:8050 in your browser.
 import pyarrow as pa
 from dash import Dash, html
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter
 from pivot_engine.runtime import (
     PivotRuntimeService,

@@ -157,22 +157,19 @@ snapshot for release review.
 
 ## JavaScript type-checking coverage
 
-`npm run typecheck` runs the TypeScript project and a separate strict
-`checkJs` project. The checked-JS root manifest currently covers six of the
-134 JavaScript source files under `dash_tanstack_pivot/src/lib`:
-`runtimeResponseDedup.js`, `formatting.js`, `Icons.js`,
-`useRuntimeExportState.js`, `useCellInteraction.js`, and `rawTableTsv.js`.
-The other 128 files are **not yet qualified as checked**. TypeScript also
-checks any source dependencies imported by a listed root. This is an initial
-release gate, not a claim of full-tree JavaScript checking.
+`npm run typecheck` runs the TypeScript project and the strict `checkJs`
+project across the entire `serverside_pivot/src/lib` tree. All 142 JavaScript
+source files and 29 TypeScript/declaration files under
+`serverside_pivot/src/lib` are strictly checked (`allowJs: true`,
+`checkJs: true`, `strict: true`, `noEmit: true`), leaving **0 unchecked
+JavaScript files**.
 
-Run `npm run typecheck:js` from `dash_tanstack_pivot` to check this project.
-The command includes an in-memory negative probe that must be rejected with
-TS2322. To admit another JS file, add it to
-`tsconfig.checked-js.json` and the `expectedRoots` list in
-`scripts/verify_checked_js_gate.mjs`, resolve its diagnostics without blanket
-suppression, update these coverage counts, and run the host builds and tests.
-Both CI and release run `npm run build`, whose first step is `typecheck`.
+Run `npm run typecheck:js` from `serverside_pivot` to verify full-tree
+JavaScript coverage. `scripts/verify_checked_js_gate.mjs` confirms that every
+`.js` file under `src/lib` is included in the compiler program, rejects any
+`@ts-nocheck` suppression, and executes an in-memory negative probe that must
+be rejected with TS2322. Both CI and release run `npm run build`, whose first
+step is `typecheck`.
 
 ## Export contract and release qualification
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_DIR = ROOT / "dash_tanstack_pivot"
+PACKAGE_DIR = ROOT / "serverside_pivot"
 
 
 def test_react_package_export_has_esm_and_types():

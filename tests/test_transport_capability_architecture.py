@@ -4,7 +4,7 @@ from pathlib import Path
 
 ENGINE_ROOT = (
     Path(__file__).resolve().parents[1]
-    / "dash_tanstack_pivot"
+    / "serverside_pivot"
     / "pivot_engine"
     / "pivot_engine"
 )

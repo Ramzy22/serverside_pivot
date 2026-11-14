@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {createRequire} = require('node:module');
-const root = path.resolve(__dirname, '../dash_tanstack_pivot');
+const root = path.resolve(__dirname, '../serverside_pivot');
 const req = createRequire(path.join(root, 'package.json'));
 const babel = req('@babel/core');
 function compile(relative) {

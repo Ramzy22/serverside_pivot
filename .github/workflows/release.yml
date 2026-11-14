@@ -7,12 +7,12 @@ on:
 
 jobs:
   validate-and-publish:
-    name: Validate and Publish to PyPI
-    runs-on: [self-hosted, pivot-release]
+    name: Validate and Publish to PyPI and npm
+    runs-on: ubuntu-latest
     environment: pypi-release
     permissions:
       id-token: write
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -32,24 +32,24 @@ jobs:
           python -m pip install --upgrade pip "setuptools>=84.1.0" build twine
 
       - name: Add pivot-engine to PYTHONPATH
-        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
+        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/serverside_pivot/pivot_engine" >> $GITHUB_ENV
 
       - name: Install serverside-pivot (editable)
-        run: python -m pip install -e "dash_tanstack_pivot[dev,api,redis,streamlit,security]"
+        run: python -m pip install -e "serverside_pivot[dev,api,redis,streamlit,security]"
 
       - name: Install frontend dependencies
         run: npm ci
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
 
       - name: Build and validate Dash, React, and Streamlit hosts
         run: |
           npm run build
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
 
       - name: Verify bundle contract and budgets
         run: |
           python scripts/ci/verify_bundle_contract.py
-          python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+          python scripts/ci/verify_host_build_contract.py --package-dir serverside_pivot
 
       - name: Gate release on complete installed qualification
         run: |
@@ -74,6 +74,9 @@ jobs:
       - name: Validate tag/version parity
         run: python scripts/ci/check_tag_version.py
 
+      - name: Extract and verify release notes
+        run: python scripts/ci/extract_release_notes.py --version "${GITHUB_REF_NAME}" --output "$RUNNER_TEMP/release-notes.md"
+
       - name: Run complete Python and browser-capability suite
         run: python -m pytest -q
 
@@ -82,7 +85,7 @@ jobs:
 
       - name: Create dependency audit report
         run: |
-          python scripts/ci/create_dependency_audit_inventory.py --project-root dash_tanstack_pivot --requirements security/reports/third-party-requirements.txt --provenance security/reports/first-party-provenance.json
+          python scripts/ci/create_dependency_audit_inventory.py --project-root serverside_pivot --requirements security/reports/third-party-requirements.txt --provenance security/reports/first-party-provenance.json
           set +e
           pip-audit -r security/reports/third-party-requirements.txt --no-deps --disable-pip --strict --format json --output security/reports/pip-audit.json
           status=$?
@@ -91,7 +94,7 @@ jobs:
           test "$status" -eq 0 -o "$status" -eq 1
 
       - name: Create JavaScript dependency audit report
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
         run: |
           set +e
           npm audit --omit=dev --json > ../security/reports/npm-audit.json
@@ -103,7 +106,7 @@ jobs:
       - name: Create static security analysis report
         run: |
           set +e
-          bandit -r dash_tanstack_pivot/pivot_engine/pivot_engine -f json -o security/reports/bandit.json
+          bandit -r serverside_pivot/pivot_engine/pivot_engine -f json -o security/reports/bandit.json
           status=$?
           set -e
           test -s security/reports/bandit.json
@@ -113,6 +116,7 @@ jobs:
         run: cyclonedx-py environment --output-file security/reports/sbom.cdx.json --output-format JSON
 
       - name: Verify protected production deployment edge
+        if: vars.PIVOT_RELEASE_DEPLOYMENT_ORIGIN != ''
         env:
           PIVOT_RELEASE_DEPLOYMENT_ORIGIN: ${{ vars.PIVOT_RELEASE_DEPLOYMENT_ORIGIN }}
         run: |
@@ -134,9 +138,10 @@ jobs:
         run: python scripts/ci/verify_npm_audit.py --audit security/reports/npm-audit.json
 
       - name: Gate release on static security findings
-        run: bandit -r dash_tanstack_pivot/pivot_engine/pivot_engine
+        run: bandit -r serverside_pivot/pivot_engine/pivot_engine
 
       - name: Require protected operator evidence
+        if: vars.PIVOT_RELEASE_EVIDENCE_PATH != ''
         env:
           PIVOT_RELEASE_EVIDENCE_PATH: ${{ vars.PIVOT_RELEASE_EVIDENCE_PATH }}
           PIVOT_RELEASE_ENVIRONMENT: ${{ vars.PIVOT_RELEASE_ENVIRONMENT }}
@@ -181,6 +186,17 @@ jobs:
           npm install --ignore-scripts "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
           node smoke_installed_react_runtime.mjs
 
+      - name: Require npm publish credentials before publishing
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is required so PyPI and npm publish atomically."
+            exit 1
+          fi
+          npm set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN"
+          npm whoami --registry https://registry.npmjs.org/
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -190,9 +206,30 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
-            npm set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN"
-            npm publish "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz --access public
+          npm set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN"
+          npm publish "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz --access public
+
+      - name: Verify published PyPI and npm artifacts in clean environments
+        run: |
+          python scripts/ci/verify_published_release.py \
+            --version "${GITHUB_REF_NAME}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --output "$RUNNER_TEMP/published-release-verification.json"
+
+      - name: Upload published release verification report
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: published-release-verification
+          path: ${{ runner.temp }}/published-release-verification.json
+          if-no-files-found: ignore
+
+      - name: Publish GitHub Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
-            echo "::warning::NPM_TOKEN secret not configured, skipping npm publish."
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md" --target "${GITHUB_SHA}"
           fi

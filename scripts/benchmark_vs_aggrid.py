@@ -32,7 +32,7 @@ import pandas as pd
 # ── path shim (mirrors conftest.py) ───────────────────────────────────────────
 sys.path.insert(
     0,
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dash_tanstack_pivot", "pivot_engine"),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "serverside_pivot", "pivot_engine"),
 )
 
 from pivot_engine import (

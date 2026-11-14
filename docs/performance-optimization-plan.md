@@ -22,10 +22,10 @@ The previous draft was directionally right, but these points must be corrected b
 
 Target files:
 
-- `dash_tanstack_pivot/src/lib/utils/pivotProfiler.js`
-- `dash_tanstack_pivot/src/lib/components/Table/PivotTableBody.js`
-- `dash_tanstack_pivot/src/lib/components/PivotAppBar.js`
-- `dash_tanstack_pivot/src/lib/components/Sidebar/SidebarPanel.js`
+- `serverside_pivot/src/lib/utils/pivotProfiler.js`
+- `serverside_pivot/src/lib/components/Table/PivotTableBody.js`
+- `serverside_pivot/src/lib/components/PivotAppBar.js`
+- `serverside_pivot/src/lib/components/Sidebar/SidebarPanel.js`
 
 Tasks:
 
@@ -55,7 +55,7 @@ Acceptance:
 
 Target:
 
-- `dash_tanstack_pivot/src/lib/components/Table/PivotTableBody.js`
+- `serverside_pivot/src/lib/components/Table/PivotTableBody.js`
 
 Current issue:
 
@@ -90,7 +90,7 @@ Acceptance:
 
 Target:
 
-- `dash_tanstack_pivot/src/lib/contexts/PivotConfigContext.js`
+- `serverside_pivot/src/lib/contexts/PivotConfigContext.js`
 - Consumers: `PivotTableBody`, `PivotAppBar`, `SidebarPanel`
 
 Current issue:
@@ -130,9 +130,9 @@ Acceptance:
 
 Primary targets:
 
-- `dash_tanstack_pivot/src/lib/hooks/useRenderHelpers.js`
-- `dash_tanstack_pivot/src/lib/hooks/useColumnDefs.js`
-- `dash_tanstack_pivot/src/lib/components/Table/PivotTableBody.js`
+- `serverside_pivot/src/lib/hooks/useRenderHelpers.js`
+- `serverside_pivot/src/lib/hooks/useColumnDefs.js`
+- `serverside_pivot/src/lib/components/Table/PivotTableBody.js`
 
 Current issue:
 

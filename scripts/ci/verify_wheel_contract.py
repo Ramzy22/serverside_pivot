@@ -16,9 +16,9 @@ from pathlib import Path
 
 REQUIRED_MEMBERS = frozenset(
     {
-        "dash_tanstack_pivot/DashTanstackPivot.py",
-        "dash_tanstack_pivot/dash_tanstack_pivot.min.js",
-        "dash_tanstack_pivot/package-info.json",
+        "serverside_pivot/DashTanstackPivot.py",
+        "serverside_pivot/serverside_pivot.min.js",
+        "serverside_pivot/package-info.json",
         "pivot_engine/scalable_pivot_controller.py",
         "pivot_engine/runtime/runtime-contract.schema.json",
         "pivot_engine/runtime/runtime-response.schema.json",

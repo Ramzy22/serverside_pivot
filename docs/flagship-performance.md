@@ -63,7 +63,7 @@ Command (after `examples/launch_flagship_demos.ps1`):
 
 ```bash
 python scripts/benchmark_flagship_transport.py --requests 30 --warmup 5 --json
-# Or from dash_tanstack_pivot/:
+# Or from serverside_pivot/:
 npm run benchmark:flagship-transport -- --json
 ```
 

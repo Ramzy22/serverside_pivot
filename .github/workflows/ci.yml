@@ -39,10 +39,10 @@ jobs:
           python -m pip install --upgrade pip "setuptools>=84.1.0"
 
       - name: Add pivot-engine to PYTHONPATH
-        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
+        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/serverside_pivot/pivot_engine" >> $GITHUB_ENV
 
       - name: Install serverside-pivot (editable)
-        run: python -m pip install -e "dash_tanstack_pivot[dev,api,redis,streamlit]"
+        run: python -m pip install -e "serverside_pivot[dev,api,redis,streamlit]"
 
       - name: Install Node for shared frontend contract tests
         uses: actions/setup-node@v4
@@ -51,8 +51,11 @@ jobs:
 
       - name: Install shared frontend test dependencies
         run: |
-          npm ci --prefix dash_tanstack_pivot
-          npm run build:react --prefix dash_tanstack_pivot
+          npm ci --prefix serverside_pivot
+          npm run build:react --prefix serverside_pivot
+
+      - name: Verify version parity across Python, npm, and CHANGELOG
+        run: python scripts/sync_version.py --check
 
       - name: Run complete Python and browser-capability suite
         run: |
@@ -68,7 +71,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
 
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +101,7 @@ jobs:
 
       - name: Verify React and Streamlit build contract
         working-directory: ${{ github.workspace }}
-        run: python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+        run: python scripts/ci/verify_host_build_contract.py --package-dir serverside_pivot
 
       - name: Pack and verify standalone React package
         run: |
@@ -123,7 +126,7 @@ jobs:
 
       - name: Exercise direct DuckDB Arrow execution at the support floor
         env:
-          PYTHONPATH: ${{ github.workspace }}/dash_tanstack_pivot/pivot_engine
+          PYTHONPATH: ${{ github.workspace }}/serverside_pivot/pivot_engine
         run: python -m pytest -q tests/test_duckdb_backend_config.py
 
   package-smoke:
@@ -161,39 +164,39 @@ jobs:
 
       - name: Install frontend dependencies from clean checkout
         run: npm ci
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
 
       - name: Build every advertised host from clean checkout
         run: npm run build
-        working-directory: dash_tanstack_pivot
+        working-directory: serverside_pivot
 
       - name: Verify all host build outputs
         run: |
           python scripts/ci/verify_bundle_contract.py
-          python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+          python scripts/ci/verify_host_build_contract.py --package-dir serverside_pivot
 
       - name: Pack and verify standalone React package
         run: |
           mkdir -p "$RUNNER_TEMP/serverside-pivot-npm"
-          cd dash_tanstack_pivot
+          cd serverside_pivot
           npm pack --json --pack-destination "$RUNNER_TEMP/serverside-pivot-npm"
           cd ..
           python scripts/ci/verify_npm_package_contract.py "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
 
       - name: Build distribution
-        run: python -m build dash_tanstack_pivot/
+        run: python -m build serverside_pivot/
 
       - name: Check distribution metadata
-        run: twine check dash_tanstack_pivot/dist/*.whl dash_tanstack_pivot/dist/*.tar.gz
+        run: twine check serverside_pivot/dist/*.whl serverside_pivot/dist/*.tar.gz
 
       - name: Verify wheel package contract
-        run: python scripts/ci/verify_wheel_contract.py dash_tanstack_pivot/dist/*.whl
+        run: python scripts/ci/verify_wheel_contract.py serverside_pivot/dist/*.whl
 
       - name: Install wheel in an isolated environment and execute runtime smoke
         run: |
           python -m venv "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install --upgrade pip
-          WHEEL="$(find "$GITHUB_WORKSPACE/dash_tanstack_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          WHEEL="$(find "$GITHUB_WORKSPACE/serverside_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$WHEEL"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api,redis,qualification]" httpx
           cd "$RUNNER_TEMP/serverside-pivot-wheel-smoke"

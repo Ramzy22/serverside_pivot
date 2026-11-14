@@ -35,13 +35,13 @@ import dash
 from dash import Input, Output, State, dcc, html
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = ROOT_DIR / "dash_tanstack_pivot"
+PACKAGE_ROOT = ROOT_DIR / "serverside_pivot"
 ENGINE_ROOT = PACKAGE_ROOT / "pivot_engine"
 for candidate in (PACKAGE_ROOT, ENGINE_ROOT, ROOT_DIR):
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import (
     TanStackPivotAdapter,
     configure_pivot_execution,

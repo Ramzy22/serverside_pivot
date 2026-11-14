@@ -172,7 +172,7 @@ pip install "serverside-pivot[redis]"
 
 *For standalone React frontend projects:*
 ```bash
-npm install dash_tanstack_pivot
+npm install serverside_pivot
 ```
 
 ---
@@ -182,7 +182,7 @@ npm install dash_tanstack_pivot
 ```python
 import pandas as pd
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 # Point to local Parquet files, in-memory DuckDB, or remote Snowflake/Postgres
@@ -224,7 +224,7 @@ Connect directly to **Snowflake, BigQuery, PostgreSQL, ClickHouse, MotherDuck, o
 ```python
 import ibis
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 from pivot_engine.data_input import normalize_data_input
 
@@ -295,7 +295,7 @@ import {
   type FilterConfig,
   type SortConfig,
   type ChartDefinition,
-} from 'dash_tanstack_pivot/react';
+} from 'serverside_pivot/react';
 
 const transport = new LatestViewportScheduler(
   new HttpPivotTransport({ endpoint: 'http://localhost:8765/v1/runtime' })
@@ -513,7 +513,7 @@ Use the `configure_pivot_execution` helper in Python to automatically configure 
 ```python
 import pandas as pd
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import configure_pivot_execution
 
 df = pd.read_parquet("quarterly_sales.parquet")  # e.g. 15,000 records

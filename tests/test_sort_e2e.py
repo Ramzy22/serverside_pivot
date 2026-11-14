@@ -12,7 +12,7 @@ Runs two variants of every scenario:
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dash_tanstack_pivot", "pivot_engine")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "serverside_pivot", "pivot_engine")))
 
 import asyncio
 import concurrent.futures

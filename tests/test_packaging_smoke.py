@@ -1,5 +1,5 @@
 """
-Packaging smoke tests for dash-tanstack-pivot.
+Packaging smoke tests for serverside-pivot.
 
 These tests verify:
 - Bundle artifact contract: the expected minified JS bundle is present after npm build
@@ -10,10 +10,10 @@ Run via:
     python -m pytest tests/test_packaging_smoke.py -q
 
 Full deterministic release gate (install + import + multi-instance regression):
-    python -m build dash_tanstack_pivot
-    python -m pip install --force-reinstall ./dash_tanstack_pivot
-    python -m pip install --force-reinstall "./dash_tanstack_pivot[redis]"
-    python -c "import dash_tanstack_pivot; print('import-ok')"
+    python -m build serverside_pivot
+    python -m pip install --force-reinstall ./serverside_pivot
+    python -m pip install --force-reinstall "./serverside_pivot[redis]"
+    python -c "import serverside_pivot; print('import-ok')"
     python -m pytest tests/test_packaging_smoke.py tests/test_dash_runtime_callbacks.py tests/test_session_request_gate.py -q
 """
 
@@ -39,8 +39,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
-PKG_DIR = REPO_ROOT / "dash_tanstack_pivot"
-INNER_PKG_DIR = PKG_DIR / "dash_tanstack_pivot"
+PKG_DIR = REPO_ROOT / "serverside_pivot"
+INNER_PKG_DIR = PKG_DIR / "serverside_pivot"
 
 
 def _wheel_verifier_module():
@@ -181,10 +181,10 @@ def _run_bundled_server_export_order(javascript):
 
 def test_bundle_artifact_contract():
     """The minified JS bundle must exist at the path declared by package metadata."""
-    bundle = INNER_PKG_DIR / "dash_tanstack_pivot.min.js"
+    bundle = INNER_PKG_DIR / "serverside_pivot.min.js"
     assert bundle.exists(), (
         f"Expected minified bundle not found at {bundle}. "
-        "Run 'npm run build' inside dash_tanstack_pivot/ to produce it."
+        "Run 'npm run build' inside serverside_pivot/ to produce it."
     )
     assert bundle.stat().st_size > 0, f"Bundle file {bundle} is empty."
 
@@ -192,7 +192,7 @@ def test_bundle_artifact_contract():
 def test_manifest_declares_only_existing_artifacts():
     """MANIFEST.in must not reference files that do not exist in the repo."""
     manifest = PKG_DIR / "MANIFEST.in"
-    assert manifest.exists(), "MANIFEST.in is missing from dash_tanstack_pivot/"
+    assert manifest.exists(), "MANIFEST.in is missing from serverside_pivot/"
 
     missing = []
     for line in manifest.read_text(encoding="utf-8").splitlines():
@@ -220,8 +220,8 @@ def test_manifest_declares_only_existing_artifacts():
 def test_runtime_schemas_are_versioned_package_dependencies():
     """A clean checkout must contain the runtime validators' schema files."""
     schema_paths = [
-        "dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/runtime-contract.schema.json",
-        "dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/runtime-response.schema.json",
+        "serverside_pivot/pivot_engine/pivot_engine/runtime/runtime-contract.schema.json",
+        "serverside_pivot/pivot_engine/pivot_engine/runtime/runtime-response.schema.json",
     ]
     result = subprocess.run(
         ["git", "ls-files", "--error-unmatch", *schema_paths],
@@ -240,9 +240,9 @@ def test_wheel_contract_rejects_runtime_schemas_missing_from_distribution(tmp_pa
     _write_minimal_wheel(
         wheel_path,
         {
-            "dash_tanstack_pivot/DashTanstackPivot.py": "",
-            "dash_tanstack_pivot/dash_tanstack_pivot.min.js": "// dash",
-            "dash_tanstack_pivot/package-info.json": "{}",
+            "serverside_pivot/DashTanstackPivot.py": "",
+            "serverside_pivot/serverside_pivot.min.js": "// dash",
+            "serverside_pivot/package-info.json": "{}",
             "pivot_engine/scalable_pivot_controller.py": "",
             "streamlit_pivot/__init__.py": "",
             "streamlit_pivot/frontend/build/pivot-workspace-manifest.json": "{}",
@@ -260,9 +260,9 @@ def test_wheel_contract_rejects_missing_streamlit_manifest_entry(tmp_path):
     _write_minimal_wheel(
         wheel_path,
         {
-            "dash_tanstack_pivot/DashTanstackPivot.py": "",
-            "dash_tanstack_pivot/dash_tanstack_pivot.min.js": "// dash",
-            "dash_tanstack_pivot/package-info.json": "{}",
+            "serverside_pivot/DashTanstackPivot.py": "",
+            "serverside_pivot/serverside_pivot.min.js": "// dash",
+            "serverside_pivot/package-info.json": "{}",
             "pivot_engine/scalable_pivot_controller.py": "",
             "pivot_engine/runtime/runtime-contract.schema.json": "{}",
             "pivot_engine/runtime/runtime-response.schema.json": "{}",
@@ -416,7 +416,7 @@ def test_clean_wheel_installs_complete_streamlit_component_build(tmp_path):
 
 
 def test_host_build_contract_rejects_missing_react_and_streamlit_assets(tmp_path):
-    package_dir = tmp_path / "dash_tanstack_pivot"
+    package_dir = tmp_path / "serverside_pivot"
     streamlit_dir = package_dir / "streamlit_pivot" / "frontend" / "build"
     streamlit_dir.mkdir(parents=True)
     (streamlit_dir / "pivot-workspace-manifest.json").write_text(
@@ -434,9 +434,9 @@ def test_host_build_contract_rejects_missing_react_and_streamlit_assets(tmp_path
 
 
 def test_npm_package_contract_rejects_missing_react_entry(tmp_path):
-    archive_path = tmp_path / "dash_tanstack_pivot-0.0.88.tgz"
+    archive_path = tmp_path / "serverside_pivot-0.0.88.tgz"
     with tarfile.open(archive_path, "w:gz") as archive:
-        package_json = b'{"name":"dash_tanstack_pivot","exports":{".":{"import":"./dist/react/index.mjs"},"./react":{"import":"./dist/react/index.mjs"}}}'
+        package_json = b'{"name":"serverside_pivot","exports":{".":{"import":"./dist/react/index.mjs"},"./react":{"import":"./dist/react/index.mjs"}}}'
         info = tarfile.TarInfo("package/package.json")
         info.size = len(package_json)
         archive.addfile(info, fileobj=io.BytesIO(package_json))
@@ -479,7 +479,7 @@ def test_npm_contract_ignores_jsdoc_but_checks_real_static_and_dynamic_imports(t
 def test_pyproject_toml_name():
     """pyproject.toml must declare name = 'serverside-pivot'."""
     pyproject = PKG_DIR / "pyproject.toml"
-    assert pyproject.exists(), "pyproject.toml is missing from dash_tanstack_pivot/"
+    assert pyproject.exists(), "pyproject.toml is missing from serverside_pivot/"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     assert data["project"]["name"] == "serverside-pivot", (
         f"Expected project name 'serverside-pivot', got '{data['project']['name']}'"
@@ -489,7 +489,7 @@ def test_pyproject_toml_name():
 def test_pyproject_toml_redis_extra():
     """pyproject.toml must declare optional-dependencies.redis."""
     pyproject = PKG_DIR / "pyproject.toml"
-    assert pyproject.exists(), "pyproject.toml is missing from dash_tanstack_pivot/"
+    assert pyproject.exists(), "pyproject.toml is missing from serverside_pivot/"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     optional = data["project"].get("optional-dependencies", {})
     assert "redis" in optional, (
@@ -561,7 +561,7 @@ def test_combined_host_build_installs_the_streamlit_lockfile():
 
 def test_streamlit_frontend_lockfile_is_a_tracked_build_prerequisite():
     """The nested npm ci build must not depend on a local-only lockfile."""
-    relative = "dash_tanstack_pivot/streamlit_pivot/frontend/package-lock.json"
+    relative = "serverside_pivot/streamlit_pivot/frontend/package-lock.json"
     tracked = subprocess.run(
         ["git", "ls-files", "--error-unmatch", relative],
         cwd=REPO_ROOT, text=True, capture_output=True, check=False,
@@ -577,7 +577,7 @@ def test_streamlit_frontend_lockfile_is_a_tracked_build_prerequisite():
 def test_component_asset_metadata_uses_the_distribution_version():
     """A release must not serve a previous version's cached Dash bundle.
 
-    Dash fingerprints component assets with ``dash_tanstack_pivot.__version__``.
+    Dash fingerprints component assets with ``serverside_pivot.__version__``.
     That version comes from the installed package-info.json, rather than from
     pyproject.toml.  Keep every version source aligned so a new Python wheel
     cannot cause browsers to reuse an old JavaScript bundle.
@@ -605,7 +605,7 @@ def test_package_json_no_broken_prepublish():
     import json
 
     pkg_json = PKG_DIR / "package.json"
-    assert pkg_json.exists(), "package.json missing from dash_tanstack_pivot/"
+    assert pkg_json.exists(), "package.json missing from serverside_pivot/"
     data = json.loads(pkg_json.read_text(encoding="utf-8"))
     scripts = data.get("scripts", {})
 
@@ -654,17 +654,17 @@ def test_package_json_uses_strict_docgen_build():
 # ---------------------------------------------------------------------------
 
 
-def test_import_dash_tanstack_pivot():
-    """Importing dash_tanstack_pivot must not raise ImportError or missing-dep errors."""
+def test_import_serverside_pivot():
+    """Importing serverside_pivot must not raise ImportError or missing-dep errors."""
     # Ensure the local source is importable even without a dist install
     if str(PKG_DIR) not in sys.path:
         sys.path.insert(0, str(PKG_DIR))
 
     import importlib
 
-    mod = importlib.import_module("dash_tanstack_pivot")
+    mod = importlib.import_module("serverside_pivot")
     assert hasattr(mod, "DashTanstackPivot"), (
-        "dash_tanstack_pivot module does not expose DashTanstackPivot component"
+        "serverside_pivot module does not expose DashTanstackPivot component"
     )
 
 
@@ -675,7 +675,7 @@ def test_generated_component_exposes_runtime_transport_props():
 
     import importlib
 
-    mod = importlib.import_module("dash_tanstack_pivot")
+    mod = importlib.import_module("serverside_pivot")
     component = mod.DashTanstackPivot(id="pivot-grid")
 
     assert "runtimeRequest" in component.available_properties

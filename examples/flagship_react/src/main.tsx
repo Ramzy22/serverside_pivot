@@ -5,7 +5,7 @@ import {
     HttpPivotTransport,
     LatestViewportScheduler,
     PivotWorkspace,
-} from 'dash_tanstack_pivot/react';
+} from 'serverside_pivot/react';
 
 import './styles.css';
 

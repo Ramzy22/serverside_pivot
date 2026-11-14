@@ -21,14 +21,14 @@ from werkzeug.serving import make_server
 
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
-sys.path.append(os.path.join(os.getcwd(), "dash_tanstack_pivot"))
+sys.path.append(os.path.join(os.getcwd(), "serverside_pivot"))
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 
 _editing_component_path = os.path.join(
-    os.getcwd(), "dash_tanstack_pivot", "src", "lib", "components", "DashTanstackPivot.react.tsx"
+    os.getcwd(), "serverside_pivot", "src", "lib", "components", "DashTanstackPivot.react.tsx"
 )
 with open(_editing_component_path, encoding="utf-8") as _editing_component_file:
     _EDITING_PUBLIC_FEATURE_UNSUPPORTED = "const EDITING_PUBLIC_FEATURE_SUPPORTED = false;" in _editing_component_file.read()

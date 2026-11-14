@@ -24,7 +24,7 @@ function Start-FlagshipProcess {
 
 Start-FlagshipProcess -Name 'runtime' -FilePath 'python' -Arguments @('-m', 'uvicorn', 'examples.flagship_runtime_server:app', '--host', '127.0.0.1', '--port', '8765')
 Start-FlagshipProcess -Name 'dash' -FilePath 'python' -Arguments @('examples/flagship_dash.py')
-Start-FlagshipProcess -Name 'react' -FilePath 'node' -Arguments @('dash_tanstack_pivot/node_modules/vite/bin/vite.js', '--config', 'examples/flagship_react/vite.config.ts', '--host', '127.0.0.1', '--port', '5174')
+Start-FlagshipProcess -Name 'react' -FilePath 'node' -Arguments @('serverside_pivot/node_modules/vite/bin/vite.js', '--config', 'examples/flagship_react/vite.config.ts', '--host', '127.0.0.1', '--port', '5174')
 Start-FlagshipProcess -Name 'streamlit' -FilePath 'streamlit' -Arguments @('run', 'examples/flagship_streamlit.py', '--server.address', '127.0.0.1', '--server.port', '8502', '--server.headless', 'true', '--browser.gatherUsageStats', 'false')
 
 Write-Host 'Flagship demos launched. Open Dash :8050, React :5174, and Streamlit :8502.'

@@ -1,0 +1,1927 @@
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from 'react';
+import { useRowCache } from './useRowCache';
+
+import { isGrandTotalRow } from './usePivotNormalization';
+
+/** @param {any} [availableStart] @param {any} [availableEnd] @param {any} [requiredStart] @param {any} [requiredEnd] @returns {any} */
+const columnWindowCovers = (availableStart, availableEnd, requiredStart, requiredEnd) => {
+    if (requiredEnd === null || requiredEnd === undefined) return true;
+    if (availableEnd === null || availableEnd === undefined) return true;
+    return availableStart <= requiredStart && availableEnd >= requiredEnd;
+};
+
+/** @param {any} [block] @param {any} [colStart] @param {any} [colEnd] @returns {any} */
+const blockMatchesColumnWindow = (block, colStart, colEnd) => {
+    if (!block || colEnd === null || colEnd === undefined) return true;
+    /** @type {any} */
+    const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
+    // Blocks loaded without column metadata come from an unwindowed/full-data
+    // response. That payload is a superset of any later narrower column window,
+    // so it should stay valid instead of triggering an immediate shrink refetch
+    // that blanks cells after the first structural paint.
+    if (!blockHasColMeta) return true;
+    // A wider loaded window should satisfy any narrower visible window. Exact
+    // equality is too strict for a virtualized table because tiny layout
+    // re-measures can shift the visible leaf range by one column and trigger a
+    // self-canceling cascade of viewport requests.
+    return columnWindowCovers(block.colStart, block.colEnd, colStart, colEnd);
+};
+
+/** @param {any} [colStart] @param {any} [colEnd] @param {any} [prefetchColumnCountOverride] @returns {any} */
+const resolveBufferedColumnWindow = (colStart, colEnd, prefetchColumnCountOverride = null) => {
+    if (colStart === null || colStart === undefined || colEnd === null || colEnd === undefined) {
+        return {
+            requestedColStart: colStart ?? null,
+            requestedColEnd: colEnd ?? null,
+            visibleColumnCount: 0,
+            requestedColumnCount: 0,
+            prefetchColumnCount: 0,
+        };
+    }
+
+    /** @type {any} */
+    const visibleColumnCount = Math.max(0, colEnd - colStart + 1);
+    /** @type {any} */
+    const prefetchColumnCount = (prefetchColumnCountOverride !== null && prefetchColumnCountOverride !== undefined && Number.isFinite(Number(prefetchColumnCountOverride)))
+        ? Math.max(0, Math.floor(Number(prefetchColumnCountOverride)))
+        : Math.max(2, Math.min(4, Math.ceil(Math.max(visibleColumnCount, 1) / 2)));
+    /** @type {any} */
+    const requestedColStart = Math.max(0, colStart - prefetchColumnCount);
+    /** @type {any} */
+    const requestedColEnd = Math.max(requestedColStart, colEnd + prefetchColumnCount);
+
+    return {
+        requestedColStart,
+        requestedColEnd,
+        visibleColumnCount,
+        requestedColumnCount: Math.max(0, requestedColEnd - requestedColStart + 1),
+        prefetchColumnCount,
+    };
+};
+
+/** @param {...any} args @returns {any} */
+const debugLog = (...args) => {
+    /** @type {any} */
+    const buildDebugEnabled = process.env.NODE_ENV !== 'production';
+    let runtimeDebugEnabled = false;
+
+    if (typeof window !== 'undefined') {
+        try {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true || window.localStorage.getItem('pivot-debug') === '1';
+        } catch (error) {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true;
+        }
+    }
+
+    if (!buildDebugEnabled && !runtimeDebugEnabled) return;
+    console.log('[pivot-client]', ...args);
+};
+
+/** @param {any} [rowCount] @returns {any} */
+const getServerSideRowOverscan = (rowCount) => {
+    /** @type {any} */
+    const numericRowCount = Number.isFinite(Number(rowCount)) ? Number(rowCount) : 0;
+    if (numericRowCount >= 100000) return 4;
+    if (numericRowCount >= 25000) return 5;
+    return 6;
+};
+
+/** @param {any} [visibleRows] @returns {any} */
+const getUrgentJumpRowOverscan = (visibleRows) => {
+    /** @type {any} */
+    const numericVisibleRows = Number.isFinite(Number(visibleRows)) ? Number(visibleRows) : 0;
+    return Math.max(8, Math.min(32, Math.ceil(Math.max(numericVisibleRows, 1) / 2)));
+};
+
+const VIEWPORT_BLOCK_STALE_MS = 1500;
+const VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS = 5000;
+// DuckDB work runs in a worker thread, so briefly retain only the latest pending
+// viewport while a query starts. Do not serialize behind the full Dash roundtrip:
+// once the short grace period expires the database is usually idle while the old
+// response is still crossing Dash/React. Version checks safely reject that older
+// response if it arrives after the newer viewport.
+const VIEWPORT_INFLIGHT_SERIALIZE_MS = 450;
+const VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS = 1;
+const VIEWPORT_FAST_SCROLL_DEBOUNCE_MS = 140;
+const VIEWPORT_FAST_COLUMN_DEBOUNCE_MS = 96;
+
+/**
+ * Hook to manage server-side virtualization with caching.
+  @param {any} p0 @returns {any} */
+export const useServerSideRowModel = ({
+    parentRef,
+    serverSide,
+    rowCount,
+    rowHeight,
+    data, // The window of data received from backend
+    dataOffset = 0, // The starting index of that window
+    dataVersion = 0, // Data version from backend to prevent stale updates
+    dataStateEpoch = null, // State epoch echoed by the backend for this data window
+    setProps,
+    blockSize = 48,
+    maxBlocksInCache = 500,
+    blockLoadDebounceMs = null,
+    rowOverscan = null,
+    prefetchColumns = null,
+    estimateRowHeight,
+    keyMapper, // function to get a key from a row, if needed
+    cacheKey,
+    excludeGrandTotal = false,
+    immersiveMode = false,
+    stateEpoch = 0,
+    sessionId = 'anonymous',
+    clientInstance = 'default',
+    tableName = null,
+    abortGeneration = 0,
+    structuralInFlight = false,
+    requestVersionRef: externalRequestVersionRef = null,
+    colStart = null,
+    colEnd = null,
+    responseColStart = null,
+    responseColEnd = null,
+    needsColSchema = false,
+    columnRangeUrgencyToken = 0,
+    onViewportRequest = null,
+    layoutMode = 'hierarchy',
+    showSubtotals = true,
+    layoutRequestFields = null,
+}) => {
+    // 1. Initialize Cache
+    /** @type {any} */
+    const {
+        setCurrentEpoch,
+        getRow,
+        setBlockLoading,
+        setBlockLoaded,
+        getBlock,
+        clearCache,
+        invalidateFromBlock,
+        softInvalidateFromBlock,
+        softInvalidateRange,
+        pruneToRange,
+        setPinnedRange,
+        cacheVersion,
+        getLoadedBlocks
+    } = useRowCache({ blockSize, maxBlocks: maxBlocksInCache });
+
+    // Request Version Tracking
+    /** @type {any} */
+    const internalRequestVersionRef = useRef(0);
+    /** @type {any} */
+    const requestVersionRef = externalRequestVersionRef || internalRequestVersionRef;
+    /** @type {any} */
+    const inflightRequestRef = useRef(null);
+    /** @type {any} */
+    const pendingViewportRef = useRef(null);
+    /** @type {any} */
+    const viewportAbortControllerRef = useRef(
+        typeof AbortController !== 'undefined' ? new AbortController() : null
+    );
+    /** @type {any} */
+    const isMountedRef = useRef(true);
+    /** @type {[any, (...args: any[]) => any]} */
+    const [grandTotalRow, setGrandTotalRow] = useState(null);
+    // Incremented whenever inflight is cleared so the viewport effect re-runs
+    // even when virtualRows hasn't changed (e.g. after a stale/dropped response).
+    /** @type {[any, (...args: any[]) => any]} */
+    const [inflightClearedAt, setInflightClearedAt] = useState(0);
+    // Track what col range was requested so the data-sync effect can stamp blocks correctly
+    // without needing dataColStart/dataColEnd as props (which would cascade on every response).
+    /** @type {any} */
+    const lastRequestedColStartRef = useRef(null);
+    /** @type {any} */
+    const lastRequestedColEndRef = useRef(null);
+    /** @type {any} */
+    const queuedViewportRef = useRef(null);
+    /** @type {any} */
+    const viewportFlushTimerRef = useRef(null);
+    /** @type {any} */
+    const viewportRetryTimerRef = useRef(null);
+    /** @type {any} */
+    const lastViewportDispatchAtRef = useRef(0);
+    /** @type {any} */
+    const lastViewportAnchorRowRef = useRef(null);
+    /** @type {any} */
+    const lastObservedScrollTopRef = useRef(0);
+    /** @type {any} */
+    const lastFastScrollDispatchRef = useRef({ startBlock: -1, endBlock: -1, dispatchedAt: 0 });
+    /** @type {any} */
+    const lastImmediateViewportRef = useRef({
+        startBlock: -1,
+        endBlock: -1,
+        colStart: null,
+        colEnd: null,
+        dispatchedAt: 0,
+    });
+    /** @type {any} */
+    const lastHandledColumnRangeUrgencyRef = useRef(0);
+    // Throttle pruneToRange: only run when the viewport block range shifts by ≥1 block.
+    /** @type {any} */
+    const lastPrunedRangeRef = useRef({ startBlock: -1, endBlock: -1 });
+    /** @type {any} */
+    const lifecycleResetRef = useRef({
+        initialized: false,
+        serverSide: false,
+        stateEpoch: null,
+        cacheKey: null,
+        abortGeneration: null,
+    });
+
+    /** @type {(...args: any[]) => any} */
+    const resetViewportRequestState = useCallback(({
+        resetColumnWindow = false,
+        abort = false,
+        urgencyToken = 0,
+    } = {}) => {
+        inflightRequestRef.current = null;
+        pendingViewportRef.current = null;
+        queuedViewportRef.current = null;
+        if (resetColumnWindow) {
+            lastRequestedColStartRef.current = null;
+            lastRequestedColEndRef.current = null;
+        }
+        lastViewportDispatchAtRef.current = 0;
+        lastViewportAnchorRowRef.current = null;
+        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
+        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
+        lastImmediateViewportRef.current = {
+            startBlock: -1,
+            endBlock: -1,
+            colStart: null,
+            colEnd: null,
+            dispatchedAt: 0,
+        };
+        lastHandledColumnRangeUrgencyRef.current = urgencyToken;
+        lastPrunedRangeRef.current = { startBlock: -1, endBlock: -1 };
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+        if (viewportRetryTimerRef.current) {
+            clearTimeout(viewportRetryTimerRef.current);
+            viewportRetryTimerRef.current = null;
+        }
+        if (abort && viewportAbortControllerRef.current) {
+            viewportAbortControllerRef.current.abort();
+            viewportAbortControllerRef.current = new AbortController();
+        }
+    }, [parentRef]);
+
+    /** @type {(...args: any[]) => any} */
+    const scheduleViewportRetry = useCallback((delayMs) => {
+        if (viewportRetryTimerRef.current) {
+            clearTimeout(viewportRetryTimerRef.current);
+        }
+        viewportRetryTimerRef.current = setTimeout(() => {
+            viewportRetryTimerRef.current = null;
+            setInflightClearedAt(/** @param {any} [value] @returns {any} */ value => value + 1);
+        }, Math.max(25, Math.floor(Number(delayMs) || 0)));
+    }, []);
+
+    /** @type {(...args: any[]) => any} */
+    const resolveRetentionBufferBlocks = useCallback((base = 2) => {
+        /** @type {any} */
+        const now = Date.now();
+        /** @type {any} */
+        const recentFastScroll = lastFastScrollDispatchRef.current.dispatchedAt > 0
+            && (now - lastFastScrollDispatchRef.current.dispatchedAt) < 650;
+        /** @type {any} */
+        const hasFreshInflight = inflightRequestRef.current
+            && (now - inflightRequestRef.current.timestamp) < VIEWPORT_BLOCK_STALE_MS;
+        return recentFastScroll || hasFreshInflight ? Math.max(base, 8) : base;
+    }, []);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    // 2. Initialize Virtualizer
+    // We use the full rowCount for serverSide
+    /** @type {any} */
+    const rowVirtualizer = useVirtualizer({
+        count: serverSide ? (rowCount || 0) : (data ? data.length : 0),
+        getScrollElement: () => parentRef.current,
+        estimateSize: estimateRowHeight || (() => rowHeight),
+        overscan: serverSide
+            ? (
+                rowOverscan !== null
+                && rowOverscan !== undefined
+                && Number.isFinite(Number(rowOverscan))
+                    ? Math.max(0, Math.floor(Number(rowOverscan)))
+                    : getServerSideRowOverscan(rowCount)
+            )
+            : 12
+    });
+    
+    /** @type {any} */
+    const virtualRows = rowVirtualizer.getVirtualItems();
+
+    // Force a synchronous re-measure after mount so the virtualizer gets the real
+    // container height before the first paint. Without this, getScrollElement() returns
+    // null on the first render pass (refs commit after render), leaving the virtualizer
+    // with height=0 and rendering only overscan rows — causing the top and last rows
+    // to be invisible until the user first interacts.
+    useLayoutEffect(() => {
+        rowVirtualizer.measure();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Re-measure when server-side row count changes from bootstrap/initial load.
+    // This prevents an initial 0-count measurement from leaving the first/last
+    // rows out of the visible range until user interaction triggers another pass.
+    useLayoutEffect(() => {
+        if (!serverSide) return;
+        rowVirtualizer.measure();
+    }, [serverSide, rowCount, rowHeight, rowVirtualizer]);
+
+    useEffect(() => {
+        const previous = lifecycleResetRef.current;
+        if (!serverSide) {
+            lifecycleResetRef.current = {
+                initialized: false,
+                serverSide: false,
+                stateEpoch,
+                cacheKey,
+                abortGeneration,
+            };
+            return;
+        }
+
+        /** @type {any} */
+        const firstRun = !previous.initialized || !previous.serverSide;
+        /** @type {any} */
+        const epochChanged = firstRun || previous.stateEpoch !== stateEpoch;
+        /** @type {any} */
+        const cacheKeyChanged = firstRun || previous.cacheKey !== cacheKey;
+        /** @type {any} */
+        const abortGenerationChanged = firstRun || previous.abortGeneration !== abortGeneration;
+
+        if (epochChanged) {
+            setCurrentEpoch(stateEpoch);
+        }
+
+        if (cacheKeyChanged && clearCache) {
+            clearCache();
+            if (!externalRequestVersionRef) {
+                requestVersionRef.current = 0;
+            }
+            // Reset the grand total when filters/fields change (cacheKey change) so that a
+            // pre-filter grand total value is never shown alongside post-filter row data.
+            // The grand total is re-populated once the first response containing it arrives.
+            setGrandTotalRow(null);
+        }
+
+        if (epochChanged || cacheKeyChanged || abortGenerationChanged) {
+            resetViewportRequestState({
+                resetColumnWindow: epochChanged || cacheKeyChanged,
+                abort: epochChanged || abortGenerationChanged,
+                urgencyToken: columnRangeUrgencyToken,
+            });
+        }
+
+        lifecycleResetRef.current = {
+            initialized: true,
+            serverSide: true,
+            stateEpoch,
+            cacheKey,
+            abortGeneration,
+        };
+    }, [
+        abortGeneration,
+        cacheKey,
+        clearCache,
+        columnRangeUrgencyToken,
+        externalRequestVersionRef,
+        requestVersionRef,
+        resetViewportRequestState,
+        serverSide,
+        setCurrentEpoch,
+        stateEpoch,
+    ]);
+
+    useEffect(() => {
+        if (!serverSide || !parentRef.current) return;
+        // Clamp scroll when row count shrinks after collapse to avoid out-of-range virtual windows.
+        /** @type {any} */
+        const maxScrollTop = Math.max(
+            0,
+            (rowCount || 0) * rowHeight - parentRef.current.clientHeight
+        );
+        if (parentRef.current.scrollTop > maxScrollTop) {
+            parentRef.current.scrollTop = maxScrollTop;
+            if (rowVirtualizer.scrollToOffset) {
+                rowVirtualizer.scrollToOffset(maxScrollTop);
+            }
+        }
+    }, [serverSide, rowCount, rowHeight, rowVirtualizer, parentRef]);
+
+    // 3. Sync incoming data to Cache
+    useEffect(() => {
+        if (!serverSide || !data) return;
+
+        /** @type {any} */
+        const responseStateEpoch = Number(dataStateEpoch);
+        /** @type {any} */
+        const targetStateEpoch = Number.isFinite(responseStateEpoch)
+            ? responseStateEpoch
+            : stateEpoch;
+        if (targetStateEpoch < stateEpoch) {
+            debugLog('drop-stale-data-epoch', {
+                dataStateEpoch,
+                targetStateEpoch,
+                stateEpoch,
+                dataVersion,
+            });
+            return;
+        }
+
+        let normalizedData = data;
+        let normalizedOffset = dataOffset;
+
+        /** @param {any} [inflight] @param {any} [responseStart] @param {any} [responseEnd] @returns {any} */
+        const retireQueuedBlocksCoveredByResponse = (inflight, responseStart, responseEnd) => {
+            const queued = queuedViewportRef.current;
+            if (
+                !inflight
+                || !queued
+                || queued.stateEpoch !== inflight.stateEpoch
+                || queued.abortGeneration !== inflight.abortGeneration
+            ) {
+                return;
+            }
+
+            /** @type {any} */
+            const availableColStart = responseColStart !== null && responseColStart !== undefined
+                ? responseColStart
+                : inflight.colStart;
+            /** @type {any} */
+            const availableColEnd = responseColEnd !== null && responseColEnd !== undefined
+                ? responseColEnd
+                : inflight.colEnd;
+            if (!columnWindowCovers(
+                availableColStart,
+                availableColEnd,
+                queued.overrideColStart,
+                queued.overrideColEnd
+            )) {
+                return;
+            }
+
+            /** @type {any} */
+            const numericRowCount = Number(rowCount);
+            /** @type {any} */
+            const lastDataRow = Number.isFinite(numericRowCount) && numericRowCount > 0
+                ? numericRowCount - 1
+                : null;
+            /** @type {any} */
+            const remainingBlocks = queued.blocksNeeded.filter(/** @param {any} [blockIndex] @returns {any} */ (blockIndex) => {
+                /** @type {any} */
+                const blockStart = blockIndex * blockSize;
+                /** @type {any} */
+                const fullBlockEnd = (blockIndex + 1) * blockSize - 1;
+                /** @type {any} */
+                const blockEnd = lastDataRow === null
+                    ? fullBlockEnd
+                    : Math.min(fullBlockEnd, lastDataRow);
+                return responseStart > blockStart || responseEnd < blockEnd;
+            });
+
+            if (remainingBlocks.length === queued.blocksNeeded.length) return;
+
+            queuedViewportRef.current = remainingBlocks.length > 0
+                ? { ...queued, blocksNeeded: remainingBlocks }
+                : null;
+            if (remainingBlocks.length === 0 && viewportFlushTimerRef.current) {
+                clearTimeout(viewportFlushTimerRef.current);
+                viewportFlushTimerRef.current = null;
+            }
+            debugLog('retire-satisfied-queued-viewport', {
+                requestVersion: inflight.version,
+                responseStart,
+                responseEnd,
+                retiredBlocks: queued.blocksNeeded.filter(/** @param {any} [blockIndex] @returns {any} */ blockIndex => !remainingBlocks.includes(blockIndex)),
+                remainingBlocks,
+            });
+        };
+
+        if (excludeGrandTotal) {
+            /** @type {any} */
+            const foundGrandTotal = data.find(isGrandTotalRow) || null;
+            if (foundGrandTotal) {
+                // Responses may include only a windowed column slice.
+                // Merge with previous values so pinned grand total cells don't
+                // transiently blank when horizontal windows shift.
+                setGrandTotalRow(/** @param {any} [prev] @returns {any} */ prev => (prev ? { ...prev, ...foundGrandTotal } : foundGrandTotal));
+            }
+
+            normalizedData = data.filter(/** @param {any} [row] @returns {any} */ row => !isGrandTotalRow(row));
+        }
+
+        /** @returns {any} */
+        const clearInflightForResponse = () => {
+            const inflight = inflightRequestRef.current;
+            if (!inflight) return;
+
+            // Use raw response coverage, not the grand-total-filtered row count:
+            // the grand total is transport metadata for the pinned total row, not
+            // a cache row. For the last block, clamp the expected end to the known
+            // regular row count so a short final response can still retire inflight.
+            const responseStart = dataOffset;
+            /** @type {any} */
+            const rawResponseEnd = data.length > 0 ? dataOffset + data.length - 1 : dataOffset - 1;
+            /** @type {any} */
+            const numericRowCount = Number(rowCount);
+            /** @type {any} */
+            const rowCountEnd = Number.isFinite(numericRowCount) && numericRowCount > 0
+                ? numericRowCount - 1
+                : null;
+            /** @type {any} */
+            const requiredResponseEnd = rowCountEnd !== null
+                ? Math.min(inflight.end, rowCountEnd)
+                : inflight.end;
+            /** @type {any} */
+            const coversEmptyDataset = Number.isFinite(numericRowCount)
+                && numericRowCount === 0
+                && normalizedData.length === 0
+                && responseStart <= inflight.start;
+
+            if (
+                responseStart <= inflight.start &&
+                (rawResponseEnd >= requiredResponseEnd || coversEmptyDataset) &&
+                dataVersion >= inflight.version
+            ) {
+                retireQueuedBlocksCoveredByResponse(inflight, responseStart, rawResponseEnd);
+                inflightRequestRef.current = null;
+                if (viewportRetryTimerRef.current) {
+                    clearTimeout(viewportRetryTimerRef.current);
+                    viewportRetryTimerRef.current = null;
+                }
+                setInflightClearedAt(/** @param {any} [t] @returns {any} */ t => t + 1);
+                debugLog('clear-inflight', {
+                    requestStart: inflight.start,
+                    requestEnd: inflight.end,
+                    requestVersion: inflight.version,
+                    responseStart,
+                    responseEnd: rawResponseEnd,
+                    requiredResponseEnd,
+                    dataVersion
+                });
+            }
+        };
+
+        if (normalizedData.length === 0) {
+            clearInflightForResponse();
+            debugLog('sync-empty', {
+                dataOffset,
+                dataVersion,
+                excludeGrandTotal
+            });
+            return;
+        }
+
+        // Calculate which blocks this data covers
+        // We assume data is a contiguous chunk starting at dataOffset
+        /** @type {any} */
+        const startBlock = Math.floor(normalizedOffset / blockSize);
+        /** @type {any} */
+        const endBlock = Math.floor((normalizedOffset + normalizedData.length - 1) / blockSize);
+        
+        for (let b = startBlock; b <= endBlock; b++) {
+            /** @type {any} */
+            const blockStart = b * blockSize;
+            
+            // Calculate slice indices relative to the 'data' array
+            // Overlap start: Max(block start, data start)
+            /** @type {any} */
+            const absStart = Math.max(blockStart, normalizedOffset);
+            /** @type {any} */
+            const relStart = absStart - normalizedOffset;
+            
+            // Overlap end: Min(block end, data end)
+            // Block end (exclusive) = (b+1)*blockSize
+            /** @type {any} */
+            const absEnd = Math.min((b + 1) * blockSize, normalizedOffset + normalizedData.length);
+            /** @type {any} */
+            const relEnd = absEnd - normalizedOffset;
+            
+            if (relStart < relEnd) {
+                /** @type {any} */
+                const blockRows = normalizedData
+                    .slice(relStart, relEnd)
+                    .map(/** @param {any} [row] @param {any} [index] @returns {any} */ (row, index) => ({
+                        ...row,
+                        __virtualIndex: absStart + index
+                    }));
+                /** @type {any} */
+                const effectiveRowCount = rowCount || (normalizedOffset + normalizedData.length);
+                /** @type {any} */
+                const expectedRowsForBlock = Math.max(
+                    0,
+                    Math.min((b + 1) * blockSize, effectiveRowCount) - blockStart
+                );
+                /** @type {any} */
+                const isCompleteBlock = absStart === blockStart && blockRows.length >= expectedRowsForBlock;
+
+                // Use dataVersion for stale response protection
+                // The retained schema can describe an older sparse window.
+                // A viewport response is bound to its own request version, so
+                // stamp cached rows with that request's actual column range.
+                /** @type {any} */
+                const matchingInflight = inflightRequestRef.current?.version === dataVersion
+                    ? inflightRequestRef.current : null;
+                /** @type {any} */
+                const effectiveResponseColStart = matchingInflight
+                    ? matchingInflight.colStart
+                    : (responseColStart ?? lastRequestedColStartRef.current);
+                /** @type {any} */
+                const effectiveResponseColEnd = matchingInflight
+                    ? matchingInflight.colEnd
+                    : (responseColEnd ?? lastRequestedColEndRef.current);
+                setBlockLoaded(
+                    b,
+                    blockRows,
+                    dataVersion,
+                    isCompleteBlock,
+                    targetStateEpoch,
+                    effectiveResponseColStart,
+                    effectiveResponseColEnd
+                );
+                debugLog('sync-block', {
+                    blockIndex: b,
+                    stateEpoch: targetStateEpoch,
+                    renderStateEpoch: stateEpoch,
+                    normalizedOffset,
+                    dataOffset,
+                    dataVersion,
+                    blockRows: blockRows.length,
+                    expectedRowsForBlock,
+                    isCompleteBlock
+                });
+            }
+        }
+
+        clearInflightForResponse();
+        const inflight = inflightRequestRef.current;
+        if (inflight) {
+            // Use the original (pre-grand-total-filter) offset and length so that
+            // a response containing a filtered-out grand total row still fully
+            // covers the inflight range and clears it.  Using normalizedData.length
+            // would give responseEnd = inflight.end - 1 whenever a grand total was
+            // removed, leaving the inflight stuck and blocking the next request for
+            // the same block range.
+            const responseStart = dataOffset;
+            /** @type {any} */
+            const responseEnd = dataOffset + data.length - 1;
+            // dataVersion is the client's window_seq echoed back by the server, so
+            // it equals the inflight.version that was sent with the request.
+            // Only clear the inflight when the response version is >= the inflight
+            // version — this prevents a stale response (old window_seq) from
+            // prematurely clearing the inflight for a newer in-progress request,
+            // which would cause vertical scroll blocks to appear "orphaned" and
+            // trigger an infinite re-request cascade.
+            if (
+                responseStart <= inflight.start &&
+                responseEnd >= inflight.end &&
+                dataVersion >= inflight.version
+            ) {
+                inflightRequestRef.current = null;
+                if (viewportRetryTimerRef.current) {
+                    clearTimeout(viewportRetryTimerRef.current);
+                    viewportRetryTimerRef.current = null;
+                }
+                // Signal to the viewport effect that it should re-run and look for
+                // orphaned loading blocks (blocks whose inflight was superseded by
+                // a faster request and whose stale backend response was dropped).
+                setInflightClearedAt(/** @param {any} [t] @returns {any} */ t => t + 1);
+                debugLog('clear-inflight', {
+                    requestStart: inflight.start,
+                    requestEnd: inflight.end,
+                    requestVersion: inflight.version,
+                    responseStart,
+                    responseEnd,
+                    dataVersion
+                });
+            }
+        }
+    }, [data, dataOffset, dataVersion, dataStateEpoch, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
+
+    /** @type {(...args: any[]) => any} */
+    const blockNeedsViewportRequest = useCallback((
+        blockIndex,
+        currentInflight = inflightRequestRef.current,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd,
+        now = Date.now(),
+    ) => {
+        /** @type {any} */
+        const block = getBlock(blockIndex, stateEpoch);
+        if (!block || block.status === 'error') return true;
+
+        /** @type {any} */
+        const isStale = block.status === 'loading' && (now - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
+        /** @type {any} */
+        const isPartial = block.status === 'partial';
+        /** @type {any} */
+        const blockStart = blockIndex * blockSize;
+        /** @type {any} */
+        const blockEnd = (blockIndex + 1) * blockSize - 1;
+        /** @type {any} */
+        const isOrphaned = block.status === 'loading' && !isStale && !(
+            currentInflight &&
+            currentInflight.abortGeneration === abortGeneration &&
+            currentInflight.stateEpoch === stateEpoch &&
+            currentInflight.start <= blockStart &&
+            currentInflight.end >= blockEnd
+        );
+        /** @type {any} */
+        const isColMismatch = block.status === 'loaded' && !blockMatchesColumnWindow(block, overrideColStart, overrideColEnd);
+        /** @type {any} */
+        const inflightColMismatch = block.status === 'loading' && currentInflight && !columnWindowCovers(
+            currentInflight.colStart,
+            currentInflight.colEnd,
+            overrideColStart,
+            overrideColEnd
+        );
+
+        return isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch;
+    }, [abortGeneration, blockSize, colEnd, colStart, getBlock, stateEpoch]);
+
+    /** @type {(...args: any[]) => any} */
+    const collectBlocksNeeded = useCallback((
+        firstRow,
+        lastRow,
+        currentInflight = inflightRequestRef.current,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd
+    ) => {
+        /** @type {any} */
+        const startBlock = Math.floor(firstRow / blockSize);
+        /** @type {any} */
+        const endBlock = Math.floor(lastRow / blockSize);
+        /** @type {any[]} */
+        const blocksNeeded = [];
+        /** @type {any} */
+        const now = Date.now();
+
+        for (let b = startBlock; b <= endBlock; b++) {
+            if (blockNeedsViewportRequest(b, currentInflight, overrideColStart, overrideColEnd, now)) {
+                blocksNeeded.push(b);
+            }
+        }
+
+        if (blocksNeeded.length > 0) {
+            /** @type {any} */
+            const newInflightMinBlock = Math.min(...blocksNeeded);
+            /** @type {any} */
+            const newInflightMaxBlock = Math.max(...blocksNeeded);
+            for (let b = startBlock; b <= endBlock; b++) {
+                if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
+                /** @type {any} */
+                const bBlock = getBlock(b, stateEpoch);
+                if (bBlock && bBlock.status === 'loading') {
+                    blocksNeeded.push(b);
+                }
+            }
+        }
+
+        return {
+            startBlock,
+            endBlock,
+            blocksNeeded: [...new Set(blocksNeeded)].sort((left, right) => left - right),
+        };
+    }, [blockNeedsViewportRequest, blockSize, colEnd, colStart, getBlock, stateEpoch]);
+
+    /** @type {(...args: any[]) => any} */
+    const requestViewport = useCallback((
+        firstRow,
+        lastRow,
+        blocksNeeded,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd,
+        queuedAt = Date.now(),
+        options = {}
+    ) => {
+        if (!isMountedRef.current || !setProps || blocksNeeded.length === 0) return false;
+        /** @type {any} */
+        const abortSignal = viewportAbortControllerRef.current ? viewportAbortControllerRef.current.signal : null;
+        if (abortSignal && abortSignal.aborted) return false;
+
+        /** @type {any} */
+        const dispatchCheckStartedAt = Date.now();
+        /** @type {any} */
+        const dispatchBlocksNeeded = [...new Set(blocksNeeded)]
+            .filter(blockIndex => blockNeedsViewportRequest(
+                blockIndex,
+                inflightRequestRef.current,
+                overrideColStart,
+                overrideColEnd,
+                dispatchCheckStartedAt
+            ))
+            .sort((left, right) => left - right);
+        if (dispatchBlocksNeeded.length === 0) {
+            debugLog('skip-obsolete-viewport', {
+                firstRow,
+                lastRow,
+                blocksNeeded,
+                visibleColStart: overrideColStart,
+                visibleColEnd: overrideColEnd,
+                stateEpoch,
+                abortGeneration
+            });
+            return false;
+        }
+
+        /** @type {any} */
+        let minBlock = Math.min(...dispatchBlocksNeeded);
+        /** @type {any} */
+        let maxBlock = Math.max(...dispatchBlocksNeeded);
+        const inflight = inflightRequestRef.current;
+
+        /** @type {any} */
+        let reqStart = minBlock * blockSize;
+        /** @type {any} */
+        let reqEnd = (maxBlock + 1) * blockSize - 1;
+
+        /** @type {any} */
+        const inflightAgeMs = inflight ? Date.now() - inflight.timestamp : Number.POSITIVE_INFINITY;
+        /** @type {any} */
+        const inflightIsFresh = inflight && inflightAgeMs <= VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS;
+        /** @type {any} */
+        const {
+            requestedColStart,
+            requestedColEnd,
+            visibleColumnCount,
+            requestedColumnCount,
+            prefetchColumnCount,
+        } = resolveBufferedColumnWindow(overrideColStart, overrideColEnd, prefetchColumns);
+
+        if (
+            inflightIsFresh &&
+            inflight.start === reqStart &&
+            inflight.end === reqEnd &&
+            columnWindowCovers(inflight.colStart, inflight.colEnd, overrideColStart, overrideColEnd) &&
+            inflight.abortGeneration === abortGeneration &&
+            inflight.stateEpoch === stateEpoch
+        ) {
+            debugLog('skip-duplicate-viewport', {
+                firstRow,
+                lastRow,
+                reqStart,
+                reqEnd,
+                requestedColStart,
+                requestedColEnd,
+                visibleColStart: overrideColStart,
+                visibleColEnd: overrideColEnd,
+                inflightVersion: inflight.version,
+                stateEpoch,
+                abortGeneration
+            });
+            return false;
+        }
+
+        if (
+            inflight
+            && inflight.abortGeneration === abortGeneration
+            && inflight.stateEpoch === stateEpoch
+            && inflightAgeMs < VIEWPORT_INFLIGHT_SERIALIZE_MS
+        ) {
+            // Replace, rather than merge, so fast scrolling retains only the most
+            // recent visible range while the current uncancellable query finishes.
+            queuedViewportRef.current = {
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: dispatchBlocksNeeded,
+                stateEpoch,
+                abortGeneration,
+                enqueuedAt: queuedAt || Date.now(),
+                updatedAt: Date.now(),
+            };
+            scheduleViewportRetry(VIEWPORT_INFLIGHT_SERIALIZE_MS - inflightAgeMs + 25);
+            debugLog('defer-behind-inflight', {
+                inflightStart: inflight.start,
+                inflightEnd: inflight.end,
+                pendingStart: reqStart,
+                pendingEnd: reqEnd,
+                inflightVersion: inflight.version,
+                inflightAgeMs,
+                stateEpoch,
+                abortGeneration,
+            });
+            return false;
+        }
+
+        // Fetch one block in the current scroll direction. Hierarchy construction
+        // is shared across row windows, so including the adjacent slice is much
+        // cheaper than making the user wait for a second serialized callback at
+        // the next block boundary.
+        const previousAnchorRow = lastViewportAnchorRowRef.current;
+        /** @type {any} */
+        const scrollDirection = previousAnchorRow !== null && firstRow < previousAnchorRow ? -1 : 1;
+        /** @type {any} */
+        const numericRowCount = Number(rowCount);
+        /** @type {any} */
+        const lastAvailableBlock = Number.isFinite(numericRowCount) && numericRowCount > 0
+            ? Math.max(0, Math.ceil(numericRowCount / blockSize) - 1)
+            : null;
+        for (let offset = 1; offset <= VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS; offset += 1) {
+            /** @type {any} */
+            const candidateBlock = scrollDirection < 0 ? minBlock - offset : maxBlock + offset;
+            if (candidateBlock < 0 || (lastAvailableBlock !== null && candidateBlock > lastAvailableBlock)) break;
+            if (!blockNeedsViewportRequest(
+                candidateBlock,
+                null,
+                overrideColStart,
+                overrideColEnd,
+                dispatchCheckStartedAt
+            )) break;
+            minBlock = Math.min(minBlock, candidateBlock);
+            maxBlock = Math.max(maxBlock, candidateBlock);
+        }
+        reqStart = minBlock * blockSize;
+        reqEnd = (maxBlock + 1) * blockSize - 1;
+
+        /** @type {any} */
+        const newVersion = requestVersionRef.current + 1;
+        const requestId = `viewport:${sessionId}:${clientInstance}:${newVersion}`;
+        requestVersionRef.current = newVersion;
+        lastViewportAnchorRowRef.current = firstRow;
+        const previousColStart = lastRequestedColStartRef.current;
+        const previousColEnd = lastRequestedColEndRef.current;
+        /** @type {any} */
+        const hasColumnWindow = requestedColStart !== null && requestedColEnd !== null;
+        /** @type {any} */
+        const columnRangeChanged = hasColumnWindow && (
+            previousColStart !== requestedColStart ||
+            previousColEnd !== requestedColEnd
+        );
+        /** @type {any} */
+        const overlapStart = hasColumnWindow && previousColStart !== null && previousColEnd !== null
+            ? Math.max(previousColStart, requestedColStart)
+            : null;
+        /** @type {any} */
+        const overlapEnd = hasColumnWindow && previousColStart !== null && previousColEnd !== null
+            ? Math.min(previousColEnd, requestedColEnd)
+            : null;
+        /** @type {any} */
+        const overlapCount = overlapStart !== null && overlapEnd !== null && overlapEnd >= overlapStart
+            ? overlapEnd - overlapStart + 1
+            : 0;
+        /** @type {any} */
+        const columnDeltaCount = columnRangeChanged
+            ? Math.max(1, requestedColumnCount - overlapCount)
+            : 0;
+
+        // Always update the block version, even when it is already loading.
+        // If we skip setBlockLoading for loading blocks, the block retains its
+        // OLD request version.  A stale response for that old version then passes
+        // the `block.version > requestVersion` guard (equal, not strictly greater)
+        // and is accepted, clearing the inflight and triggering yet another cascade
+        // of orphan-detected re-requests.  setBlockLoading preserves existing rows
+        // (stale-while-revalidate) so calling it again is safe.
+        for (let b = minBlock; b <= maxBlock; b++) {
+            setBlockLoading(b, newVersion, stateEpoch);
+        }
+        setPinnedRange(minBlock, maxBlock, resolveRetentionBufferBlocks(2), stateEpoch);
+
+        /** @type {any} */
+        const reqCount = reqEnd - reqStart + 1;
+        inflightRequestRef.current = {
+            requestId,
+            start: reqStart,
+            end: reqEnd,
+            colStart: requestedColStart,
+            colEnd: requestedColEnd,
+            version: newVersion,
+            timestamp: Date.now(),
+            abortGeneration,
+            stateEpoch
+        };
+        if (typeof onViewportRequest === 'function') {
+            onViewportRequest({
+                requestId,
+                version: newVersion,
+                reqStart,
+                reqEnd,
+                colStart: requestedColStart,
+                colEnd: requestedColEnd,
+                hasColumnWindow,
+                columnRangeChanged,
+                columnDeltaCount,
+                visibleColumnCount,
+                requestedColumnCount,
+                prefetchColumnCount,
+                queuedAt,
+                emittedAt: Date.now(),
+                stateEpoch,
+                abortGeneration,
+                silent: Boolean(options && options.silent),
+            });
+        }
+
+        // Stamp the col range into refs BEFORE setProps so the data-sync effect
+        // always reads the correct range even if the response arrives synchronously.
+        lastRequestedColStartRef.current = requestedColStart;
+        lastRequestedColEndRef.current = requestedColEnd;
+
+        if (!isMountedRef.current) return false;
+        setProps({
+            runtimeRequest: {
+                kind: 'data',
+                requestId,
+                payload: {
+                    requestId,
+                    table: tableName || undefined,
+                    start: reqStart,
+                    end: reqEnd,
+                    count: reqCount,
+                    version: newVersion,
+                    window_seq: newVersion,
+                    state_epoch: stateEpoch,
+                    cache_key: cacheKey || undefined,
+                    session_id: sessionId,
+                    client_instance: clientInstance,
+                    abort_generation: abortGeneration,
+                    intent: 'viewport',
+                    col_start: requestedColStart !== null ? requestedColStart : undefined,
+                    col_end: requestedColEnd !== null ? requestedColEnd : undefined,
+                    needs_col_schema: needsColSchema || undefined,
+                    include_grand_total: excludeGrandTotal || undefined,
+                    immersive_mode: immersiveMode || undefined,
+                    layout_mode: layoutMode,
+                    show_subtotal_footers: showSubtotals,
+                    ...(typeof layoutRequestFields === 'function' ? layoutRequestFields(false, true) : layoutRequestFields || {}),
+                },
+            },
+        });
+
+        debugLog('request-viewport', {
+            firstRow,
+            lastRow,
+            blocksNeeded: dispatchBlocksNeeded,
+            reqStart,
+            reqEnd,
+            previousColStart,
+            previousColEnd,
+            visibleColStart: overrideColStart,
+            visibleColEnd: overrideColEnd,
+            requestedColStart,
+            requestedColEnd,
+            columnRangeChanged,
+            columnDeltaCount,
+            visibleColumnCount,
+            requestedColumnCount,
+            prefetchColumnCount,
+            needsColSchema,
+            version: newVersion,
+            stateEpoch,
+            abortGeneration
+        });
+        return true;
+    }, [
+        setProps,
+        blockNeedsViewportRequest,
+        blockSize,
+        abortGeneration,
+        stateEpoch,
+        requestVersionRef,
+        setBlockLoading,
+        sessionId,
+        clientInstance,
+        tableName,
+        colStart,
+        colEnd,
+        needsColSchema,
+        excludeGrandTotal,
+        onViewportRequest,
+        prefetchColumns,
+        resolveRetentionBufferBlocks,
+        setPinnedRange,
+        immersiveMode,
+        layoutMode,
+        showSubtotals,
+        layoutRequestFields,
+        scheduleViewportRetry,
+        rowCount,
+    ]);
+
+    /** @type {(...args: any[]) => any} */
+    const flushQueuedViewport = useCallback((forceImmediate = false) => {
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+        const queued = queuedViewportRef.current;
+        if (!queued || queued.blocksNeeded.length === 0) return false;
+        queuedViewportRef.current = null;
+        /** @type {any} */
+        const sent = requestViewport(
+            queued.firstRow,
+            queued.lastRow,
+            queued.blocksNeeded,
+            queued.overrideColStart,
+            queued.overrideColEnd,
+            queued.enqueuedAt
+        );
+        if (sent || forceImmediate) {
+            lastViewportDispatchAtRef.current = Date.now();
+        }
+        return sent;
+    }, [requestViewport]);
+
+    /** @type {(...args: any[]) => any} */
+    const enqueueViewportRequest = useCallback((
+        firstRow,
+        lastRow,
+        blocksNeeded,
+        {
+            immediate = false,
+            replace = false,
+            debounceMs = null,
+            overrideColStart = colStart,
+            overrideColEnd = colEnd,
+        } = {}
+    ) => {
+        if (!blocksNeeded || blocksNeeded.length === 0) return false;
+        /** @type {any} */
+        const normalizedBlocks = [...new Set(blocksNeeded)].sort((left, right) => left - right);
+        const existing = queuedViewportRef.current;
+
+        if (
+            !replace &&
+            existing &&
+            existing.stateEpoch === stateEpoch &&
+            existing.abortGeneration === abortGeneration
+        ) {
+            queuedViewportRef.current = {
+                ...existing,
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: [...new Set([...existing.blocksNeeded, ...normalizedBlocks])].sort((left, right) => left - right),
+                enqueuedAt: existing.enqueuedAt || Date.now(),
+                updatedAt: Date.now(),
+            };
+        } else {
+            queuedViewportRef.current = {
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: normalizedBlocks,
+                stateEpoch,
+                abortGeneration,
+                enqueuedAt: Date.now(),
+                updatedAt: Date.now(),
+            };
+        }
+
+        const queued = queuedViewportRef.current;
+        if (queued && queued.blocksNeeded.length > 0) {
+            setPinnedRange(queued.blocksNeeded[0], queued.blocksNeeded[queued.blocksNeeded.length - 1], resolveRetentionBufferBlocks(2), stateEpoch);
+        }
+
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+
+        if (immediate) {
+            lastImmediateViewportRef.current = {
+                startBlock: normalizedBlocks[0],
+                endBlock: normalizedBlocks[normalizedBlocks.length - 1],
+                colStart: overrideColStart,
+                colEnd: overrideColEnd,
+                dispatchedAt: Date.now(),
+            };
+            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            lastViewportDispatchAtRef.current = Date.now();
+            return flushQueuedViewport(true);
+        }
+
+        /** @type {any} */
+        const elapsed = Date.now() - lastViewportDispatchAtRef.current;
+        /** @type {any} */
+        const resolvedDebounceMs = Number.isFinite(Number(debounceMs))
+            ? Math.max(0, Math.floor(Number(debounceMs)))
+            : null;
+        /** @type {any} */
+        const effectiveDebounceMs = immediate
+            ? 0
+            : (resolvedDebounceMs !== null
+                ? resolvedDebounceMs
+                : (
+                    blockLoadDebounceMs !== null
+                    && blockLoadDebounceMs !== undefined
+                    && Number.isFinite(Number(blockLoadDebounceMs))
+                        ? Math.max(0, Math.floor(Number(blockLoadDebounceMs)))
+                        : (elapsed >= 80 ? 16 : 48)
+                ));
+        viewportFlushTimerRef.current = setTimeout(() => {
+            viewportFlushTimerRef.current = null;
+            flushQueuedViewport(immediate);
+        }, effectiveDebounceMs);
+        return true;
+    }, [abortGeneration, blockLoadDebounceMs, colEnd, colStart, columnRangeUrgencyToken, flushQueuedViewport, prefetchColumns, resolveRetentionBufferBlocks, setPinnedRange, stateEpoch]);
+
+    /** @type {(...args: any[]) => any} */
+    const requestUrgentColumnViewport = useCallback((overrideColStart, overrideColEnd) => {
+        if (!serverSide || !parentRef.current || structuralInFlight) return false;
+
+        const scrollEl = parentRef.current;
+        /** @type {any} */
+        const estimatedFirstRow = Math.max(0, Math.floor(scrollEl.scrollTop / Math.max(rowHeight, 1)));
+        /** @type {any} */
+        const estimatedVisibleRows = Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)));
+        /** @type {any} */
+        const urgentJumpOverscanRows = getUrgentJumpRowOverscan(estimatedVisibleRows);
+        /** @type {any} */
+        const estimatedLastRow = Math.max(
+            estimatedFirstRow,
+            Math.min(
+                Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                estimatedFirstRow + estimatedVisibleRows + urgentJumpOverscanRows
+            )
+        );
+
+        /** @type {any} */
+        const { blocksNeeded } = collectBlocksNeeded(
+            estimatedFirstRow,
+            estimatedLastRow,
+            inflightRequestRef.current,
+            overrideColStart,
+            overrideColEnd
+        );
+        if (blocksNeeded.length === 0) {
+            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            return false;
+        }
+
+        lastImmediateViewportRef.current = {
+            startBlock: Math.min(...blocksNeeded),
+            endBlock: Math.max(...blocksNeeded),
+            colStart: overrideColStart,
+            colEnd: overrideColEnd,
+            dispatchedAt: Date.now(),
+        };
+
+        return enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, {
+            immediate: false,
+            replace: true,
+            debounceMs: VIEWPORT_FAST_COLUMN_DEBOUNCE_MS,
+            overrideColStart,
+            overrideColEnd,
+        });
+    }, [
+        blockSize,
+        collectBlocksNeeded,
+        columnRangeUrgencyToken,
+        enqueueViewportRequest,
+        parentRef,
+        rowCount,
+        rowHeight,
+        serverSide,
+        structuralInFlight,
+    ]);
+
+    /** @type {(...args: any[]) => any} */
+    const requestVisibleViewportRefresh = useCallback((overrideColStart = colStart, overrideColEnd = colEnd, options = {}) => {
+        const failed = options.retry;
+        const inflight = inflightRequestRef.current;
+        /** @type {any} */
+        const retryIsCurrent = Boolean(failed && Number.isFinite(failed.windowSeq)
+            && failed.windowSeq === requestVersionRef.current && failed.stateEpoch === stateEpoch
+            && failed.clientInstance === clientInstance
+            && !(inflight && inflight.version === failed.windowSeq && failed.requestId
+                && inflight.requestId !== failed.requestId));
+        if (failed && !retryIsCurrent) return false;
+        if (!serverSide || !parentRef.current || (structuralInFlight && !retryIsCurrent)) return false;
+
+        // Explicit recovery retires the failed request and any queued stale
+        // window, then goes through normal current-viewport request generation.
+        if (retryIsCurrent) resetViewportRequestState({ urgencyToken: columnRangeUrgencyToken });
+
+        const scrollEl = parentRef.current;
+        /** @type {any} */
+        const estimatedFirstRow = virtualRows.length > 0
+            ? virtualRows[0].index
+            : Math.max(0, Math.floor(scrollEl.scrollTop / Math.max(rowHeight, 1)));
+        /** @type {any} */
+        const estimatedLastRow = virtualRows.length > 0
+            ? virtualRows[virtualRows.length - 1].index
+            : Math.max(
+                estimatedFirstRow,
+                Math.min(
+                    Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                    estimatedFirstRow + Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)))
+                )
+            );
+
+        /** @type {any} */
+        const startBlock = Math.floor(estimatedFirstRow / blockSize);
+        /** @type {any} */
+        const endBlock = Math.floor(estimatedLastRow / blockSize);
+        softInvalidateRange(startBlock, endBlock, stateEpoch);
+
+        /** @type {any} */
+        const { blocksNeeded } = collectBlocksNeeded(
+            estimatedFirstRow,
+            estimatedLastRow,
+            inflightRequestRef.current,
+            overrideColStart,
+            overrideColEnd
+        );
+        if (blocksNeeded.length === 0) return false;
+
+        return requestViewport(
+            estimatedFirstRow,
+            estimatedLastRow,
+            blocksNeeded,
+            overrideColStart,
+            overrideColEnd,
+            Date.now(),
+            { silent: !retryIsCurrent }
+        );
+    }, [
+        blockSize,
+        colEnd,
+        colStart,
+        columnRangeUrgencyToken,
+        clientInstance,
+        collectBlocksNeeded,
+        parentRef,
+        requestViewport,
+        requestVersionRef,
+        resetViewportRequestState,
+        rowCount,
+        rowHeight,
+        serverSide,
+        softInvalidateRange,
+        stateEpoch,
+        structuralInFlight,
+        virtualRows,
+    ]);
+
+    const viewportSchedulingEnabled = true;
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || !parentRef.current) return;
+
+        const scrollEl = parentRef.current;
+        lastObservedScrollTopRef.current = scrollEl.scrollTop;
+
+        /** @returns {any} */
+        const handleScroll = () => {
+            if (structuralInFlight) {
+                lastObservedScrollTopRef.current = scrollEl.scrollTop;
+                return;
+            }
+
+            const nextScrollTop = scrollEl.scrollTop;
+            /** @type {any} */
+            const scrollDelta = Math.abs(nextScrollTop - lastObservedScrollTopRef.current);
+            lastObservedScrollTopRef.current = nextScrollTop;
+
+            /** @type {any} */
+            const bigJumpThreshold = rowHeight * blockSize * 4;
+            if (scrollDelta < bigJumpThreshold) return;
+
+            /** @type {any} */
+            const estimatedFirstRow = Math.max(0, Math.floor(nextScrollTop / Math.max(rowHeight, 1)));
+            /** @type {any} */
+            const estimatedVisibleRows = Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)));
+            /** @type {any} */
+            const urgentJumpOverscanRows = getUrgentJumpRowOverscan(estimatedVisibleRows);
+            /** @type {any} */
+            const estimatedLastRow = Math.max(
+                estimatedFirstRow,
+                Math.min(
+                    Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                    estimatedFirstRow + estimatedVisibleRows + urgentJumpOverscanRows
+                )
+            );
+
+            /** @type {any} */
+            const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(estimatedFirstRow, estimatedLastRow);
+            if (blocksNeeded.length === 0) return;
+
+            const previousFastDispatch = lastFastScrollDispatchRef.current;
+            /** @type {any} */
+            const now = Date.now();
+            if (
+                previousFastDispatch.startBlock === startBlock
+                && previousFastDispatch.endBlock === endBlock
+                && (now - previousFastDispatch.dispatchedAt) < 180
+            ) {
+                return;
+            }
+
+            lastFastScrollDispatchRef.current = {
+                startBlock,
+                endBlock,
+                dispatchedAt: now,
+            };
+
+            enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, {
+                immediate: false,
+                replace: true,
+                debounceMs: VIEWPORT_FAST_SCROLL_DEBOUNCE_MS,
+            });
+        };
+
+        scrollEl.addEventListener('scroll', handleScroll, { passive: true });
+        return () => {
+            scrollEl.removeEventListener('scroll', handleScroll);
+        };
+    }, [
+        viewportSchedulingEnabled,
+        serverSide,
+        parentRef,
+        structuralInFlight,
+        rowHeight,
+        blockSize,
+        rowCount,
+        collectBlocksNeeded,
+        enqueueViewportRequest,
+    ]);
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || !setProps || virtualRows.length === 0) return;
+
+        const firstRow = virtualRows[0].index;
+        const lastRow = virtualRows[virtualRows.length - 1].index;
+        /** @type {any} */
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
+        /** @type {any} */
+        const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(firstRow, lastRow);
+        const previousRange = lastPrunedRangeRef.current;
+        /** @type {any} */
+        const blockJumpDistance = previousRange.startBlock >= 0
+            ? Math.max(
+                Math.abs(startBlock - previousRange.startBlock),
+                Math.abs(endBlock - previousRange.endBlock)
+            )
+            : 0;
+        /** @type {any} */
+        const columnJumpDistance = (
+            colStart !== null
+            && colStart !== undefined
+            && colEnd !== null
+            && colEnd !== undefined
+            && lastRequestedColStartRef.current !== null
+            && lastRequestedColStartRef.current !== undefined
+            && lastRequestedColEndRef.current !== null
+            && lastRequestedColEndRef.current !== undefined
+        )
+            ? Math.max(
+                Math.abs(colStart - lastRequestedColStartRef.current),
+                Math.abs(colEnd - lastRequestedColEndRef.current)
+            )
+            : 0;
+        /** @type {any} */
+        const columnRangeUrgent = columnRangeUrgencyToken > lastHandledColumnRangeUrgencyRef.current;
+        /** @type {any} */
+        const shouldDispatchImmediately = blockJumpDistance >= 4 || columnJumpDistance >= 12 || columnRangeUrgent;
+        const recentImmediateViewport = lastImmediateViewportRef.current;
+        const matchesRecentImmediateViewport = (
+            recentImmediateViewport.startBlock === startBlock
+            && recentImmediateViewport.endBlock === endBlock
+            && recentImmediateViewport.colStart === colStart
+            && recentImmediateViewport.colEnd === colEnd
+            && (Date.now() - recentImmediateViewport.dispatchedAt) < 180
+        );
+
+        setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
+
+        const lpr = lastPrunedRangeRef.current;
+        if (startBlock !== lpr.startBlock || endBlock !== lpr.endBlock) {
+            pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+            lastPrunedRangeRef.current = { startBlock, endBlock };
+        }
+
+        if (structuralInFlight) {
+            const existingPending = pendingViewportRef.current;
+            pendingViewportRef.current = existingPending
+                ? {
+                    firstRow,
+                    lastRow,
+                    blocksNeeded: [...new Set([...(existingPending.blocksNeeded || []), ...blocksNeeded])].sort((left, right) => left - right),
+                }
+                : { firstRow, lastRow, blocksNeeded };
+            return;
+        }
+
+        if (blocksNeeded.length > 0) {
+            if (matchesRecentImmediateViewport) {
+                if (columnRangeUrgent) {
+                    lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+                }
+                return;
+            }
+            /** @type {any} */
+            const coalesceBlockJumpRequest = blockJumpDistance >= 4 && !columnRangeUrgent;
+            /** @type {any} */
+            const coalesceColumnJumpRequest = columnRangeUrgent || columnJumpDistance >= 12;
+            /** @type {any} */
+            const coalesceJumpRequest = coalesceBlockJumpRequest || coalesceColumnJumpRequest;
+            enqueueViewportRequest(firstRow, lastRow, blocksNeeded, {
+                immediate: shouldDispatchImmediately && !coalesceJumpRequest,
+                replace: coalesceJumpRequest,
+                debounceMs: coalesceColumnJumpRequest
+                    ? VIEWPORT_FAST_COLUMN_DEBOUNCE_MS
+                    : (coalesceBlockJumpRequest ? VIEWPORT_FAST_SCROLL_DEBOUNCE_MS : null),
+            });
+            if (columnRangeUrgent) {
+                lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            }
+        } else {
+            // The current visible range is already satisfied. Any deferred target
+            // belongs to an older scroll position and must not be merged into the
+            // next request after the user moves again.
+            queuedViewportRef.current = null;
+            if (columnRangeUrgent) {
+                lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            }
+        }
+    }, [
+        virtualRows,
+        serverSide,
+        setProps,
+        pruneToRange,
+        stateEpoch,
+        structuralInFlight,
+        inflightClearedAt,
+        cacheVersion,
+        collectBlocksNeeded,
+        enqueueViewportRequest,
+        resolveRetentionBufferBlocks,
+        setPinnedRange,
+        colStart,
+        colEnd,
+        columnRangeUrgencyToken,
+    ]);
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0) return;
+
+        const pending = pendingViewportRef.current;
+        pendingViewportRef.current = null;
+        /** @type {any} */
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
+
+        /** @type {any} */
+        const { startBlock, endBlock, blocksNeeded } = pending.blocksNeeded && pending.blocksNeeded.length > 0
+            ? {
+                startBlock: Math.floor(pending.firstRow / blockSize),
+                endBlock: Math.floor(pending.lastRow / blockSize),
+                blocksNeeded: pending.blocksNeeded,
+            }
+            : collectBlocksNeeded(pending.firstRow, pending.lastRow);
+
+        setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
+        pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+
+        if (blocksNeeded.length > 0) {
+            enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, { immediate: true });
+        }
+    }, [serverSide, structuralInFlight, virtualRows, blockSize, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange]);
+
+    // 4. Check Viewport & Trigger Fetch (with Debounce)
+    useEffect(() => {
+        if (!serverSide || !setProps || virtualRows.length === 0 || viewportSchedulingEnabled) return;
+
+        // Use a small timeout to debounce rapid scrolling/viewport changes
+        /** @type {any} */
+        const timer = setTimeout(() => {
+            const firstRow = virtualRows[0].index;
+            const lastRow = virtualRows[virtualRows.length - 1].index;
+            
+            // Identify missing blocks
+            /** @type {any[]} */
+            const blocksNeeded = [];
+            /** @type {any} */
+            const startBlock = Math.floor(firstRow / blockSize);
+            /** @type {any} */
+            const endBlock = Math.floor(lastRow / blockSize);
+            /** @type {any} */
+            const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
+
+            // Only prune when the visible block range actually shifts — avoids redundant
+            // cache churn on every debounced pass while the viewport hasn't moved a full block.
+            const lpr = lastPrunedRangeRef.current;
+            if (startBlock !== lpr.startBlock || endBlock !== lpr.endBlock) {
+                pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+                lastPrunedRangeRef.current = { startBlock, endBlock };
+            }
+
+            const currentInflight = inflightRequestRef.current;
+            for (let b = startBlock; b <= endBlock; b++) {
+                /** @type {any} */
+                const block = getBlock(b, stateEpoch);
+                /** @type {any} */
+                const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
+                /** @type {any} */
+                const isPartial = block && block.status === 'partial';
+                // A loading block is "orphaned" when the current inflight no longer covers
+                // it (e.g. user scrolled away to a different range). Re-request it so it
+                // doesn't stay stuck for the full stale timeout.
+                /** @type {any} */
+                const blockStart = b * blockSize;
+                /** @type {any} */
+                const blockEnd = (b + 1) * blockSize - 1;
+                /** @type {any} */
+                const isOrphaned = block && block.status === 'loading' && !isStale && !(
+                    currentInflight &&
+                    currentInflight.abortGeneration === abortGeneration &&
+                    currentInflight.stateEpoch === stateEpoch &&
+                    currentInflight.start <= blockStart &&
+                    currentInflight.end >= blockEnd
+                );
+                // Column window mismatch only matters for blocks that were already loaded
+                // as a specific window. Full-data blocks remain valid for any narrower
+                // window in the same epoch.
+                /** @type {any} */
+                const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
+                /** @type {any} */
+                const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
+                    currentInflight.colStart,
+                    currentInflight.colEnd,
+                    colStart,
+                    colEnd
+                );
+                if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
+                    blocksNeeded.push(b);
+                }
+            }
+
+            if (structuralInFlight) {
+                pendingViewportRef.current = { firstRow, lastRow };
+                return;
+            }
+
+            // Prevent orphan ping-pong: when we're about to send a new request
+            // covering only a subset of the viewport blocks, any loading block
+            // outside that new inflight range would immediately become "orphaned"
+            // on the very next viewport-effect tick, triggering another request
+            // that orphans the first block, and so on forever.
+            // Fix: extend blocksNeeded to absorb any loading blocks in the
+            // viewport that the new inflight would leave uncovered.
+            if (blocksNeeded.length > 0) {
+                /** @type {any} */
+                const newInflightMinBlock = Math.min(...blocksNeeded);
+                /** @type {any} */
+                const newInflightMaxBlock = Math.max(...blocksNeeded);
+                for (let b = startBlock; b <= endBlock; b++) {
+                    if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
+                    /** @type {any} */
+                    const bBlock = getBlock(b, stateEpoch);
+                    if (bBlock && bBlock.status === 'loading') {
+                        blocksNeeded.push(b);
+                    }
+                }
+                requestViewport(firstRow, lastRow, blocksNeeded);
+            }
+        }, 50);
+
+        return () => clearTimeout(timer);
+
+    }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd, resolveRetentionBufferBlocks]);
+
+    useEffect(() => {
+        if (!serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
+
+        const pending = pendingViewportRef.current;
+        pendingViewportRef.current = null;
+
+        /** @type {any} */
+        const startBlock = Math.floor(pending.firstRow / blockSize);
+        /** @type {any} */
+        const endBlock = Math.floor(pending.lastRow / blockSize);
+        /** @type {any} */
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
+
+        pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+
+        /** @type {any[]} */
+        const blocksNeeded = [];
+        const currentInflight = inflightRequestRef.current;
+        for (let b = startBlock; b <= endBlock; b++) {
+            /** @type {any} */
+            const block = getBlock(b, stateEpoch);
+            /** @type {any} */
+            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
+            /** @type {any} */
+            const isPartial = block && block.status === 'partial';
+            /** @type {any} */
+            const blockStart = b * blockSize;
+            /** @type {any} */
+            const blockEnd = (b + 1) * blockSize - 1;
+            /** @type {any} */
+            const isOrphaned = block && block.status === 'loading' && !isStale && !(
+                currentInflight &&
+                currentInflight.abortGeneration === abortGeneration &&
+                currentInflight.stateEpoch === stateEpoch &&
+                currentInflight.start <= blockStart &&
+                currentInflight.end >= blockEnd
+            );
+            /** @type {any} */
+            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
+            /** @type {any} */
+            const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
+                currentInflight.colStart,
+                currentInflight.colEnd,
+                colStart,
+                colEnd
+            );
+            if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
+                blocksNeeded.push(b);
+            }
+        }
+
+        // Same orphan-extension as the main viewport effect.
+        if (blocksNeeded.length > 0) {
+            /** @type {any} */
+            const newInflightMinBlock = Math.min(...blocksNeeded);
+            /** @type {any} */
+            const newInflightMaxBlock = Math.max(...blocksNeeded);
+            for (let b = startBlock; b <= endBlock; b++) {
+                if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
+                /** @type {any} */
+                const bBlock = getBlock(b, stateEpoch);
+                if (bBlock && bBlock.status === 'loading') {
+                    blocksNeeded.push(b);
+                }
+            }
+            requestViewport(pending.firstRow, pending.lastRow, blocksNeeded);
+        }
+    }, [serverSide, structuralInFlight, virtualRows, blockSize, getBlock, pruneToRange, requestViewport, stateEpoch, colStart, colEnd, abortGeneration, resolveRetentionBufferBlocks]);
+
+    // 5. Cleanup Effect
+    useEffect(() => {
+        return () => {
+            // Clear cache when hook unmounts to prevent memory leaks
+            if (clearCache) clearCache();
+            inflightRequestRef.current = null;
+            pendingViewportRef.current = null;
+            queuedViewportRef.current = null;
+            if (viewportFlushTimerRef.current) {
+                clearTimeout(viewportFlushTimerRef.current);
+                viewportFlushTimerRef.current = null;
+            }
+            if (viewportRetryTimerRef.current) {
+                clearTimeout(viewportRetryTimerRef.current);
+                viewportRetryTimerRef.current = null;
+            }
+            if (viewportAbortControllerRef.current) {
+                viewportAbortControllerRef.current.abort();
+            }
+        };
+    }, [clearCache]);
+
+    // 6. Construct Data for Render (The "Window")
+    /** @type {any} */
+    const renderedDataInfo = useMemo(() => {
+        if (!serverSide) return { data: data || [], offset: 0 };
+        if (virtualRows.length === 0) return { data: [], offset: 0 };
+        
+        const firstIndex = virtualRows[0].index;
+        const lastIndex = virtualRows[virtualRows.length - 1].index;
+        
+        /** @type {any} */
+        const startBlock = Math.floor(firstIndex / blockSize);
+        /** @type {any} */
+        const endBlock = Math.floor(lastIndex / blockSize);
+        
+        /** @type {any} */
+        const startOffset = startBlock * blockSize;
+        // Total length needed to cover from start of startBlock to end of endBlock
+        /** @type {any} */
+        const totalLen = (endBlock - startBlock + 1) * blockSize;
+        
+        // Fill with empty objects to prevent accessors from crashing on undefined
+        // We use a factory function or map to ensure distinct objects if needed, 
+        // but for read-only accessors {} is fine. 
+        // However, fill({}) reuses the SAME object reference. 
+        // Safer to use map or just loop.
+        /** @type {any} */
+        const merged = new Array(totalLen).fill(null);
+        
+        for (let b = startBlock; b <= endBlock; b++) {
+            /** @type {any} */
+            const block = getBlock(b, stateEpoch);
+            if (block && block.rows) {
+                /** @type {any} */
+                const offsetInMerged = (b - startBlock) * blockSize;
+                const blockColMismatch = !blockMatchesColumnWindow(block, colStart, colEnd);
+                const blockPendingColumns = (
+                    block.status === 'loading' ||
+                    block.status === 'partial' ||
+                    blockColMismatch
+                );
+                for (let i = 0; i < block.rows.length; i++) {
+                    const row = block.rows[i];
+                    if (blockPendingColumns && row && typeof row === 'object') {
+                        merged[offsetInMerged + i] = { ...row, __colPending: true };
+                    } else {
+                        merged[offsetInMerged + i] = row;
+                    }
+                }
+            }
+        }
+
+        debugLog('render-window', {
+            firstIndex,
+            lastIndex,
+            startBlock,
+            endBlock,
+            startOffset,
+            totalLen,
+            blockStates: Array.from({ length: endBlock - startBlock + 1 }, (_, idx) => {
+                /** @type {any} */
+                const blockIndex = startBlock + idx;
+                /** @type {any} */
+                const block = getBlock(blockIndex, stateEpoch);
+                return {
+                    blockIndex,
+                    status: block ? block.status : 'missing',
+                    rows: block && block.rows ? block.rows.length : 0,
+                    version: block ? block.version : null
+                };
+            })
+        });
+        
+        return { data: merged, offset: startOffset };
+    }, [virtualRows, getBlock, serverSide, blockSize, data, cacheVersion, stateEpoch, colStart, colEnd]);
+
+    /** @type {any} */
+    const loadedRows = useMemo(() => {
+        if (!serverSide) return Array.isArray(data) ? data : [];
+
+        /** @type {any} */
+        const blocks = getLoadedBlocks(stateEpoch);
+        if (blocks.length === 0) return [];
+
+        /** @type {any[]} */
+        const mergedRows = [];
+        /** @type {any} */
+        const seenVirtualIndexes = new Set();
+
+        blocks.forEach(/** @param {any} [block] @returns {any} */ (block) => {
+            const blockColMismatch = !blockMatchesColumnWindow(block, colStart, colEnd);
+            if (blockColMismatch) return;
+
+            block.rows.forEach(/** @param {any} [row] @param {any} [index] @returns {any} */ (row, index) => {
+                /** @type {any} */
+                const virtualIndex = row && typeof row.__virtualIndex === 'number'
+                    ? row.__virtualIndex
+                    : (block.blockIndex * blockSize) + index;
+                if (seenVirtualIndexes.has(virtualIndex)) return;
+                seenVirtualIndexes.add(virtualIndex);
+                mergedRows.push(row);
+            });
+        });
+
+        mergedRows.sort((left, right) => {
+            /** @type {any} */
+            const leftIndex = left && typeof left.__virtualIndex === 'number' ? left.__virtualIndex : 0;
+            /** @type {any} */
+            const rightIndex = right && typeof right.__virtualIndex === 'number' ? right.__virtualIndex : 0;
+            return leftIndex - rightIndex;
+        });
+
+        return mergedRows;
+    }, [serverSide, data, getLoadedBlocks, stateEpoch, cacheVersion, colStart, colEnd, blockSize]);
+
+    /** @type {(...args: any[]) => any} */
+    const getRowInEpoch = useCallback((rowIndex) => getRow(rowIndex, stateEpoch), [getRow, stateEpoch]);
+    /** @type {(...args: any[]) => any} */
+    const invalidateFromCurrentEpoch = useCallback(
+        (blockIndex) => invalidateFromBlock(blockIndex, stateEpoch),
+        [invalidateFromBlock, stateEpoch]
+    );
+    /** @type {(...args: any[]) => any} */
+    const softInvalidateFromCurrentEpoch = useCallback(
+        (blockIndex) => softInvalidateFromBlock(blockIndex, stateEpoch),
+        [softInvalidateFromBlock, stateEpoch]
+    );
+
+    return {
+        rowVirtualizer,
+        getRow: getRowInEpoch,
+        clearCache,
+        invalidateFromBlock: invalidateFromCurrentEpoch,
+        softInvalidateFromBlock: softInvalidateFromCurrentEpoch,
+        grandTotalRow,
+        loadedRows,
+        renderedData: renderedDataInfo.data,
+        renderedOffset: renderedDataInfo.offset,
+        requestUrgentColumnViewport,
+        requestVisibleViewportRefresh,
+    };
+};

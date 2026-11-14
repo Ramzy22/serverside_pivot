@@ -6,9 +6,9 @@ import pytest
 
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
-sys.path.append(os.path.join(os.getcwd(), "dash_tanstack_pivot"))
+sys.path.append(os.path.join(os.getcwd(), "serverside_pivot"))
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine.tanstack_adapter import (
     TanStackOperation,
     TanStackRequest,

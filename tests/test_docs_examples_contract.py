@@ -253,7 +253,7 @@ def test_release_gates_publish_on_complete_installed_qualification_and_uploads_e
     qualification = workflow.index("python scripts/certify_flagship.py --installed-release")
     publish = workflow.index("- name: Publish to PyPI")
     assert qualification < publish
-    assert 'dash_tanstack_pivot[dev,api,redis,streamlit,security]' in workflow[:qualification]
+    assert 'serverside_pivot[dev,api,redis,streamlit,security]' in workflow[:qualification]
     qualification_command = workflow[qualification:workflow.index("\n", qualification)]
     assert "--cancellable-exports" not in qualification_command
     assert "--artifact-dir \"$PIVOT_RELEASE_QUALIFICATION_DIR\"" in qualification_command
@@ -272,13 +272,13 @@ def test_dev_extra_declares_direct_python_test_dependencies():
     except ModuleNotFoundError:  # Python 3.10
         import tomli as tomllib
 
-    project = tomllib.loads((REPO_ROOT / "dash_tanstack_pivot" / "pyproject.toml").read_text(encoding="utf-8"))
+    project = tomllib.loads((REPO_ROOT / "serverside_pivot" / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = "\n".join(project["project"]["optional-dependencies"]["dev"]).lower()
     for name in ("pytest", "pytest-asyncio", "httpx", "fakeredis[lua]", "selenium",
                  "openpyxl", "requests", "packaging", "flask", "werkzeug", "starlette", "tomli"):
         assert name in dependencies
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert 'dash_tanstack_pivot[dev,api,redis,streamlit]' in ci
+    assert 'serverside_pivot[dev,api,redis,streamlit]' in ci
 
 
 def test_export_operations_documentation_names_formats_limits_and_release_command():

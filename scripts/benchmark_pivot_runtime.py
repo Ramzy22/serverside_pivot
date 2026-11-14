@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Tuple, TypeVar
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-ENGINE_ROOT = REPOSITORY_ROOT / "dash_tanstack_pivot" / "pivot_engine"
+ENGINE_ROOT = REPOSITORY_ROOT / "serverside_pivot" / "pivot_engine"
 if str(ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_ROOT))
 

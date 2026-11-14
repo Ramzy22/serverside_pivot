@@ -4,8 +4,8 @@ from pathlib import Path
 MAX_AUTHORED_SOURCE_LINES = 5_000
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 AUTHORED_SOURCE_ROOTS = (
-    REPOSITORY_ROOT / "dash_tanstack_pivot" / "src" / "lib",
-    REPOSITORY_ROOT / "dash_tanstack_pivot" / "pivot_engine",
+    REPOSITORY_ROOT / "serverside_pivot" / "src" / "lib",
+    REPOSITORY_ROOT / "serverside_pivot" / "pivot_engine",
 )
 
 

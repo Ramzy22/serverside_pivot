@@ -310,7 +310,7 @@ def test_integer_proportional_aggregate_edit_uses_one_set_based_update():
 def test_pivot_controller_exposes_single_awaitable_hierarchical_api():
     source = inspect.getsource(PivotController)
     api_source = Path(
-        "dash_tanstack_pivot/pivot_engine/pivot_engine/complete_rest_api.py"
+        "serverside_pivot/pivot_engine/pivot_engine/complete_rest_api.py"
     ).read_text(encoding="utf-8")
 
     assert inspect.iscoroutinefunction(PivotController.run_hierarchical_pivot)

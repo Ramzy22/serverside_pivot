@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {createRequire} = require('node:module');
 
-const frontend = path.resolve(__dirname, '../dash_tanstack_pivot');
+const frontend = path.resolve(__dirname, '../serverside_pivot');
 const localRequire = createRequire(path.join(frontend, 'package.json'));
 const babel = localRequire('@babel/core');
 const presets = [

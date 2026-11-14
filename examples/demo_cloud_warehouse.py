@@ -39,13 +39,13 @@ from dash import Input, Output, dcc, html
 import ibis
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = ROOT_DIR / "dash_tanstack_pivot"
+PACKAGE_ROOT = ROOT_DIR / "serverside_pivot"
 ENGINE_ROOT = PACKAGE_ROOT / "pivot_engine"
 for candidate in (PACKAGE_ROOT, ENGINE_ROOT, ROOT_DIR):
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import (
     RuntimeDatasetAuthorizer,
     TanStackPivotAdapter,

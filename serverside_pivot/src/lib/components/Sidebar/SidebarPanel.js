@@ -1,0 +1,4705 @@
+import React from 'react';
+import FilterPopover from '../Filters/FilterPopover';
+import SidebarFilterItem from './SidebarFilterItem';
+import ToolPanelSection from './ToolPanelSection';
+import ColumnTreeItem from './ColumnTreeItem';
+import Icons from '../../utils/Icons';
+import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
+import { usePivotTheme } from '../../contexts/PivotThemeContext';
+import { usePivotConfig } from '../../contexts/PivotConfigContext';
+import { formatDisplayLabel, isWeightedAverageAgg } from '../../utils/helpers';
+import {
+    getFieldPanelLimits,
+    mergeFieldPanelSize,
+    sanitizeFieldPanelSizeEntry,
+} from '../../utils/fieldPanelLayout';
+import {
+    buildCustomCategoryFieldId,
+    DATE_GROUP_GRANULARITIES,
+    formatCustomAwareFieldLabel,
+    isCustomCategoryField,
+    normalizeCustomCategoryId,
+    normalizeCustomDimensionsValue,
+} from '../../hooks/usePivotNormalization';
+import { normalizeSparklineConfig } from '../../utils/sparklines';
+import { normalizeMeasureAxisValue as normalizeMeasureAxisPanelValue } from '../../utils/measureAxis';
+import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
+import {
+    COLUMN_FORMULA_REFERENCE_RE,
+    DEFAULT_VALUE_SPARKLINE_CONFIG,
+    escapeRegExp,
+    FORMULA_FUNCTION_NAMES,
+    FORMULA_REFERENCE_RE,
+    FORMULA_RESERVED_REFERENCES,
+    getFormulaReferenceKey,
+    isColumnFormulaScope,
+    normalizeFormulaReferenceKey,
+    normalizeFormulaScope,
+    SIMPLE_FORMULA_REFERENCE_RE,
+} from './formulaUtils';
+import {
+    canValidateCustomCategoryRows,
+    collectCustomCategoryClauseFields,
+    createCustomCategoryClause,
+    createCustomCategoryDraft,
+    createCustomCategoryRule,
+    createDateGroupDraft,
+    createNumberGroupDraft,
+    CUSTOM_CATEGORY_LIST_OPERATORS,
+    CUSTOM_CATEGORY_OPERATORS,
+    CUSTOM_CATEGORY_VALUELESS_OPERATORS,
+    getAllowedCustomCategoryDependencies,
+    getCustomCategoryDraftField,
+    getCustomCategoryRuleMatchSummary,
+    getCustomCategoryValidationRows,
+    getTypedFields,
+    normalizeCustomCategoryNameKey,
+    splitListInput,
+} from './customCategoryUtils';
+
+// The report builder is only shown in report mode.  Deferring its specialised
+// editor keeps normal pivot sessions from parsing its sizeable form logic.
+/** @type {any} */ const LazyReportEditor = React.lazy(() => import(/* webpackChunkName: "pivot-report-editor" */ './ReportEditor').then(module => ({
+    default: module.ReportEditor,
+})));
+
+/** @param {any} [props] @returns {any} */ const ReportEditor = (props) => (
+    <React.Suspense fallback={<div role="status" style={{ padding: '16px' }}>Loading report builder…</div>}>
+        <LazyReportEditor {...props} />
+    </React.Suspense>
+);
+
+/** @param {any} p0 @returns {any} */ function CustomCategoriesEditor({
+    availableFields,
+    customDimensions,
+    setCustomDimensions,
+    data,
+    theme,
+    showNotification,
+    getFieldLabel,
+    onDeleteField,
+}) {
+    /** @type {any} */ const baseFields = React.useMemo(
+        () => (availableFields || []).filter(/** @param {any} [field] @returns {any} */ (field) => field && !isCustomCategoryField(field)),
+        [availableFields]
+    );
+    /** @type {any} */ const normalizedDimensions = React.useMemo(
+        () => normalizeCustomDimensionsValue(customDimensions || []),
+        [customDimensions]
+    );
+    /** @type {[any, (...args: any[]) => any]} */ const [draft, setDraft] = React.useState(null);
+    /** @type {any} */ const allowedDependencyDimensions = React.useMemo(
+        () => getAllowedCustomCategoryDependencies(normalizedDimensions, draft),
+        [draft, normalizedDimensions]
+    );
+    /** @type {any} */ const conditionFieldOptions = React.useMemo(() => {
+        /** @type {any} */ const seen = new Set();
+        /** @type {any[]} */ const fields = [];
+        baseFields.forEach(/** @param {any} [field] @returns {any} */ (field) => {
+            if (field && !seen.has(field)) {
+                seen.add(field);
+                fields.push(field);
+            }
+        });
+        allowedDependencyDimensions.forEach(/** @param {any} [dimension] @returns {any} */ (dimension) => {
+            if (dimension && dimension.field && !seen.has(dimension.field)) {
+                seen.add(dimension.field);
+                fields.push(dimension.field);
+            }
+        });
+        return fields;
+    }, [allowedDependencyDimensions, baseFields]);
+    /** @type {any} */ const dateFieldOptions = React.useMemo(
+        () => {
+            /** @type {any} */ const detected = getTypedFields(data, baseFields, 'date');
+            return detected.length > 0 ? detected : baseFields;
+        },
+        [baseFields, data]
+    );
+    /** @type {any} */ const numberFieldOptions = React.useMemo(
+        () => {
+            /** @type {any} */ const detected = getTypedFields(data, baseFields, 'number');
+            return detected.length > 0 ? detected : baseFields;
+        },
+        [baseFields, data]
+    );
+    /** @type {any} */ const validationRows = React.useMemo(
+        () => getCustomCategoryValidationRows(data, allowedDependencyDimensions),
+        [allowedDependencyDimensions, data]
+    );
+    /** @type {any} */ const inputStyle = React.useMemo(() => ({
+        border: `1px solid ${theme.border}`,
+        background: theme.background,
+        color: theme.text,
+        borderRadius: '8px',
+        fontSize: '12px',
+        padding: '7px 8px',
+        outline: 'none',
+        minWidth: 0,
+    }), [theme.background, theme.border, theme.text]);
+    /** @type {(...args: any[]) => any} */ const smallButtonStyle = React.useCallback((tone = 'default') => ({
+        border: tone === 'primary' ? `1px solid ${theme.primary}` : `1px solid ${theme.border}`,
+        background: tone === 'primary' ? (theme.primary || '#2563EB') : (theme.hover || '#F8FAFC'),
+        color: tone === 'primary' ? '#fff' : theme.text,
+        borderRadius: '8px',
+        fontSize: '11px',
+        fontWeight: 700,
+        padding: '6px 9px',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+    }), [theme.border, theme.hover, theme.primary, theme.text]);
+
+    React.useEffect(() => {
+        if (!draft) return undefined;
+        /** @param {any} [event] @returns {any} */ const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setDraft(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [draft]);
+
+    /** @type {(...args: any[]) => any} */ const updateRule = React.useCallback((ruleIndex, updater) => {
+        setDraft(/** @param {any} [current] @returns {any} */ (current) => {
+            if (!current) return current;
+            /** @type {any[]} */ const rules = [...(current.rules || [])];
+            rules[ruleIndex] = typeof updater === 'function' ? updater(rules[ruleIndex]) : updater;
+            return { ...current, rules };
+        });
+    }, []);
+
+    /** @type {(...args: any[]) => any} */ const updateClause = React.useCallback((ruleIndex, clauseIndex, patch) => {
+        updateRule(ruleIndex, /** @param {any} [rule] @returns {any} */ (rule) => {
+            /** @type {any} */ const condition = rule.condition || { op: 'AND', clauses: [] };
+            /** @type {any[]} */ const clauses = [...(condition.clauses || [])];
+            clauses[clauseIndex] = { ...clauses[clauseIndex], ...patch };
+            return { ...rule, condition: { ...condition, clauses } };
+        });
+    }, [updateRule]);
+
+    /** @type {(...args: any[]) => any} */ const applyDraft = React.useCallback(() => {
+        const normalized = normalizeCustomDimensionsValue([draft])[0];
+        if (!normalized || !normalized.name) {
+            if (showNotification) showNotification('A grouped field needs a name.', 'warning');
+            return;
+        }
+        if (normalized.kind === 'category' && (!normalized.rules || normalized.rules.length === 0)) {
+            if (showNotification) showNotification('A category needs at least one valid rule.', 'warning');
+            return;
+        }
+        if ((normalized.kind === 'date_group' || normalized.kind === 'number_group') && !normalized.sourceField) {
+            if (showNotification) showNotification('Choose the source field to group.', 'warning');
+            return;
+        }
+        /** @type {any} */ const editingField = getCustomCategoryDraftField(draft);
+        /** @type {any} */ const normalizedName = normalizeCustomCategoryNameKey(normalized.name);
+        /** @type {any} */ const duplicateName = normalizedDimensions.some(/** @param {any} [dimension] @returns {any} */ (dimension) => (
+            dimension
+            && dimension.field !== editingField
+            && normalizeCustomCategoryNameKey(dimension.name) === normalizedName
+        ));
+        if (duplicateName) {
+            if (showNotification) showNotification(`A category named "${normalized.name}" already exists.`, 'warning');
+            return;
+        }
+        if (normalized.kind === 'category') {
+            /** @type {any} */ const allowedFieldSet = new Set(conditionFieldOptions);
+            /** @type {any} */ const invalidField = collectCustomCategoryClauseFields(normalized).find(/** @param {any} [field] @returns {any} */ (field) => !allowedFieldSet.has(field));
+            if (invalidField) {
+                if (showNotification) showNotification('A category can only use base fields or categories defined before it.', 'warning');
+                return;
+            }
+            /** @type {any} */ const clauseFields = collectCustomCategoryClauseFields(normalized);
+            if (canValidateCustomCategoryRows(validationRows, clauseFields)) {
+                /** @type {any} */ const unmatchedRule = getCustomCategoryRuleMatchSummary(validationRows, normalized)
+                    .find(/** @param {any} [summary] @returns {any} */ (summary) => summary.count === 0);
+                if (unmatchedRule) {
+                    if (showNotification) showNotification(`"${unmatchedRule.label}" does not match any current row. Adjust the condition before applying.`, 'warning');
+                    return;
+                }
+            }
+        }
+        if (normalized.kind === 'date_group' && !dateFieldOptions.includes(normalized.sourceField)) {
+            if (showNotification) showNotification('Choose a date field for date grouping.', 'warning');
+            return;
+        }
+        if (normalized.kind === 'number_group') {
+            if (!numberFieldOptions.includes(normalized.sourceField)) {
+                if (showNotification) showNotification('Choose a numeric field for number grouping.', 'warning');
+                return;
+            }
+            if (!Number.isFinite(Number(normalized.binSize)) || Number(normalized.binSize) <= 0) {
+                if (showNotification) showNotification('Number bins need a positive bin size.', 'warning');
+                return;
+            }
+        }
+        setCustomDimensions(/** @param {any} [previous] @returns {any} */ (previous) => {
+            /** @type {any} */ const existing = normalizeCustomDimensionsValue(previous || []);
+            /** @type {any} */ const withoutCurrent = existing.filter(/** @param {any} [dimension] @returns {any} */ (dimension) => (
+                dimension.id !== normalized.id
+                && dimension.field !== normalized.field
+                && dimension.field !== editingField
+            ));
+            return [...withoutCurrent, normalized];
+        });
+        setDraft(null);
+        if (showNotification) showNotification(`Applied ${normalized.name}.`, 'success');
+    }, [conditionFieldOptions, dateFieldOptions, draft, normalizedDimensions, numberFieldOptions, setCustomDimensions, showNotification, validationRows]);
+
+    /** @type {(...args: any[]) => any} */ const deleteDimension = React.useCallback((dimension) => {
+        const normalized = normalizeCustomDimensionsValue([dimension])[0];
+        if (!normalized) return;
+        setCustomDimensions(/** @param {any} [previous] @returns {any} */ (previous) => normalizeCustomDimensionsValue(previous || [])
+            .filter(/** @param {any} [item] @returns {any} */ (item) => item.field !== normalized.field));
+        if (typeof onDeleteField === 'function') onDeleteField(normalized.field);
+        if (draft && draft.field === normalized.field) setDraft(null);
+        if (showNotification) showNotification(`Removed ${normalized.name}.`, 'success');
+    }, [draft, onDeleteField, setCustomDimensions, showNotification]);
+
+    return (
+        <div style={{
+            border: `1px solid ${theme.border}`,
+            background: theme.headerBg || theme.surfaceInset || theme.background,
+            borderRadius: '12px',
+            padding: '10px',
+            marginBottom: '14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 800 }}>
+                        Custom Categories
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>
+                        Named filter rules that become fields.
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createCustomCategoryDraft(conditionFieldOptions))}
+                    style={smallButtonStyle('primary')}
+                >
+                    + Category
+                </button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createDateGroupDraft(baseFields, data))}
+                    disabled={dateFieldOptions.length === 0}
+                    style={{ ...smallButtonStyle(), opacity: dateFieldOptions.length === 0 ? 0.5 : 1, cursor: dateFieldOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                    title={dateFieldOptions.length === 0 ? 'No date fields detected' : 'Create date buckets'}
+                >
+                    <Icons.Group /> Date Group
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createNumberGroupDraft(baseFields, data))}
+                    disabled={numberFieldOptions.length === 0}
+                    style={{ ...smallButtonStyle(), opacity: numberFieldOptions.length === 0 ? 0.5 : 1, cursor: numberFieldOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                    title={numberFieldOptions.length === 0 ? 'No numeric fields detected' : 'Create numeric bins'}
+                >
+                    <Icons.NumberFormat /> Number Bins
+                </button>
+            </div>
+
+            {normalizedDimensions.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {normalizedDimensions.map(/** @param {any} [dimension] @returns {any} */ (dimension) => {
+                        /** @type {any} */ const kind = dimension.kind || 'category';
+                        /** @type {any} */ const detail = kind === 'date_group'
+                            ? `${getFieldLabel(dimension.sourceField)} by ${dimension.granularity}`
+                            : (kind === 'number_group'
+                                ? `${getFieldLabel(dimension.sourceField)} every ${dimension.binSize}`
+                                : `${dimension.rules.length} rule${dimension.rules.length === 1 ? '' : 's'} | fallback: ${dimension.fallbackLabel}`);
+                        return (
+                            <div
+                                key={dimension.field}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.background,
+                                    borderRadius: '10px',
+                                    padding: '8px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                }}
+                            >
+                                {kind === 'number_group' ? <Icons.NumberFormat /> : <Icons.Branch />}
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {dimension.name}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                        {detail}
+                                    </div>
+                                </div>
+                                <button type="button" onClick={() => setDraft(createCustomCategoryDraft(baseFields, dimension))} style={smallButtonStyle()}>
+                                    <Icons.Edit /> Edit
+                                </button>
+                                <button type="button" onClick={() => deleteDimension(dimension)} style={{ ...smallButtonStyle(), color: '#B91C1C' }}>
+                                    <Icons.Delete />
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {draft && (
+                <div
+                    role="presentation"
+                    onMouseDown={(event) => {
+                        if (event.target === event.currentTarget) setDraft(null);
+                    }}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 10000,
+                        background: 'rgba(15, 23, 42, 0.38)',
+                        backdropFilter: 'blur(4px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '24px',
+                    }}
+                >
+                <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={draft.kind === 'date_group' || draft.kind === 'number_group'
+                        ? (draft.__editingField ? 'Edit grouped field' : 'Add grouped field')
+                        : (draft.__editingField ? 'Edit custom category' : 'Add custom category')}
+                    style={{
+                        width: 'min(780px, calc(100vw - 32px))',
+                        maxHeight: 'calc(100vh - 48px)',
+                        border: `1px solid ${theme.primary || '#2563EB'}55`,
+                        background: theme.background,
+                        color: theme.text,
+                        borderRadius: '16px',
+                        boxShadow: '0 24px 80px rgba(15, 23, 42, 0.28)',
+                        overflow: 'hidden',
+                    }}
+                >
+                <div style={{
+                    padding: '14px 16px',
+                    borderBottom: `1px solid ${theme.border}`,
+                    background: theme.headerBg || theme.surfaceInset || theme.background,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                }}>
+                    <div>
+                        <div style={{ fontSize: '13px', fontWeight: 900, color: theme.text }}>
+                            {draft.kind === 'date_group' || draft.kind === 'number_group'
+                                ? (draft.__editingField ? 'Edit Grouped Field' : 'Add Grouped Field')
+                                : (draft.__editingField ? 'Edit Custom Category' : 'Add Custom Category')}
+                        </div>
+                        <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>
+                            {draft.kind === 'date_group'
+                                ? 'Create calendar buckets from a date field.'
+                                : (draft.kind === 'number_group'
+                                    ? 'Create fixed-width numeric bins from a number field.'
+                                    : 'Rules can use base fields and categories defined before this one.')}
+                        </div>
+                    </div>
+                    <button type="button" onClick={() => setDraft(null)} style={{ ...smallButtonStyle(), padding: '6px 8px' }} aria-label="Close category editor">
+                        <Icons.Close />
+                    </button>
+                </div>
+                <div style={{
+                    padding: '14px',
+                    overflowY: 'auto',
+                    maxHeight: 'calc(100vh - 128px)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 150px', gap: '8px' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Category Name
+                            <input
+                                value={draft.name || ''}
+                                onChange={(event) => {
+                                    const name = event.target.value;
+                                    /** @type {any} */ const nextId = draft.id || normalizeCustomCategoryId(name);
+                                    setDraft({ ...draft, name, id: nextId, field: draft.field || buildCustomCategoryFieldId(nextId) });
+                                }}
+                                style={inputStyle}
+                                placeholder="Example: Priority Segment"
+                            />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Else
+                            <input
+                                value={draft.fallbackLabel || ''}
+                                onChange={(event) => setDraft({ ...draft, fallbackLabel: event.target.value })}
+                                style={inputStyle}
+                                placeholder="Other"
+                            />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Member Order
+                            <select
+                                value={draft.order || 'creation'}
+                                onChange={(event) => setDraft({ ...draft, order: event.target.value })}
+                                style={inputStyle}
+                            >
+                                <option value="creation">Creation Order</option>
+                                <option value="alpha">Alphabetical (A→Z)</option>
+                                <option value="alpha_desc">Alphabetical (Z→A)</option>
+                                <option value="numeric">Numeric (0→9)</option>
+                                <option value="numeric_desc">Numeric (9→0)</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    {draft.kind === 'date_group' && (
+                        <div style={{
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '10px',
+                            padding: '10px',
+                            background: theme.hover || '#F8FAFC',
+                            display: 'grid',
+                            gridTemplateColumns: '1.4fr 1fr 1fr',
+                            gap: '8px',
+                        }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Date Field
+                                <select
+                                    value={draft.sourceField || ''}
+                                    onChange={(event) => setDraft({
+                                        ...draft,
+                                        sourceField: event.target.value,
+                                        name: draft.__isNew ? `${getFieldLabel(event.target.value)} ${formatDisplayLabel(draft.granularity || 'month')}` : draft.name,
+                                    })}
+                                    style={inputStyle}
+                                >
+                                    {dateFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
+                                        <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Date Part
+                                <select
+                                    value={draft.granularity || 'month'}
+                                    onChange={(event) => setDraft({ ...draft, granularity: event.target.value })}
+                                    style={inputStyle}
+                                >
+                                    {Array.from(DATE_GROUP_GRANULARITIES).map((granularity) => (
+                                        <option key={granularity} value={granularity}>{formatDisplayLabel(granularity)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Fiscal Start
+                                <select
+                                    value={draft.fiscalYearStartMonth || 1}
+                                    onChange={(event) => setDraft({ ...draft, fiscalYearStartMonth: Number(event.target.value) })}
+                                    style={inputStyle}
+                                >
+                                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, index) => (
+                                        <option key={label} value={index + 1}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                    )}
+
+                    {draft.kind === 'number_group' && (
+                        <div style={{
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '10px',
+                            padding: '10px',
+                            background: theme.hover || '#F8FAFC',
+                            display: 'grid',
+                            gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.8fr 0.7fr',
+                            gap: '8px',
+                        }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Number Field
+                                <select
+                                    value={draft.sourceField || ''}
+                                    onChange={(event) => setDraft({
+                                        ...draft,
+                                        sourceField: event.target.value,
+                                        name: draft.__isNew ? `${getFieldLabel(event.target.value)} Bins` : draft.name,
+                                    })}
+                                    style={inputStyle}
+                                >
+                                    {numberFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
+                                        <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Bin Size
+                                <input
+                                    type="number"
+                                    value={draft.binSize === undefined ? '' : draft.binSize}
+                                    onChange={(event) => setDraft({ ...draft, binSize: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Min
+                                <input
+                                    type="number"
+                                    value={draft.minValue === null || draft.minValue === undefined ? '' : draft.minValue}
+                                    onChange={(event) => setDraft({ ...draft, minValue: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Max
+                                <input
+                                    type="number"
+                                    value={draft.maxValue === null || draft.maxValue === undefined ? '' : draft.maxValue}
+                                    onChange={(event) => setDraft({ ...draft, maxValue: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Decimals
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="8"
+                                    value={draft.precision === null || draft.precision === undefined ? '' : draft.precision}
+                                    onChange={(event) => setDraft({ ...draft, precision: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                        </div>
+                    )}
+
+                    {(!draft.kind || draft.kind === 'category') && (draft.rules || []).map(/** @param {any} [rule] @param {any} [ruleIndex] @returns {any} */ (rule, ruleIndex) => {
+                        /** @type {any} */ const condition = rule.condition || { op: 'AND', clauses: [] };
+                        /** @type {any} */ const clauses = condition.clauses || [];
+                        return (
+                            <div key={rule.id || ruleIndex} style={{
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '10px',
+                                padding: '8px',
+                                background: theme.hover || '#F8FAFC',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px',
+                            }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 78px 28px', gap: '8px', alignItems: 'center' }}>
+                                    <input
+                                        value={rule.label || ''}
+                                        onChange={(event) => updateRule(ruleIndex, { ...rule, label: event.target.value })}
+                                        style={inputStyle}
+                                        placeholder="Category value"
+                                    />
+                                    <select
+                                        value={condition.op || 'AND'}
+                                        onChange={(event) => updateRule(ruleIndex, { ...rule, condition: { ...condition, op: event.target.value } })}
+                                        style={inputStyle}
+                                    >
+                                        <option value="AND">AND</option>
+                                        <option value="OR">OR</option>
+                                    </select>
+                                    <button
+                                        type="button"
+                                        onClick={() => setDraft({ ...draft, rules: (draft.rules || []).filter(/** @param {any} [_] @param {any} [index] @returns {any} */ (_, index) => index !== ruleIndex) })}
+                                        style={{ ...smallButtonStyle(), padding: '6px', justifyContent: 'center', color: '#B91C1C' }}
+                                        title="Remove rule"
+                                    >
+                                        <Icons.Close />
+                                    </button>
+                                </div>
+
+                                {clauses.map(/** @param {any} [clause] @param {any} [clauseIndex] @returns {any} */ (clause, clauseIndex) => {
+                                    /** @type {any} */ const valueless = CUSTOM_CATEGORY_VALUELESS_OPERATORS.has(clause.operator);
+                                    /** @type {any} */ const listOperator = CUSTOM_CATEGORY_LIST_OPERATORS.has(clause.operator);
+                                    return (
+                                        <div key={`${rule.id || ruleIndex}:${clauseIndex}`} style={{ display: 'grid', gridTemplateColumns: valueless ? '1fr 130px 28px' : '1fr 130px 1fr 28px', gap: '6px', alignItems: 'center' }}>
+                                            <select
+                                                value={clause.field || ''}
+                                                onChange={(event) => updateClause(ruleIndex, clauseIndex, { field: event.target.value })}
+                                                style={inputStyle}
+                                            >
+                                                {conditionFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
+                                                    <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                value={clause.operator || 'eq'}
+                                                onChange={(event) => {
+                                                    const operator = event.target.value;
+                                                    updateClause(ruleIndex, clauseIndex, {
+                                                        operator,
+                                                        values: CUSTOM_CATEGORY_LIST_OPERATORS.has(operator)
+                                                            ? (clause.values && clause.values.length ? clause.values : splitListInput(clause.value))
+                                                            : clause.values,
+                                                    });
+                                                }}
+                                                style={inputStyle}
+                                            >
+                                                {CUSTOM_CATEGORY_OPERATORS.map((operator) => (
+                                                    <option key={operator.value} value={operator.value}>{operator.label}</option>
+                                                ))}
+                                            </select>
+                                            {!valueless && (
+                                                <input
+                                                    value={listOperator ? (clause.values || []).join(', ') : (clause.value || '')}
+                                                    onChange={(event) => updateClause(ruleIndex, clauseIndex, listOperator
+                                                        ? { values: splitListInput(event.target.value), value: event.target.value }
+                                                        : { value: event.target.value })}
+                                                    style={inputStyle}
+                                                    placeholder={listOperator ? 'A, B, C' : 'Value'}
+                                                />
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => updateRule(ruleIndex, {
+                                                    ...rule,
+                                                    condition: {
+                                                        ...condition,
+                                                        clauses: clauses.filter(/** @param {any} [_] @param {any} [index] @returns {any} */ (_, index) => index !== clauseIndex),
+                                                    },
+                                                })}
+                                                style={{ ...smallButtonStyle(), padding: '6px', justifyContent: 'center', color: '#B91C1C' }}
+                                                title="Remove condition"
+                                            >
+                                                <Icons.Close />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+
+                                <button
+                                    type="button"
+                                    onClick={() => updateRule(ruleIndex, {
+                                        ...rule,
+                                        condition: {
+                                            ...condition,
+                                            clauses: [...clauses, createCustomCategoryClause(conditionFieldOptions)],
+                                        },
+                                    })}
+                                    style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
+                                >
+                                    + Condition
+                                </button>
+                            </div>
+                        );
+                    })}
+
+                    {(!draft.kind || draft.kind === 'category') && (
+                        <button
+                            type="button"
+                            onClick={() => setDraft({
+                                ...draft,
+                                rules: [...(draft.rules || []), createCustomCategoryRule(conditionFieldOptions, (draft.rules || []).length)],
+                            })}
+                            style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
+                        >
+                            + Rule
+                        </button>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                        <button type="button" onClick={() => setDraft(null)} style={smallButtonStyle()}>
+                            Cancel
+                        </button>
+                        <button type="button" onClick={applyDraft} style={smallButtonStyle('primary')}>
+                            {draft.kind === 'date_group' || draft.kind === 'number_group' ? 'Apply Group' : 'Apply Category'}
+                        </button>
+                    </div>
+                </div>
+                </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** @param {any} [expression] @returns {any} */ function extractColumnFormulaReferences(expression) {
+    /** @type {any[]} */ const refs = [];
+    /** @type {any} */ const seen = new Set();
+    String(expression || '').replace(COLUMN_FORMULA_REFERENCE_RE, (_match, rawRef) => {
+        /** @type {any} */ const ref = String(rawRef || '').trim();
+        if (ref && !seen.has(ref)) {
+            refs.push(ref);
+            seen.add(ref);
+        }
+        return '';
+    });
+    return refs;
+}
+
+/** @param {any} [expression] @param {any} [knownReferences] @returns {any} */ function extractValueFormulaReferences(expression, knownReferences = []) {
+    /** @type {any} */ const source = String(expression || '');
+    /** @type {any[]} */ const references = [];
+    /** @type {any} */ const seen = new Set();
+    /** @param {any} [value] @returns {any} */ const addReference = (value) => {
+        /** @type {any} */ const ref = String(value || '').trim();
+        if (!ref || seen.has(ref)) return;
+        references.push(ref);
+        seen.add(ref);
+    };
+
+    extractColumnFormulaReferences(source).forEach(addReference);
+    /** @type {any} */ let expressionWithoutBracketRefs = source.replace(COLUMN_FORMULA_REFERENCE_RE, ' ');
+    /** @type {any} */ const knownReferenceList = (Array.isArray(knownReferences) ? knownReferences : Array.from(knownReferences || []))
+        .map((reference) => String(reference || '').trim())
+        .filter((reference) => reference && !SIMPLE_FORMULA_REFERENCE_RE.test(reference))
+        .sort((a, b) => b.length - a.length);
+    knownReferenceList.forEach(/** @param {any} [reference] @returns {any} */ (reference) => {
+        /** @type {any} */ const pattern = new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(reference)}(?=$|[^A-Za-z0-9_])`, 'g');
+        expressionWithoutBracketRefs = expressionWithoutBracketRefs.replace(pattern, /** @param {any} [match] @param {any} [prefix] @returns {any} */ (match, prefix) => {
+            addReference(reference);
+            return `${prefix} `;
+        });
+    });
+    expressionWithoutBracketRefs.replace(FORMULA_REFERENCE_RE, /** @param {any} [token] @param {any} [offset] @returns {any} */ (token, offset) => {
+        /** @type {any} */ const tail = expressionWithoutBracketRefs.slice(offset + token.length).trimStart();
+        if (FORMULA_RESERVED_REFERENCES.has(token)) return token;
+        if (FORMULA_FUNCTION_NAMES.has(token) && tail.startsWith('(')) return token;
+        addReference(token);
+        return token;
+    });
+    return references;
+}
+
+/** @param {any} [columnId] @returns {any} */ function formatColumnFormulaReference(columnId) {
+    /** @type {any} */ const id = String(columnId || '').trim();
+    return id ? `[${id}]` : '';
+}
+
+/** @param {any} [reference] @returns {any} */ function formatValueFormulaReference(reference) {
+    /** @type {any} */ const token = String(reference || '').trim();
+    if (!token) return '';
+    return SIMPLE_FORMULA_REFERENCE_RE.test(token) ? token : `[${token}]`;
+}
+
+/** @param {any} [label] @param {any} [valConfigs] @param {any} [fallback] @returns {any} */ function buildFormulaReferenceKey(label, valConfigs, fallback = 'formula') {
+    /** @type {any} */ const base = normalizeFormulaReferenceKey(label, fallback);
+    /** @type {any} */ const taken = new Set(
+        (Array.isArray(valConfigs) ? valConfigs : [])
+            .map((config) => {
+                if (!config) return null;
+                return config.agg === 'formula'
+                    ? getFormulaReferenceKey(config)
+                    : config.field;
+            })
+            .filter(Boolean)
+            .map((token) => String(token).toLowerCase())
+    );
+    if (!taken.has(base)) return base;
+    let nextIndex = 2;
+    let candidate = `${base}${nextIndex}`;
+    while (taken.has(candidate)) {
+        nextIndex += 1;
+        candidate = `${base}${nextIndex}`;
+    }
+    return candidate;
+}
+
+/** @param {any} [expression] @param {any} [oldToken] @param {any} [newToken] @returns {any} */ function replaceIdentifierToken(expression, oldToken, newToken) {
+    if (!expression || !oldToken || oldToken === newToken) return expression;
+    /** @type {any} */ const replacement = formatValueFormulaReference(newToken);
+    /** @type {any[]} */ const protectedRefs = [];
+    /** @type {any} */ const withProtectedRefs = String(expression).replace(COLUMN_FORMULA_REFERENCE_RE, (match, rawRef) => {
+        if (String(rawRef || '').trim() === oldToken) return replacement;
+        protectedRefs.push(match);
+        return `@@${protectedRefs.length - 1}@@`;
+    });
+    /** @type {any} */ let nextExpression = withProtectedRefs
+        .replace(new RegExp(`\\b${escapeRegExp(oldToken)}\\b`, 'g'), replacement);
+    protectedRefs.forEach((rawRef, index) => {
+        nextExpression = nextExpression.replace(`@@${index}@@`, rawRef);
+    });
+    return nextExpression;
+}
+
+/** @param {any} [setValConfigs] @param {any} [idx] @param {any} [updater] @returns {any} */ function updateValueConfig(setValConfigs, idx, updater) {
+    setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => {
+        /** @type {any[]} */ const next = [...prev];
+        if (!next[idx]) return prev;
+        next[idx] = updater(next[idx]);
+        return next;
+    });
+}
+
+/** @param {any} [target] @returns {any} */ function isKeyboardControlTarget(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    return Boolean(target.closest('button, input, select, textarea, [contenteditable="true"]'));
+}
+
+/** @param {any} [config] @returns {any} */ function getValueConfigSparklineIdentity(config) {
+    if (!config || typeof config !== 'object') return '';
+    /** @type {any} */ const field = config.field === undefined || config.field === null ? '' : String(config.field);
+    /** @type {any} */ const agg = config.agg === undefined || config.agg === null ? '' : String(config.agg);
+    return `${field}::${agg}`;
+}
+
+/** @param {any} [value] @returns {any} */ function normalizeValueSparklineDraft(value) {
+    /** @type {any} */ const normalized = normalizeSparklineConfig(value);
+    if (!normalized) return null;
+    return {
+        ...DEFAULT_VALUE_SPARKLINE_CONFIG,
+        ...normalized,
+        header: normalized.header || '',
+        color: normalized.color || '',
+        positiveColor: normalized.positiveColor || '',
+        negativeColor: normalized.negativeColor || '',
+    };
+}
+
+/** @param {any} [value] @returns {any} */ function sanitizeValueSparklineConfig(value) {
+    /** @type {Record<string, any>} */ const source = {
+        ...DEFAULT_VALUE_SPARKLINE_CONFIG,
+        ...(value || {}),
+    };
+    /** @type {Record<string, any>} */ const nextConfig = {
+        type: source.type || DEFAULT_VALUE_SPARKLINE_CONFIG.type,
+        metric: source.metric || DEFAULT_VALUE_SPARKLINE_CONFIG.metric,
+        showCurrentValue: source.showCurrentValue !== false,
+        showDelta: source.showDelta !== false,
+        compact: Boolean(source.compact),
+        hideColumns: Boolean(source.hideColumns),
+        placement: 'before',
+        source: source.source === 'field' ? 'field' : 'pivot',
+        displayMode: source.displayMode === 'value' ? 'value' : 'trend',
+    };
+    ['header', 'color', 'positiveColor', 'negativeColor'].forEach((key) => {
+        /** @type {any} */ const text = typeof source[key] === 'string' ? source[key].trim() : '';
+        if (text) nextConfig[key] = text;
+    });
+    if (Number.isFinite(Number(source.areaOpacity))) {
+        nextConfig.areaOpacity = Math.max(0.02, Math.min(0.45, Number(source.areaOpacity)));
+    }
+    return nextConfig;
+}
+
+/** @param {any} [item] @param {any} [colFields] @returns {any} */ function getValueSparklineCapabilities(item, colFields = []) {
+    /** @type {any} */ const agg = String((item && item.agg) || '').trim().toLowerCase();
+    /** @type {any} */ const hasColumnAxis = Array.isArray(colFields) && colFields.length > 0;
+    /** @type {any} */ const canUseFieldSeries = agg === 'array_agg';
+    /** @type {any} */ const canUsePivotSeries = agg !== 'array_agg' && hasColumnAxis;
+    return {
+        canUseFieldSeries,
+        canUsePivotSeries,
+        canUseAny: canUseFieldSeries || canUsePivotSeries,
+        defaultSource: canUseFieldSeries ? 'field' : (canUsePivotSeries ? 'pivot' : null),
+    };
+}
+
+/** @param {any} [source] @param {any} [capabilities] @returns {any} */ function isSparklineSourcePossible(source, capabilities) {
+    if (!capabilities || !capabilities.canUseAny) return false;
+    return source === 'field' ? capabilities.canUseFieldSeries : capabilities.canUsePivotSeries;
+}
+
+/** @param {any} [value] @param {any} [capabilities] @returns {any} */ function sanitizeValueSparklineForCapabilities(value, capabilities) {
+    /** @type {any} */ const nextConfig = sanitizeValueSparklineConfig(value);
+    if (!capabilities || !capabilities.canUseAny) return null;
+    if (isSparklineSourcePossible(nextConfig.source, capabilities)) return nextConfig;
+    return {
+        ...nextConfig,
+        source: capabilities.defaultSource,
+    };
+}
+
+/** @param {any} [baseValues] @returns {any} */ function buildSuggestedFormula(baseValues) {
+    if (!Array.isArray(baseValues) || baseValues.length === 0) return '';
+    /** @type {any} */ const refs = baseValues
+        .map((value) => value && formatValueFormulaReference(value.field))
+        .filter(Boolean);
+    if (refs.length === 0) return '';
+    if (refs.length === 1) return `${refs[0]} * 100`;
+    return `${refs[0]} - ${refs[1]}`;
+}
+
+/** @param {any} [displayedColumnOptions] @returns {any} */ function buildSuggestedColumnFormula(displayedColumnOptions) {
+    /** @type {any} */ const ids = (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+        .map((option) => option && option.id)
+        .filter(Boolean);
+    if (ids.length === 0) return '';
+    if (ids.length === 1) return `${formatColumnFormulaReference(ids[0])} * 100`;
+    return `${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}`;
+}
+
+/** @param {any} [valConfigs] @returns {any} */ function createFormulaFieldId(valConfigs) {
+    /** @type {any} */ const takenIds = new Set(
+        (Array.isArray(valConfigs) ? valConfigs : [])
+            .map((config) => config && config.field)
+            .filter(Boolean)
+    );
+    let nextIndex = 1;
+    while (takenIds.has(`formula_${nextIndex}`)) nextIndex += 1;
+    return `formula_${nextIndex}`;
+}
+
+/** @param {any} [formula] @param {any} [valueConfigs] @param {any} [currentField] @param {any} [currentFormulaRef] @param {any} [formulaScope] @param {any} [displayedColumnOptions] @param {any} [availableRawFields] @returns {any} */ function inspectFormulaExpression(
+    formula,
+    valueConfigs,
+    currentField = null,
+    currentFormulaRef = null,
+    formulaScope = 'measures',
+    displayedColumnOptions = [],
+    availableRawFields = []
+) {
+    /** @type {any} */ const trimmed = String(formula || '').trim();
+    /** @type {any} */ const columnFormulaScope = isColumnFormulaScope(formulaScope);
+    if (!trimmed) {
+        return {
+            tone: 'warning',
+            text: columnFormulaScope
+                ? 'Enter a formula using bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]'
+                : 'Enter a formula using value fields. Example: sales - [day pnl]',
+        };
+    }
+
+    let parenDepth = 0;
+    for (const char of trimmed) {
+        if (char === '(') parenDepth += 1;
+        if (char === ')') parenDepth -= 1;
+        if (parenDepth < 0) {
+            return { tone: 'warning', text: 'Parentheses are unbalanced.' };
+        }
+    }
+    if (parenDepth !== 0) {
+        return { tone: 'warning', text: 'Parentheses are unbalanced.' };
+    }
+
+    if (columnFormulaScope) {
+        /** @type {any} */ const displayedOptions = Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [];
+        /** @type {any} */ const availableColumnIds = new Set(
+            displayedOptions
+                .map(/** @param {any} [option] @returns {any} */ (option) => option && option.id)
+                .filter(Boolean)
+        );
+        /** @type {any} */ const columnReferences = extractColumnFormulaReferences(trimmed);
+        if (columnReferences.length === 0) {
+            return {
+                tone: 'warning',
+                text: 'Insert at least one rendered column reference like [column_id].',
+            };
+        }
+        /** @type {any} */ const expressionWithoutColumnRefs = trimmed.replace(COLUMN_FORMULA_REFERENCE_RE, '');
+        /** @type {any} */ const unbracketedIdentifiers = Array.from(new Set(expressionWithoutColumnRefs.match(FORMULA_REFERENCE_RE) || []));
+        if (unbracketedIdentifiers.length > 0) {
+            return {
+                tone: 'warning',
+                text: `Rendered columns must use brackets: ${unbracketedIdentifiers.join(', ')}`,
+            };
+        }
+        if (availableColumnIds.size > 0) {
+            /** @type {any} */ const unknownColumns = columnReferences.filter(/** @param {any} [columnId] @returns {any} */ (columnId) => !availableColumnIds.has(columnId));
+            if (unknownColumns.length > 0) {
+                return {
+                    tone: 'warning',
+                    text: `Unknown rendered columns: ${unknownColumns.join(', ')}`,
+                };
+            }
+        }
+        if (currentField && columnReferences.includes(currentField)) {
+            return {
+                tone: 'warning',
+                text: 'A displayed-column formula cannot reference its own output column.',
+            };
+        }
+        return {
+            tone: 'success',
+            text: `Using rendered columns: ${columnReferences.join(', ')}`,
+        };
+    }
+
+    /** @type {any} */ const allConfigs = Array.isArray(valueConfigs) ? valueConfigs.filter((value) => value && value.field) : [];
+    if (allConfigs.length === 0) {
+        return {
+            tone: 'warning',
+            text: 'Add at least one value or formula reference before creating formulas.',
+        };
+    }
+
+    /** @type {any} */ const formulaConfigs = allConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config.agg === 'formula');
+    /** @type {any} */ const formulaReferenceMap = new Map();
+    formulaConfigs.forEach(/** @param {any} [config] @returns {any} */ (config) => {
+        /** @type {any} */ const token = config.field === currentField
+            ? normalizeFormulaReferenceKey(currentFormulaRef || getFormulaReferenceKey(config), config.field)
+            : getFormulaReferenceKey(config);
+        if (!token) return;
+        formulaReferenceMap.set(token, token);
+        formulaReferenceMap.set(token.toLowerCase(), token);
+    });
+    /** @type {any} */ const measureTokens = allConfigs
+        .filter(/** @param {any} [config] @returns {any} */ (config) => config.agg !== 'formula')
+        .map(/** @param {any} [config] @returns {any} */ (config) => config.field)
+        .filter(Boolean);
+    /** @type {any} */ const measureTokenSet = new Set(measureTokens);
+    /** @type {any} */ const availableTokens = new Set([...measureTokens, ...formulaConfigs.map(/** @param {any} [config] @returns {any} */ (config) => (
+        config.field === currentField
+            ? normalizeFormulaReferenceKey(currentFormulaRef || getFormulaReferenceKey(config), config.field)
+            : getFormulaReferenceKey(config)
+    )).filter(Boolean), ...(Array.isArray(availableRawFields) ? availableRawFields : [])]);
+    /** @type {any} */ const knownReferences = Array.from(availableTokens);
+    /** @type {any} */ const references = extractValueFormulaReferences(trimmed, knownReferences);
+    /** @type {any} */ const canonicalReferences = references.map(/** @param {any} [token] @returns {any} */ (token) => formulaReferenceMap.get(token) || formulaReferenceMap.get(token.toLowerCase()) || token);
+    /** @type {any} */ const unknownReferences = canonicalReferences.filter(/** @param {any} [token] @returns {any} */ (token) => !availableTokens.has(token) && !measureTokenSet.has(token));
+    if (unknownReferences.length > 0) {
+        return {
+            tone: 'warning',
+            text: `Unknown fields: ${unknownReferences.join(', ')}`,
+        };
+    }
+    /** @type {any} */ const currentToken = currentField
+        ? normalizeFormulaReferenceKey(currentFormulaRef || currentField, currentField)
+        : null;
+    if (currentField && currentToken) {
+        /** @type {any} */ const duplicateReference = allConfigs.some(/** @param {any} [config] @returns {any} */ (config) => {
+            if (!config || config.field === currentField) return false;
+            /** @type {any} */ const token = config.agg === 'formula' ? getFormulaReferenceKey(config) : config.field;
+            return String(token || '').toLowerCase() === currentToken.toLowerCase();
+        });
+        if (duplicateReference) {
+            return {
+                tone: 'warning',
+                text: `Reference key "${currentToken}" is already in use.`,
+            };
+        }
+    }
+    if (currentToken && canonicalReferences.includes(currentToken)) {
+        return {
+            tone: 'warning',
+            text: 'A formula cannot reference itself.',
+        };
+    }
+    if (currentField && currentToken) {
+        /** @type {Record<string, any>} */ const dependencyMap = {};
+        formulaConfigs.forEach(/** @param {any} [config] @returns {any} */ (config) => {
+            /** @type {any} */ const configToken = config.field === currentField
+                ? currentToken
+                : getFormulaReferenceKey(config);
+            /** @type {any} */ const expr = config.field === currentField ? trimmed : String(config.formula || '');
+            /** @type {any} */ const exprTokens = extractValueFormulaReferences(expr, knownReferences)
+                .map(/** @param {any} [token] @returns {any} */ (token) => formulaReferenceMap.get(token) || formulaReferenceMap.get(token.toLowerCase()) || token)
+                .filter(/** @param {any} [token] @returns {any} */ (token) => token !== configToken && formulaConfigs.some(/** @param {any} [candidate] @returns {any} */ (candidate) => getFormulaReferenceKey(candidate) === token || (candidate.field === currentField && currentToken === token)));
+            dependencyMap[configToken] = exprTokens;
+        });
+        /** @type {any} */ const visiting = new Set();
+        /** @type {any} */ const visited = new Set();
+        /** @param {any} [field] @returns {any} */ const hasCycle = (field) => {
+            if (visiting.has(field)) return true;
+            if (visited.has(field)) return false;
+            visiting.add(field);
+            /** @type {any} */ const refs = dependencyMap[field] || [];
+            for (const ref of refs) {
+                if (hasCycle(ref)) return true;
+            }
+            visiting.delete(field);
+            visited.add(field);
+            return false;
+        };
+        if (hasCycle(currentToken)) {
+            return {
+                tone: 'warning',
+                text: 'Circular formula reference detected.',
+            };
+        }
+    }
+    if (references.length === 0) {
+        return {
+            tone: 'warning',
+            text: 'Insert at least one measure or formula reference.',
+        };
+    }
+    return {
+        tone: 'success',
+        text: `Using ${canonicalReferences.join(', ')}`,
+    };
+}
+
+/** @param {any} p0 @returns {any} */ function FormulaChip({ item, idx, valConfigs, setValConfigs, theme, styles, dropLine, zoneId }) {
+    /** @type {any} */ const inputRef = React.useRef(null);
+    /** @type {any} */ const debounceRef = React.useRef(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [draftFormula, setDraftFormula] = React.useState(item.formula || '');
+
+    React.useEffect(() => {
+        setDraftFormula(item.formula || '');
+    }, [item.formula, item.field]);
+
+    React.useEffect(() => (
+        () => clearTimeout(debounceRef.current)
+    ), []);
+
+    /** @type {any} */ const nonFormulaVals = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config.agg !== 'formula'),
+        [valConfigs]
+    );
+    /** @type {any} */ const allValsForValidation = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.field),
+        [valConfigs]
+    );
+    /** @type {any} */ const formulaStatus = React.useMemo(
+        () => inspectFormulaExpression(draftFormula, allValsForValidation, item.field, item.formulaRef || null),
+        [draftFormula, allValsForValidation, item.field, item.formulaRef]
+    );
+
+    /** @type {(...args: any[]) => any} */ const queueCommit = React.useCallback((nextFormula) => {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+            updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => ({ ...current, formula: nextFormula }));
+        }, 300);
+    }, [idx, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const commit = React.useCallback((nextFormula = draftFormula) => {
+        clearTimeout(debounceRef.current);
+        updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => ({ ...current, formula: nextFormula }));
+    }, [draftFormula, idx, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const insertAtCursor = React.useCallback((text) => {
+        const el = inputRef.current;
+        if (!el) return;
+        /** @type {any} */ const start = el.selectionStart ?? draftFormula.length;
+        /** @type {any} */ const end = el.selectionEnd ?? draftFormula.length;
+        const nextFormula = `${draftFormula.slice(0, start)}${text}${draftFormula.slice(end)}`;
+        setDraftFormula(nextFormula);
+        queueCommit(nextFormula);
+        /** @type {any} */ const nextCursor = start + text.length;
+        setTimeout(() => {
+            if (!inputRef.current) return;
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(nextCursor, nextCursor);
+        }, 0);
+    }, [draftFormula, queueCommit]);
+
+    /** @type {Record<string, any>} */ const opBtnStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.background,
+        color: theme.text,
+        borderRadius: '4px',
+        cursor: 'pointer',
+        padding: '3px 8px',
+        fontSize: '11px',
+        fontFamily: 'monospace',
+        lineHeight: '18px',
+        flexShrink: 0,
+    };
+
+    /** @type {any} */ const placeholder = buildSuggestedFormula(nonFormulaVals) || 'expression...';
+    /** @type {any} */ const templateButtons = buildFormulaTemplates(nonFormulaVals);
+
+    /** @type {Record<string, any>} */ const statusColors = {
+        muted: {
+            text: theme.textSec,
+            border: theme.border,
+            background: theme.headerSubtleBg || theme.background,
+        },
+        success: {
+            text: theme.primary,
+            border: `${theme.primary}33`,
+            background: `${theme.primary}10`,
+        },
+        warning: {
+            text: '#B45309',
+            border: '#F59E0B55',
+            background: '#F59E0B12',
+        },
+    };
+    /** @type {any} */ const statusStyle = statusColors[formulaStatus.tone] || statusColors.muted;
+
+    return (
+        <div style={{
+            border: `1px solid ${theme.primary}55`,
+            borderRadius: '10px',
+            background: theme.headerBg || theme.background,
+            padding: '10px',
+            margin: '4px 0',
+            position: 'relative',
+            boxShadow: theme.isDark ? 'none' : '0 6px 18px rgba(15, 23, 42, 0.06)',
+        }}>
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div style={{ ...styles.dropLine, top: -2 }} />}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 700, color: theme.primary, background: `${theme.primary}18`, borderRadius: '999px', padding: '3px 7px', letterSpacing: '0.5px', flexShrink: 0 }}>fx</span>
+                <input
+                    value={item.label || ''}
+                    onChange={(e) => updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => ({ ...current, label: e.target.value }))}
+                    placeholder="Formula column name"
+                    style={{ flex: 1, fontWeight: 600, fontSize: '12px', background: 'transparent', border: 'none', borderBottom: `1px solid ${theme.border}`, outline: 'none', color: theme.text, minWidth: 0 }}
+                />
+                <span onClick={() => setValConfigs(/** @param {any} [p] @returns {any} */ (p) => p.filter(/** @param {any} [_] @param {any} [i] @returns {any} */ (_, i) => i !== idx))} style={{ cursor: 'pointer', color: '#9CA3AF', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icons.Close /></span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', fontSize: '10px', color: theme.textSec }}>
+                <span>Output id: <code style={{ fontFamily: 'monospace', color: theme.text }}>{item.field}</code></span>
+                <span>Post-aggregation</span>
+            </div>
+            {nonFormulaVals.length > 0 && (
+                <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '9px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '4px' }}>Fields — click to insert</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        {nonFormulaVals.map(/** @param {any} [v] @returns {any} */ v => (
+                            <button key={v.field} type="button" onClick={() => insertAtCursor(formatValueFormulaReference(v.field))} style={{
+                                border: `1px solid ${theme.primary}88`,
+                                background: `${theme.primary}14`,
+                                color: theme.primary,
+                                borderRadius: '999px',
+                                cursor: 'pointer',
+                                padding: '3px 9px',
+                                fontSize: '11px',
+                                fontFamily: 'monospace',
+                                lineHeight: '18px',
+                            }} title={`Insert: ${v.field}`}>
+                                {formatDisplayLabel(v.field)}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {templateButtons.length > 0 && (
+                <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '9px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '4px' }}>Templates</div>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {templateButtons.map(/** @param {any} [template] @returns {any} */ (template) => (
+                            <button key={template.label} type="button" onClick={() => { setDraftFormula(template.value); commit(template.value); }} style={{ border: `1px solid ${theme.border}`, background: theme.background, color: theme.text, borderRadius: '999px', cursor: 'pointer', padding: '3px 9px', fontSize: '10px', lineHeight: '16px' }}>
+                                {template.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+            <div style={{ display: 'flex', gap: '3px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                {['+', '-', '*', '/', '(', ')', '* 100'].map(op => (
+                    <button key={op} type="button" onClick={() => insertAtCursor(op)} style={opBtnStyle}>{op}</button>
+                ))}
+            </div>
+            <textarea
+                ref={inputRef}
+                key={item.field}
+                value={draftFormula}
+                onChange={(e) => {
+                    const nextFormula = e.target.value;
+                    setDraftFormula(nextFormula);
+                    queueCommit(nextFormula);
+                }}
+                onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') commit(draftFormula);
+                }}
+                onBlur={() => commit(draftFormula)}
+                placeholder={placeholder}
+                rows={3}
+                style={{
+                    width: '100%', boxSizing: 'border-box',
+                    resize: 'vertical',
+                    fontFamily: 'monospace', fontSize: '12px',
+                    lineHeight: 1.45,
+                    padding: '8px 10px',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '8px',
+                    background: theme.background,
+                    color: theme.text,
+                    outline: 'none',
+                }}
+            />
+            <div style={{ marginTop: '8px', padding: '6px 8px', borderRadius: '8px', border: `1px solid ${statusStyle.border}`, background: statusStyle.background, color: statusStyle.text, fontSize: '10px', lineHeight: 1.4 }}>
+                {formulaStatus.text}
+            </div>
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
+        </div>
+    );
+}
+
+/** @param {any} [baseValues] @returns {any} */ function buildFormulaTemplates(baseValues) {
+    if (!Array.isArray(baseValues) || baseValues.length === 0) return [];
+    /** @type {any} */ const refs = baseValues
+        .map((value) => value && formatValueFormulaReference(value.field))
+        .filter(Boolean);
+    if (refs.length === 0) return [];
+    if (refs.length === 1) {
+        return [{ label: 'Scale x100', value: `${refs[0]} * 100` }];
+    }
+    return [
+        { label: 'Difference', value: `${refs[0]} - ${refs[1]}` },
+        { label: 'Ratio %', value: `(${refs[0]} / ${refs[1]}) * 100` },
+        { label: 'Margin %', value: `((${refs[0]} - ${refs[1]}) / ${refs[0]}) * 100` },
+    ];
+}
+
+/** @param {any} [displayedColumnOptions] @returns {any} */ function buildColumnFormulaTemplates(displayedColumnOptions) {
+    /** @type {any} */ const ids = (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+        .map((option) => option && option.id)
+        .filter(Boolean);
+    if (ids.length === 0) return [];
+    if (ids.length === 1) {
+        return [{ label: 'Scale x100', value: `${formatColumnFormulaReference(ids[0])} * 100` }];
+    }
+    return [
+        { label: 'Difference', value: `${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}` },
+        { label: 'Ratio %', value: `(${formatColumnFormulaReference(ids[0])} / ${formatColumnFormulaReference(ids[1])}) * 100` },
+        { label: 'Spread %', value: `((${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}) / ${formatColumnFormulaReference(ids[0])}) * 100` },
+    ];
+}
+
+/** @param {any} [theme] @param {any} [tone] @returns {any} */ function getFormulaStatusStyles(theme, tone) {
+    /** @type {Record<string, any>} */ const statusColors = {
+        muted: {
+            text: theme.textSec,
+            border: theme.border,
+            background: theme.headerSubtleBg || theme.background,
+        },
+        success: {
+            text: theme.primary,
+            border: `${theme.primary}33`,
+            background: `${theme.primary}10`,
+        },
+        warning: {
+            text: '#B45309',
+            border: '#F59E0B55',
+            background: '#F59E0B12',
+        },
+    };
+    return statusColors[tone] || statusColors.muted;
+}
+
+/** @param {any} p0 @returns {any} */ function SparklineConfigModal({ item, idx, setValConfigs, theme, colFields = [], onClose }) {
+    /** @type {any} */ const config = React.useMemo(
+        () => normalizeValueSparklineDraft(item && item.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [item && item.sparkline]
+    );
+    /** @type {any} */ const capabilities = React.useMemo(
+        () => getValueSparklineCapabilities(item, colFields),
+        [colFields, item]
+    );
+    /** @type {any} */ const sourceOptions = React.useMemo(() => {
+        /** @type {any[]} */ const options = [];
+        if (capabilities.canUsePivotSeries) options.push({ value: 'pivot', label: 'Linked pivot' });
+        if (capabilities.canUseFieldSeries) options.push({ value: 'field', label: 'Series field' });
+        return options;
+    }, [capabilities]);
+    /** @type {any} */ const effectiveSource = isSparklineSourcePossible(config.source || 'pivot', capabilities)
+        ? (config.source || 'pivot')
+        : capabilities.defaultSource;
+
+    /** @type {(...args: any[]) => any} */ const update = React.useCallback((patch) => {
+        updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => {
+            /** @type {any} */ const currentDraft = normalizeValueSparklineDraft(current.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG };
+            /** @type {any} */ const nextSparkline = sanitizeValueSparklineForCapabilities({ ...currentDraft, ...patch }, capabilities);
+            if (!nextSparkline) return current;
+            return {
+                ...current,
+                sparkline: nextSparkline,
+            };
+        });
+    }, [capabilities, idx, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const stopProp = React.useCallback((e) => e.stopPropagation(), []);
+
+    /** @type {any[]} */ const CHART_TYPES = [
+        { value: 'line', label: 'Line' },
+        { value: 'area', label: 'Area' },
+        { value: 'column', label: 'Column' },
+        { value: 'bar', label: 'Bar' },
+    ];
+
+    /** @type {Record<string, any>} */ const inputStyle = {
+        background: theme.background,
+        border: `1px solid ${theme.border}`,
+        borderRadius: '5px',
+        color: theme.text,
+        fontSize: '11px',
+        padding: '4px 7px',
+        outline: 'none',
+        width: '100%',
+        boxSizing: 'border-box',
+    };
+
+    /** @type {Record<string, any>} */ const labelStyle = {
+        fontSize: '10px',
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        color: theme.textSec,
+        textTransform: 'uppercase',
+        marginBottom: '6px',
+        display: 'block',
+    };
+
+    /** @type {Record<string, any>} */ const sectionStyle = {
+        marginBottom: '14px',
+    };
+
+    return (
+        <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onMouseDown={stopProp}
+            onClick={onClose}
+        >
+            <div
+                onClick={stopProp}
+                style={{
+                    background: theme.background,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                    width: '320px',
+                    maxHeight: '80vh',
+                    overflow: 'auto',
+                    padding: '18px 20px 16px',
+                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                }}
+            >
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: theme.text }}>Sparkline Column</span>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '18px', lineHeight: 1, padding: '2px 4px' }}
+                    >×</button>
+                </div>
+
+                {/* Data source */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Data source</span>
+                    {sourceOptions.length > 0 ? (
+                    <>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        {sourceOptions.map(/** @param {any} p0 @returns {any} */ ({ value, label }) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => update({ source: value })}
+                                style={{
+                                    flex: 1,
+                                    padding: '4px 0',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    border: `1px solid ${effectiveSource === value ? theme.primary : theme.border}`,
+                                    background: effectiveSource === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: effectiveSource === value ? theme.primary : theme.textSec,
+                                }}
+                            >{label}</button>
+                        ))}
+                    </div>
+                    <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
+                        {effectiveSource === 'pivot'
+                            ? 'Trend values are collected across the pivot columns. Source value cells stay numeric unless hidden.'
+                            : 'Each cell already contains the full data series for its row.'}
+                    </div>
+                    </>
+                    ) : (
+                        <div
+                            data-value-sparkline-unavailable="true"
+                            style={{
+                                padding: '7px 8px',
+                                borderRadius: '6px',
+                                border: `1px solid ${theme.warning || '#F59E0B'}55`,
+                                background: `${theme.warning || '#F59E0B'}12`,
+                                color: theme.text,
+                                fontSize: '10px',
+                                lineHeight: 1.45,
+                            }}
+                        >
+                            Add a column field for linked trends, or use the Series aggregation for field data.
+                        </div>
+                    )}
+                </div>
+
+                {effectiveSource === 'field' && (
+                    <div style={sectionStyle}>
+                        <span style={labelStyle}>Cell display</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            {[
+                                { value: 'trend', label: 'Trendline' },
+                                { value: 'value', label: 'Value' },
+                            ].map(({ value, label }) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    onClick={() => update({ displayMode: value })}
+                                    style={{
+                                        flex: 1,
+                                        padding: '4px 0',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        borderRadius: '6px',
+                                        cursor: 'pointer',
+                                        border: `1px solid ${(config.displayMode || 'trend') === value ? theme.primary : theme.border}`,
+                                        background: (config.displayMode || 'trend') === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                        color: (config.displayMode || 'trend') === value ? theme.primary : theme.textSec,
+                                    }}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
+                            {(config.displayMode || 'trend') === 'value'
+                                ? 'Show the selected summary metric from the series.'
+                                : 'Draw the series in the cell.'}
+                        </div>
+                    </div>
+                )}
+
+                {/* Chart type */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Chart type</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        {CHART_TYPES.map(({ value, label }) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => update({ type: value })}
+                                style={{
+                                    flex: 1,
+                                    padding: '4px 0',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    border: `1px solid ${config.type === value ? theme.primary : theme.border}`,
+                                    background: config.type === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: config.type === value ? theme.primary : theme.textSec,
+                                }}
+                            >{label}</button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Summary metric */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Summary metric</span>
+                    <select
+                        value={config.metric}
+                        onChange={(e) => update({ metric: e.target.value })}
+                        style={{ ...inputStyle, cursor: 'pointer' }}
+                    >
+                        <option value="last">Last value</option>
+                        <option value="first">First value</option>
+                        <option value="min">Minimum</option>
+                        <option value="max">Maximum</option>
+                        <option value="avg">Average</option>
+                        <option value="sum">Sum</option>
+                        <option value="delta">Delta (last − first)</option>
+                    </select>
+                </div>
+
+                {/* Display options */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Display</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        {[
+                            { key: 'showCurrentValue', label: 'Value label' },
+                            { key: 'showDelta', label: 'Delta label' },
+                            { key: 'compact', label: 'Compact cell' },
+                            { key: 'hideColumns', label: 'Hide source values' },
+                        ].map(({ key, label }) => (
+                            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: theme.text, cursor: 'pointer', userSelect: 'none' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(config[key])}
+                                    onChange={(e) => update({ [key]: e.target.checked })}
+                                    style={{ accentColor: theme.primary, width: '13px', height: '13px', cursor: 'pointer' }}
+                                />
+                                {label}
+                            </label>
+                        ))}
+                    </div>
+                    {config.hideColumns && (
+                        <div style={{ marginTop: '6px', fontSize: '10px', color: theme.textSec, background: `${theme.primary}10`, border: `1px solid ${theme.primary}30`, borderRadius: '6px', padding: '5px 8px', lineHeight: 1.4 }}>
+                            Source value columns are hidden; the trend column remains.
+                        </div>
+                    )}
+                    {!config.hideColumns && effectiveSource === 'pivot' && (
+                        <div style={{ marginTop: '6px', fontSize: '10px', color: theme.textSec, background: theme.headerSubtleBg || theme.background, border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '5px 8px', lineHeight: 1.4 }}>
+                            Source value columns stay numeric; the trend column is added beside them.
+                        </div>
+                    )}
+                </div>
+
+                {/* Placement — only relevant for pivot-collect mode */}
+                {effectiveSource === 'pivot' && <div style={sectionStyle}>
+                    <span style={labelStyle}>Position</span>
+                    <div style={{ fontSize: '10px', color: theme.textSec, lineHeight: 1.4, background: theme.headerSubtleBg || theme.background, border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '6px 8px' }}>
+                        Trend columns are placed before the matching value columns.
+                    </div>
+                </div>}
+
+                {/* Colors */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Colors</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {[
+                            { key: 'color', label: 'Line / fill color', always: true },
+                            { key: 'positiveColor', label: 'Positive bar color', always: false },
+                            { key: 'negativeColor', label: 'Negative bar color', always: false },
+                        ].filter(({ always }) => always || config.type === 'column' || config.type === 'bar').map(({ key, label }) => (
+                            <div key={key}>
+                                <span style={{ fontSize: '10px', color: theme.textSec, marginBottom: '3px', display: 'block' }}>{label}</span>
+                                <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                                    <input
+                                        type="color"
+                                        value={config[key] || (key === 'negativeColor' ? '#B91C1C' : key === 'positiveColor' ? '#2F855A' : '#2563EB')}
+                                        onChange={(e) => update({ [key]: e.target.value })}
+                                        style={{ width: '28px', height: '26px', padding: '1px 2px', border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={config[key] || ''}
+                                        onChange={(e) => update({ [key]: e.target.value })}
+                                        placeholder="Auto"
+                                        style={{ ...inputStyle, flex: 1 }}
+                                    />
+                                    {config[key] && (
+                                        <button
+                                            type="button"
+                                            onClick={() => update({ [key]: '' })}
+                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '14px', lineHeight: 1, padding: '2px' }}
+                                            title="Reset to auto"
+                                        >×</button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Area opacity */}
+                {config.type === 'area' && (
+                    <div style={sectionStyle}>
+                        <span style={labelStyle}>Area fill opacity</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                                type="range"
+                                min="0.02"
+                                max="0.45"
+                                step="0.01"
+                                value={config.areaOpacity != null ? config.areaOpacity : 0.14}
+                                onChange={(e) => update({ areaOpacity: Number(e.target.value) })}
+                                style={{ flex: 1, accentColor: theme.primary }}
+                            />
+                            <span style={{ fontSize: '11px', color: theme.textSec, minWidth: '32px', textAlign: 'right' }}>
+                                {Math.round((config.areaOpacity != null ? config.areaOpacity : 0.14) * 100)}%
+                            </span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Column header label */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Column header label</span>
+                    <input
+                        type="text"
+                        value={config.header || ''}
+                        onChange={(e) => update({ header: e.target.value })}
+                        placeholder="Auto (e.g. Sales Trend)"
+                        style={inputStyle}
+                    />
+                </div>
+
+                {/* Footer */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{
+                            background: theme.primary,
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '7px',
+                            padding: '6px 18px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                        }}
+                    >Done</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** @param {any} p0 @returns {any} */ function ValueSparklineControls({ item, idx, setValConfigs, theme, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification }) {
+    /** @type {[any, (...args: any[]) => any]} */ const [modalOpen, setModalOpen] = React.useState(false);
+    /** @type {any} */ const currentDraft = normalizeValueSparklineDraft(item && item.sparkline);
+    /** @type {any} */ const sparklineIdentity = getValueConfigSparklineIdentity(item);
+    /** @type {any} */ const isFixedSparkline = Boolean(sparklineIdentity && fixedSparklineValueKeySet && fixedSparklineValueKeySet.has(sparklineIdentity));
+    /** @type {any} */ const capabilities = React.useMemo(
+        () => getValueSparklineCapabilities(item, colFields),
+        [colFields, item]
+    );
+    /** @type {any} */ const configured = Boolean(currentDraft);
+    /** @type {any} */ const enabled = Boolean(currentDraft && isSparklineSourcePossible(currentDraft.source || 'pivot', capabilities));
+    /** @type {(...args: any[]) => any} */ const stopProp = React.useCallback((e) => e.stopPropagation(), []);
+    /** @type {(...args: any[]) => any} */ const ensureConfigurableSparkline = React.useCallback(() => {
+        let didConfigure = false;
+        updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => {
+            /** @type {any} */ const nextSparkline = sanitizeValueSparklineForCapabilities(
+                current.sparkline || DEFAULT_VALUE_SPARKLINE_CONFIG,
+                capabilities
+            );
+            if (!nextSparkline) return current;
+            didConfigure = true;
+            return { ...current, sparkline: nextSparkline };
+        });
+        return didConfigure;
+    }, [capabilities, idx, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const toggleSparkline = React.useCallback((e) => {
+        e.stopPropagation();
+        if (configured) {
+            if (isFixedSparkline) {
+                if (showNotification) showNotification('This trend is defined by the app. You can adjust its settings, but not remove it here.', 'info');
+                return;
+            }
+            updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => ({ ...current, sparkline: false }));
+            if (showNotification) showNotification('Removed trend column.', 'info');
+        } else if (capabilities.canUseAny && ensureConfigurableSparkline()) {
+            setModalOpen(true);
+            if (showNotification) showNotification('Trend column enabled.', 'success');
+        } else if (showNotification) {
+            showNotification('Trend needs a column field, or a Series aggregation for field data.', 'warning');
+        }
+    }, [capabilities.canUseAny, configured, ensureConfigurableSparkline, idx, isFixedSparkline, setValConfigs, showNotification]);
+
+    /** @type {(...args: any[]) => any} */ const openSettings = React.useCallback((e) => {
+        e.stopPropagation();
+        if (!capabilities.canUseAny) {
+            if (showNotification) showNotification('Trend settings are not available for this value selection.', 'warning');
+            return;
+        }
+        ensureConfigurableSparkline();
+        setModalOpen(true);
+    }, [capabilities.canUseAny, ensureConfigurableSparkline, showNotification]);
+
+    if (!configured) return null;
+    return (
+        <div
+            data-value-sparkline-controls="true"
+            data-value-sparkline-available={capabilities.canUseAny ? 'true' : 'false'}
+            data-value-sparkline-enabled={enabled ? 'true' : 'false'}
+            onMouseDown={stopProp}
+            onClick={stopProp}
+            style={{ marginTop: '6px', paddingTop: '6px', borderTop: `1px solid ${theme.border}`, width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+            <button
+                type="button"
+                data-value-sparkline-settings="true"
+                onClick={openSettings}
+                style={{
+                    border: `1px solid ${theme.border}`,
+                    background: theme.headerSubtleBg || theme.background,
+                    color: theme.textSec,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    padding: '3px 8px',
+                    fontSize: '10px',
+                    lineHeight: '16px',
+                    fontWeight: 600,
+                    flexShrink: 0,
+                }}
+                title="Configure sparkline"
+            >Settings</button>
+            {isFixedSparkline && (
+                <span
+                    data-value-sparkline-fixed="true"
+                    style={{ fontSize: '10px', color: theme.textSec, flexShrink: 0 }}
+                    title="This trend is defined by the app"
+                >
+                    App trend
+                </span>
+            )}
+            {!isFixedSparkline && (
+                <button
+                    type="button"
+                    data-value-sparkline-toggle="true"
+                    onClick={toggleSparkline}
+                    style={{
+                        border: `1px solid ${theme.border}`,
+                        background: theme.background,
+                        color: theme.textSec,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        lineHeight: '16px',
+                        fontWeight: 600,
+                        flexShrink: 0,
+                    }}
+                    title="Remove trend"
+                >Remove Trend</button>
+            )}
+            {enabled && !modalOpen && (
+                <span style={{ fontSize: '10px', color: theme.primary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {((item.sparkline && item.sparkline.source) === 'field') ? `series ${(item.sparkline && item.sparkline.displayMode) === 'value' ? 'value' : 'trend'}` : 'linked pivot'} | {['line','area','column','bar'].includes(item.sparkline && item.sparkline.type) ? item.sparkline.type : 'line'} | {(item.sparkline && item.sparkline.metric) || 'last'}
+                </span>
+            )}
+            {modalOpen && (
+                <SparklineConfigModal
+                    item={item}
+                    idx={idx}
+                    setValConfigs={setValConfigs}
+                    theme={theme}
+                    colFields={colFields}
+                    onClose={() => setModalOpen(false)}
+                />
+            )}
+        </div>
+    );
+}
+
+/** @param {any} p0 @returns {any} */ function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification, serverError = null }) {
+    /** @type {any} */ const baseBorder = selected ? `${theme.primary}77` : (serverError ? '#F59E0B88' : theme.border);
+    /** @type {any} */ const background = selected ? (theme.headerBg || `${theme.primary}0f`) : (theme.background || 'transparent');
+    /** @type {any} */ const preview = String(item.formula || '').trim() || 'Empty formula';
+
+    return (
+        <div
+            onClick={() => onSelect(item.field)}
+            style={{
+                ...styles.chip,
+                border: `1px solid ${baseBorder}`,
+                background,
+                borderLeft: selected ? `3px solid ${theme.primary}` : `3px solid transparent`,
+                boxShadow: 'none',
+                cursor: 'pointer',
+                flexWrap: 'wrap',
+                alignItems: 'flex-start',
+            }}
+            title="Select formula"
+        >
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div style={{ ...styles.dropLine, top: -2 }} />}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                <Icons.DragIndicator />
+                <span style={{
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    color: theme.primary,
+                    background: `${theme.primary}18`,
+                    borderRadius: '999px',
+                    padding: '3px 7px',
+                    letterSpacing: '0.5px',
+                    flexShrink: 0,
+                }}>fx</span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <b style={{ fontWeight: 600, display: 'block', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {item.label || 'Formula'}
+                        </b>
+                        <span style={{ fontSize: '10px', color: theme.textSec, fontFamily: 'monospace', flexShrink: 0 }}>
+                            {getFormulaReferenceKey(item)}
+                        </span>
+                        <span style={{ fontSize: '9px', color: theme.textSec, border: `1px solid ${theme.border}`, borderRadius: '999px', padding: '1px 6px', flexShrink: 0 }}>
+                            {isColumnFormulaScope(item.formulaScope) ? 'columns' : 'values'}
+                        </span>
+                    </div>
+                    <div style={{
+                        marginTop: '2px',
+                        fontSize: '10px',
+                        lineHeight: 1.35,
+                        color: theme.textSec,
+                        fontFamily: 'monospace',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                    }}>
+                        ={preview}
+                    </div>
+                    {serverError && (
+                        <div style={{ marginTop: '2px', fontSize: '9px', color: '#B45309' }}>
+                            ⚠ {SERVER_ERROR_LABELS[serverError] || serverError}
+                        </div>
+                    )}
+                </div>
+            </div>
+            <div style={{ display: 'flex', gap: '4px', marginLeft: '8px', alignItems: 'center', flexShrink: 0 }}>
+                {selected && (
+                    <span style={{
+                        fontSize: '9px',
+                        color: theme.primary,
+                        background: `${theme.primary}14`,
+                        borderRadius: '999px',
+                        padding: '2px 6px',
+                        flexShrink: 0,
+                    }}>
+                        Active
+                    </span>
+                )}
+                <span
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onRemove(idx);
+                    }}
+                    style={{ cursor: 'pointer', color: '#9CA3AF', display: 'flex', alignItems: 'center' }}
+                >
+                    <Icons.Close />
+                </span>
+            </div>
+            <ValueSparklineControls
+                item={item}
+                idx={idx}
+                setValConfigs={setValConfigs}
+                theme={theme}
+                valueSelectStyle={valueSelectStyle}
+                colFields={colFields}
+                fixedSparklineValueKeySet={fixedSparklineValueKeySet}
+                showNotification={showNotification}
+            />
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
+        </div>
+    );
+}
+
+/** @param {any} p0 @returns {any} */ function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove, serverError = null }) {
+    /** @type {any} */ const containerRef = React.useRef(null);
+    /** @type {any} */ const inputRef = React.useRef(null);
+    /** @type {any} */ const draftRef = React.useRef({ label: item.label || '', formula: item.formula || '' });
+    /** @type {[any, (...args: any[]) => any]} */ const [draft, setDraft] = React.useState({ label: item.label || '', formula: item.formula || '' });
+    /** @type {[any, (...args: any[]) => any]} */ const [expanded, setExpanded] = React.useState(false);
+    /** @type {[any, (...args: any[]) => any]} */ const [templateValue, setTemplateValue] = React.useState('');
+
+    React.useEffect(() => {
+        /** @type {Record<string, any>} */ const nextDraft = { label: item.label || '', formula: item.formula || '' };
+        draftRef.current = nextDraft;
+        setDraft(nextDraft);
+        setTemplateValue('');
+    }, [item.field, item.label, item.formula]);
+
+    React.useEffect(() => {
+        if (!inputRef.current) return;
+        inputRef.current.focus();
+        const cursor = inputRef.current.value.length;
+        inputRef.current.setSelectionRange(cursor, cursor);
+    }, [item.field]);
+
+    /** @type {any} */ const nonFormulaVals = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.agg !== 'formula'),
+        [valConfigs]
+    );
+    /** @type {any} */ const formulaStatus = React.useMemo(
+        () => inspectFormulaExpression(draft.formula, nonFormulaVals),
+        [draft.formula, nonFormulaVals]
+    );
+    /** @type {any} */ const statusStyle = React.useMemo(
+        () => getFormulaStatusStyles(theme, formulaStatus.tone),
+        [formulaStatus.tone, theme]
+    );
+    /** @type {any} */ const placeholder = React.useMemo(
+        () => buildSuggestedFormula(nonFormulaVals) || 'expression...',
+        [nonFormulaVals]
+    );
+    /** @type {any} */ const templateButtons = React.useMemo(
+        () => buildFormulaTemplates(nonFormulaVals),
+        [nonFormulaVals]
+    );
+    /** @type {any} */ const hasPendingChanges = draft.label !== (item.label || '') || draft.formula !== (item.formula || '');
+
+    /** @type {(...args: any[]) => any} */ const commitDraft = React.useCallback((nextDraft = draftRef.current) => {
+        draftRef.current = nextDraft;
+        updateValueConfig(setValConfigs, idx, /** @param {any} [current] @returns {any} */ (current) => ({ ...current, ...nextDraft }));
+    }, [idx, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const updateDraft = React.useCallback((patch, options = {}) => {
+        setDraft(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {Record<string, any>} */ const nextDraft = { ...prev, ...patch };
+            draftRef.current = nextDraft;
+            if (options.commitImmediately) {
+                commitDraft(nextDraft);
+            }
+            return nextDraft;
+        });
+    }, [commitDraft]);
+
+    /** @type {(...args: any[]) => any} */ const insertAtCursor = React.useCallback((text) => {
+        const el = inputRef.current;
+        if (!el) return;
+        /** @type {any} */ const formulaText = draftRef.current.formula || '';
+        /** @type {any} */ const start = el.selectionStart ?? formulaText.length;
+        /** @type {any} */ const end = el.selectionEnd ?? formulaText.length;
+        const nextFormula = `${formulaText.slice(0, start)}${text}${formulaText.slice(end)}`;
+        updateDraft({ formula: nextFormula });
+        /** @type {any} */ const nextCursor = start + text.length;
+        setTimeout(() => {
+            if (!inputRef.current) return;
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(nextCursor, nextCursor);
+        }, 0);
+    }, [updateDraft]);
+
+    /** @type {(...args: any[]) => any} */ const resetDraft = React.useCallback(() => {
+        /** @type {Record<string, any>} */ const nextDraft = { label: item.label || '', formula: item.formula || '' };
+        draftRef.current = nextDraft;
+        setDraft(nextDraft);
+        setTemplateValue('');
+    }, [item.formula, item.label]);
+
+    /** @type {(...args: any[]) => any} */ const handleEditorBlur = React.useCallback((event) => {
+        const nextFocus = event.relatedTarget;
+        if (nextFocus && containerRef.current && containerRef.current.contains(nextFocus)) return;
+        if (hasPendingChanges) commitDraft();
+    }, [commitDraft, hasPendingChanges]);
+
+    /** @type {(...args: any[]) => any} */ const handleTemplateChange = React.useCallback((event) => {
+        const nextValue = event.target.value;
+        if (!nextValue) return;
+        setTemplateValue('');
+        updateDraft({ formula: nextValue });
+        setTimeout(() => {
+            if (!inputRef.current) return;
+            inputRef.current.focus();
+            const cursor = nextValue.length;
+            inputRef.current.setSelectionRange(cursor, cursor);
+        }, 0);
+    }, [updateDraft]);
+
+    /** @type {Record<string, any>} */ const chipButtonStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.background,
+        color: theme.text,
+        borderRadius: '999px',
+        cursor: 'pointer',
+        padding: '2px 8px',
+        fontSize: '10px',
+        fontFamily: 'monospace',
+        lineHeight: '17px',
+    };
+    /** @type {Record<string, any>} */ const opButtonStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.background,
+        color: theme.text,
+        borderRadius: '6px',
+        cursor: 'pointer',
+        padding: '2px 7px',
+        fontSize: '10px',
+        fontFamily: 'monospace',
+        lineHeight: '17px',
+        flexShrink: 0,
+    };
+    /** @type {Record<string, any>} */ const metaPillStyle = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '3px 8px',
+        borderRadius: '999px',
+        border: `1px solid ${theme.border}`,
+        background: theme.background,
+        color: theme.textSec,
+        fontSize: '10px',
+        lineHeight: '16px',
+    };
+
+    return (
+        <div
+            ref={containerRef}
+            onBlurCapture={handleEditorBlur}
+            style={{
+                position: 'sticky',
+                top: '8px',
+                zIndex: 2,
+                margin: '0 0 10px 0',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '10px',
+                background: theme.headerSubtleBg || theme.background,
+                boxShadow: theme.isDark ? 'none' : '0 6px 20px rgba(15, 23, 42, 0.07)',
+                overflow: 'hidden',
+            }}
+        >
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                padding: '8px 10px',
+                borderBottom: `1px solid ${theme.border}`,
+                background: theme.background,
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                    <span style={{
+                        width: '22px',
+                        height: '22px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: theme.primary,
+                        background: `${theme.primary}18`,
+                        borderRadius: '6px',
+                        flexShrink: 0,
+                    }}>fx</span>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.text }}>Formula Bar</div>
+                        <div style={{ fontSize: '10px', color: theme.textSec }}>
+                            Excel-style editing for the selected formula column.
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    <button
+                        type="button"
+                        onClick={() => setExpanded(/** @param {any} [prev] @returns {any} */ (prev) => !prev)}
+                        style={{
+                            border: `1px solid ${theme.border}`,
+                            background: theme.background,
+                            color: theme.textSec,
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            fontSize: '10px',
+                            lineHeight: '14px',
+                        }}
+                    >
+                        {expanded ? 'Collapse' : 'Expand'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onRemove(idx)}
+                        style={{
+                            border: `1px solid ${theme.border}`,
+                            background: theme.background,
+                            color: theme.textSec,
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            fontSize: '10px',
+                            lineHeight: '14px',
+                        }}
+                    >
+                        Remove
+                    </button>
+                </div>
+            </div>
+            <div style={{ padding: '10px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: expanded ? 'stretch' : 'flex-end', flexWrap: 'wrap', marginBottom: '8px' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '118px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Name</span>
+                        <input
+                            value={draft.label}
+                            onChange={(event) => updateDraft({ label: event.target.value })}
+                            placeholder="Formula column name"
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                color: theme.text,
+                                borderRadius: '6px',
+                                padding: '7px 9px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                outline: 'none',
+                            }}
+                        />
+                    </label>
+                    <div style={{ minWidth: '0', flex: 1 }}>
+                        <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Formula</div>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'stretch',
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '6px',
+                            background: theme.background,
+                            overflow: 'hidden',
+                        }}>
+                            <div style={{
+                                width: '34px',
+                                flexShrink: 0,
+                                display: 'flex',
+                                alignItems: expanded ? 'flex-start' : 'center',
+                                justifyContent: 'center',
+                                paddingTop: expanded ? '9px' : 0,
+                                borderRight: `1px solid ${theme.border}`,
+                                color: theme.primary,
+                                background: theme.headerSubtleBg || theme.background,
+                                fontWeight: 700,
+                                fontSize: '11px',
+                            }}>
+                                =
+                            </div>
+                            {expanded ? (
+                                <textarea
+                                    ref={inputRef}
+                                    value={draft.formula}
+                                    onChange={(event) => updateDraft({ formula: event.target.value })}
+                                    onKeyDown={(event) => {
+                                        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') commitDraft();
+                                    }}
+                                    placeholder={placeholder}
+                                    rows={4}
+                                    style={{
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        resize: 'vertical',
+                                        border: 'none',
+                                        background: 'transparent',
+                                        color: theme.text,
+                                        fontFamily: 'monospace',
+                                        fontSize: '12px',
+                                        lineHeight: 1.45,
+                                        padding: '8px 10px',
+                                        outline: 'none',
+                                    }}
+                                />
+                            ) : (
+                                <input
+                                    ref={inputRef}
+                                    value={draft.formula}
+                                    onChange={(event) => updateDraft({ formula: event.target.value })}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') commitDraft();
+                                    }}
+                                    placeholder={placeholder}
+                                    style={{
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        border: 'none',
+                                        background: 'transparent',
+                                        color: theme.text,
+                                        fontFamily: 'monospace',
+                                        fontSize: '12px',
+                                        lineHeight: 1.45,
+                                        padding: '8px 10px',
+                                        outline: 'none',
+                                    }}
+                                />
+                            )}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <button
+                            type="button"
+                            onClick={() => commitDraft()}
+                            disabled={!hasPendingChanges}
+                            style={{
+                                border: `1px solid ${hasPendingChanges ? `${theme.primary}66` : theme.border}`,
+                                background: hasPendingChanges ? `${theme.primary}12` : theme.background,
+                                color: hasPendingChanges ? theme.primary : theme.textSec,
+                                borderRadius: '6px',
+                                cursor: hasPendingChanges ? 'pointer' : 'default',
+                                padding: '7px 10px',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                lineHeight: '14px',
+                                opacity: hasPendingChanges ? 1 : 0.7,
+                            }}
+                        >
+                            Apply
+                        </button>
+                        <button
+                            type="button"
+                            onClick={resetDraft}
+                            disabled={!hasPendingChanges}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                color: theme.textSec,
+                                borderRadius: '6px',
+                                cursor: hasPendingChanges ? 'pointer' : 'default',
+                                padding: '7px 10px',
+                                fontSize: '10px',
+                                lineHeight: '14px',
+                                opacity: hasPendingChanges ? 1 : 0.7,
+                            }}
+                        >
+                            Reset
+                        </button>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={metaPillStyle}>
+                            ID <code style={{ fontFamily: 'monospace', color: theme.text }}>{item.field}</code>
+                        </span>
+                        <span style={metaPillStyle}>
+                            {hasPendingChanges ? 'Draft changes' : 'Saved'}
+                        </span>
+                    </div>
+                    <div style={{
+                        padding: '4px 8px',
+                        borderRadius: '999px',
+                        border: `1px solid ${statusStyle.border}`,
+                        background: statusStyle.background,
+                        color: statusStyle.text,
+                        fontSize: '10px',
+                        lineHeight: '14px',
+                    }}>
+                        {formulaStatus.text}
+                    </div>
+                </div>
+                {serverError && (
+                    <div style={{ marginBottom: '8px', padding: '6px 8px', borderRadius: '6px', border: '1px solid #F59E0B55', background: '#F59E0B12', color: '#B45309', fontSize: '10px', lineHeight: 1.4 }}>
+                        ⚠ {SERVER_ERROR_LABELS[serverError] || `Server error: ${serverError}`}
+                    </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+                    {templateButtons.length > 0 && (
+                        <select
+                            value={templateValue}
+                            onChange={handleTemplateChange}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                color: theme.text,
+                                borderRadius: '6px',
+                                padding: '4px 8px',
+                                fontSize: '10px',
+                                lineHeight: '16px',
+                                outline: 'none',
+                            }}
+                            title="Formula templates"
+                        >
+                            <option value="">Templates</option>
+                            {templateButtons.map(/** @param {any} [template] @returns {any} */ (template) => (
+                                <option key={template.label} value={template.value}>{template.label}</option>
+                            ))}
+                        </select>
+                    )}
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {['+', '-', '*', '/', '(', ')', '* 100'].map((op) => (
+                            <button
+                                key={op}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => insertAtCursor(op)}
+                                style={opButtonStyle}
+                            >
+                                {op}
+                            </button>
+                        ))}
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textSec }}>
+                        {expanded ? 'Ctrl/Cmd + Enter to apply' : 'Enter to apply'}
+                    </div>
+                </div>
+                {nonFormulaVals.length > 0 && (
+                    <div>
+                        <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                            Insert measure
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            {nonFormulaVals.map(/** @param {any} [valueConfig] @returns {any} */ (valueConfig) => (
+                                <button
+                                    key={valueConfig.field}
+                                    type="button"
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => insertAtCursor(formatValueFormulaReference(valueConfig.field))}
+                                    style={chipButtonStyle}
+                                    title={`Insert: ${valueConfig.field}`}
+                                >
+                                    {formatDisplayLabel(valueConfig.field)}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+/** @type {Record<string, any>} */ const SERVER_ERROR_LABELS = {
+    self_reference: 'Formula references itself (server)',
+    circular_reference: 'Circular dependency with another formula (server)',
+    expression_error: 'Expression could not be evaluated (server)',
+    missing_reference: 'Unknown field reference (server)',
+};
+
+/** @param {any} p0 @returns {any} */ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClose, onRemove, displayedColumnOptions = [], availableRawFields = [], serverError = null }) {
+    /** @type {any} */ const inputRef = React.useRef(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [draft, setDraft] = React.useState({
+        label: item.label || '',
+        formula: item.formula || '',
+        formulaRef: getFormulaReferenceKey(item),
+        formulaScope: normalizeFormulaScope(item.formulaScope),
+    });
+
+    // Only reset the draft when a DIFFERENT formula is selected (item.field changes).
+    // Do NOT include item.label/formula/formulaRef here — external valConfig updates
+    // (e.g. sparkline toggle) can change the object reference and reset the user's
+    // in-progress edits mid-keystroke.
+    /** @type {any} */ const itemRef = React.useRef(item);
+    itemRef.current = item;
+    React.useEffect(() => {
+        const it = itemRef.current;
+        setDraft({
+            label: it.label || '',
+            formula: it.formula || '',
+            formulaRef: getFormulaReferenceKey(it),
+            formulaScope: normalizeFormulaScope(it.formulaScope),
+        });
+    }, [item.field]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    React.useEffect(() => {
+        if (!inputRef.current) return;
+        inputRef.current.focus();
+        const cursor = inputRef.current.value.length;
+        inputRef.current.setSelectionRange(cursor, cursor);
+    }, [item.field]);
+
+    /** @type {any} */ const referenceConfigs = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.field),
+        [valConfigs]
+    );
+    /** @type {any} */ const measureReferences = React.useMemo(
+        () => referenceConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config.agg !== 'formula'),
+        [referenceConfigs]
+    );
+    /** @type {any} */ const formulaReferences = React.useMemo(
+        () => referenceConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config.agg === 'formula' && config.field !== item.field),
+        [item.field, referenceConfigs]
+    );
+    /** @type {any} */ const columnReferenceOptions = React.useMemo(
+        () => (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+            .filter((column) => column && column.id && column.id !== item.field),
+        [displayedColumnOptions, item.field]
+    );
+    /** @type {any} */ const extraRawFields = React.useMemo(
+        () => {
+            /** @type {any} */ const existingFields = new Set(referenceConfigs.map(/** @param {any} [c] @returns {any} */ (c) => c.field).filter(Boolean));
+            return (Array.isArray(availableRawFields) ? availableRawFields : []).filter((f) => !existingFields.has(f));
+        },
+        [availableRawFields, referenceConfigs]
+    );
+    /** @type {any} */ const formulaStatus = React.useMemo(
+        () => inspectFormulaExpression(
+            draft.formula,
+            referenceConfigs,
+            item.field,
+            draft.formulaRef,
+            draft.formulaScope,
+            columnReferenceOptions,
+            extraRawFields
+        ),
+        [columnReferenceOptions, draft.formula, draft.formulaRef, draft.formulaScope, item.field, referenceConfigs, extraRawFields]
+    );
+    /** @type {any} */ const statusStyle = React.useMemo(
+        () => getFormulaStatusStyles(theme, formulaStatus.tone),
+        [formulaStatus.tone, theme]
+    );
+    /** @type {any} */ const templateButtons = React.useMemo(
+        () => (isColumnFormulaScope(draft.formulaScope)
+            ? buildColumnFormulaTemplates(columnReferenceOptions)
+            : buildFormulaTemplates(measureReferences)),
+        [columnReferenceOptions, draft.formulaScope, measureReferences]
+    );
+    /** @type {any} */ const placeholder = React.useMemo(
+        () => (isColumnFormulaScope(draft.formulaScope)
+            ? (buildSuggestedColumnFormula(columnReferenceOptions) || '[column_id] - [other_column_id]')
+            : (buildSuggestedFormula(measureReferences) || `${formatValueFormulaReference(draft.formulaRef || item.field)} * 100`)),
+        [columnReferenceOptions, draft.formulaRef, draft.formulaScope, item.field, measureReferences]
+    );
+    /** @type {any} */ const hasPendingChanges = draft.label !== (item.label || '')
+        || draft.formula !== (item.formula || '')
+        || draft.formulaRef !== getFormulaReferenceKey(item)
+        || draft.formulaScope !== normalizeFormulaScope(item.formulaScope);
+
+    /** @type {(...args: any[]) => any} */ const applyDraft = React.useCallback(() => {
+        /** @type {any} */ const nextFormulaRef = normalizeFormulaReferenceKey(draft.formulaRef, item.field);
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {any[]} */ const next = [...prev];
+            const current = next[idx];
+            if (!current) return prev;
+            /** @type {any} */ const oldFormulaRef = getFormulaReferenceKey(current);
+            let uniqueFormulaRef = nextFormulaRef;
+            /** @type {any} */ const taken = new Set(
+                next
+                    .filter((config, configIndex) => config && configIndex !== idx)
+                    .map((config) => (config.agg === 'formula' ? getFormulaReferenceKey(config) : config.field))
+                    .filter(Boolean)
+                    .map((token) => String(token).toLowerCase())
+            );
+            if (taken.has(uniqueFormulaRef.toLowerCase())) {
+                let suffix = 2;
+                let candidate = `${uniqueFormulaRef}${suffix}`;
+                while (taken.has(candidate.toLowerCase())) {
+                    suffix += 1;
+                    candidate = `${uniqueFormulaRef}${suffix}`;
+                }
+                uniqueFormulaRef = candidate;
+            }
+
+            next[idx] = {
+                ...current,
+                label: draft.label,
+                formula: draft.formula,
+                formulaRef: uniqueFormulaRef,
+                formulaScope: draft.formulaScope,
+            };
+
+            if (oldFormulaRef && oldFormulaRef !== uniqueFormulaRef) {
+                for (let configIndex = 0; configIndex < next.length; configIndex += 1) {
+                    if (configIndex === idx) continue;
+                    const config = next[configIndex];
+                    if (!config || config.agg !== 'formula' || !config.formula) continue;
+                    next[configIndex] = {
+                        ...config,
+                        formula: replaceIdentifierToken(config.formula, oldFormulaRef, uniqueFormulaRef),
+                    };
+                }
+            }
+            return next;
+        });
+    }, [draft.formula, draft.formulaRef, draft.formulaScope, draft.label, idx, item.field, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const closeModal = React.useCallback(() => {
+        setDraft({
+            label: item.label || '',
+            formula: item.formula || '',
+            formulaRef: getFormulaReferenceKey(item),
+            formulaScope: normalizeFormulaScope(item.formulaScope),
+        });
+        onClose();
+    }, [item.field, item.formula, item.formulaRef, item.formulaScope, item.label, onClose]);
+
+    /** @type {(...args: any[]) => any} */ const insertAtCursor = React.useCallback((text) => {
+        const el = inputRef.current;
+        if (!el) return;
+        /** @type {any} */ const formulaText = draft.formula || '';
+        /** @type {any} */ const start = el.selectionStart ?? formulaText.length;
+        /** @type {any} */ const end = el.selectionEnd ?? formulaText.length;
+        const nextFormula = `${formulaText.slice(0, start)}${text}${formulaText.slice(end)}`;
+        setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({ ...prev, formula: nextFormula }));
+        /** @type {any} */ const nextCursor = start + text.length;
+        setTimeout(() => {
+            if (!inputRef.current) return;
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(nextCursor, nextCursor);
+        }, 0);
+    }, [draft.formula]);
+
+    /** @type {(...args: any[]) => any} */ const applyAndClose = React.useCallback(() => {
+        applyDraft();
+        onClose();
+    }, [applyDraft, onClose]);
+
+    /** @type {Record<string, any>} */ const tokenButtonStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.background,
+        color: theme.text,
+        borderRadius: '999px',
+        cursor: 'pointer',
+        padding: '3px 9px',
+        fontSize: '10px',
+        lineHeight: '16px',
+    };
+    /** @type {Record<string, any>} */ const operatorButtonStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.background,
+        color: theme.text,
+        borderRadius: '6px',
+        cursor: 'pointer',
+        padding: '3px 8px',
+        fontSize: '10px',
+        lineHeight: '16px',
+        fontFamily: 'monospace',
+    };
+
+    return (
+        <div
+            onClick={closeModal}
+            style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10006,
+                background: 'rgba(2, 6, 23, 0.45)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '24px',
+            }}
+        >
+            <div
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape') closeModal();
+                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') applyAndClose();
+                }}
+                style={{
+                    width: 'min(760px, 92vw)',
+                    maxHeight: '80vh',
+                    overflowY: 'auto',
+                    background: theme.surfaceBg || theme.background || '#fff',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: theme.radius || '16px',
+                    boxShadow: theme.shadowMd || '0 18px 40px rgba(0,0,0,0.28)',
+                    padding: '18px',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
+                    <div>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>Formula Editor</div>
+                        <div style={{ fontSize: '11px', color: theme.textSec }}>
+                            Use a stable reference key for formulas. Renaming the key updates dependent formulas.
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={closeModal}
+                        style={{
+                            border: `1px solid ${theme.border}`,
+                            background: theme.headerSubtleBg || theme.background,
+                            color: theme.text,
+                            borderRadius: '8px',
+                            padding: '7px 10px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                        }}
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '180px' }}>
+                        <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Label</span>
+                        <input
+                            value={draft.label}
+                            onChange={(event) => setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({ ...prev, label: event.target.value }))}
+                            placeholder="Formula label"
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                color: theme.text,
+                                borderRadius: '8px',
+                                padding: '8px 10px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                outline: 'none',
+                            }}
+                        />
+                    </label>
+                    <label style={{ minWidth: '180px', flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Reference key</span>
+                        <input
+                            value={draft.formulaRef}
+                            onChange={(event) => setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({ ...prev, formulaRef: normalizeFormulaReferenceKey(event.target.value, item.field) }))}
+                            placeholder="formula1"
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.headerSubtleBg || theme.background,
+                                color: theme.text,
+                                borderRadius: '8px',
+                                padding: '8px 10px',
+                                fontSize: '12px',
+                                fontFamily: 'monospace',
+                                outline: 'none',
+                            }}
+                        />
+                    </label>
+                    <label style={{ minWidth: '180px', flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Formula type</span>
+                        <select
+                            value={draft.formulaScope}
+                            onChange={(event) => {
+                                /** @type {any} */ const nextScope = normalizeFormulaScope(event.target.value);
+                                setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({
+                                    ...prev,
+                                    formulaScope: nextScope,
+                                    formula: prev.formula || (
+                                        nextScope === 'columns'
+                                            ? buildSuggestedColumnFormula(columnReferenceOptions)
+                                            : buildSuggestedFormula(measureReferences)
+                                    ),
+                                }));
+                            }}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.headerSubtleBg || theme.background,
+                                color: theme.text,
+                                borderRadius: '8px',
+                                padding: '8px 10px',
+                                fontSize: '12px',
+                                outline: 'none',
+                            }}
+                        >
+                            <option value="measures">Value formula</option>
+                            <option value="columns">Displayed columns</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Formula</div>
+                    <textarea
+                        ref={inputRef}
+                        value={draft.formula}
+                        onChange={(event) => setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({ ...prev, formula: event.target.value }))}
+                        placeholder={placeholder}
+                        rows={4}
+                        style={{
+                            width: '100%',
+                            boxSizing: 'border-box',
+                            resize: 'vertical',
+                            border: `1px solid ${theme.border}`,
+                            background: theme.background,
+                            color: theme.text,
+                            borderRadius: '10px',
+                            fontFamily: 'monospace',
+                            fontSize: '12px',
+                            lineHeight: 1.5,
+                            padding: '10px 12px',
+                            outline: 'none',
+                        }}
+                    />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    <div style={{
+                        padding: '5px 9px',
+                        borderRadius: '999px',
+                        border: `1px solid ${statusStyle.border}`,
+                        background: statusStyle.background,
+                        color: statusStyle.text,
+                        fontSize: '10px',
+                        lineHeight: '14px',
+                    }}>
+                        {formulaStatus.text}
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textSec }}>
+                        Ctrl/Cmd + Enter applies
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    {templateButtons.map(/** @param {any} [template] @returns {any} */ (template) => (
+                        <button
+                            key={template.label}
+                            type="button"
+                            onClick={() => setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({ ...prev, formula: template.value }))}
+                            style={tokenButtonStyle}
+                        >
+                            {template.label}
+                        </button>
+                    ))}
+                    {['+', '-', '*', '/', '(', ')', '* 100'].map((op) => (
+                        <button
+                            key={op}
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => insertAtCursor(op)}
+                            style={operatorButtonStyle}
+                        >
+                            {op}
+                        </button>
+                    ))}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginBottom: '14px' }}>
+                    {isColumnFormulaScope(draft.formulaScope) ? (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Rendered Columns</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {columnReferenceOptions.map(/** @param {any} [column] @returns {any} */ (column) => (
+                                    <button
+                                        key={column.id}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(formatColumnFormulaReference(column.id))}
+                                        style={tokenButtonStyle}
+                                        title={`Insert ${column.id}`}
+                                    >
+                                        {column.label || column.id}
+                                    </button>
+                                ))}
+                                {columnReferenceOptions.length === 0 && (
+                                    <span style={{ fontSize: '11px', color: theme.textSec }}>
+                                        Render the pivot once, or type a bracketed column id directly.
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Measures</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {measureReferences.map(/** @param {any} [config] @returns {any} */ (config) => (
+                                    <button
+                                        key={config.field}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(config.field))}
+                                        style={tokenButtonStyle}
+                                        title={`Insert ${config.field}`}
+                                    >
+                                        {config.field}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {!isColumnFormulaScope(draft.formulaScope) && formulaReferences.length > 0 && (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Formula References</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {formulaReferences.map(/** @param {any} [config] @returns {any} */ (config) => (
+                                    <button
+                                        key={config.field}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(getFormulaReferenceKey(config)))}
+                                        style={tokenButtonStyle}
+                                        title={`${getFormulaReferenceKey(config)}${config.label ? ` (${config.label})` : ''}`}
+                                    >
+                                        {getFormulaReferenceKey(config)}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {!isColumnFormulaScope(draft.formulaScope) && extraRawFields.length > 0 && (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Data Fields (auto-aggregated as sum)</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {extraRawFields.map(/** @param {any} [f] @returns {any} */ (f) => (
+                                    <button
+                                        key={f}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(f))}
+                                        style={{ ...tokenButtonStyle, borderColor: `${theme.primary}66`, color: theme.primary, background: `${theme.primary}0d` }}
+                                        title={`Insert: ${f}`}
+                                    >
+                                        {formatDisplayLabel(f)}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            onRemove(idx);
+                            onClose();
+                        }}
+                        style={{
+                            border: `1px solid ${theme.border}`,
+                            background: theme.background,
+                            color: theme.textSec,
+                            borderRadius: '8px',
+                            padding: '8px 12px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                        }}
+                    >
+                        Delete Formula
+                    </button>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            onClick={closeModal}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                color: theme.textSec,
+                                borderRadius: '8px',
+                                padding: '8px 12px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                            }}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            onClick={applyAndClose}
+                            disabled={!hasPendingChanges}
+                            style={{
+                                border: `1px solid ${hasPendingChanges ? `${theme.primary}66` : theme.border}`,
+                                background: hasPendingChanges ? `${theme.primary}14` : theme.background,
+                                color: hasPendingChanges ? theme.primary : theme.textSec,
+                                borderRadius: '8px',
+                                padding: '8px 12px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: hasPendingChanges ? 'pointer' : 'default',
+                                opacity: hasPendingChanges ? 1 : 0.7,
+                            }}
+                        >
+                            Apply
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** @param {any} p0 @returns {any} */ function ResizableFieldPanel({
+    panelId,
+    panelLabel,
+    size,
+    onSizeChange,
+    theme,
+    outerStyle = {},
+    contentStyle = {},
+    children,
+}) {
+    /** @type {any} */ const panelRef = React.useRef(null);
+    /** @type {any} */ const cleanupRef = React.useRef(null);
+    /** @type {any} */ const limits = React.useMemo(() => getFieldPanelLimits(panelId), [panelId]);
+    /** @type {any} */ const resolvedSize = React.useMemo(
+        () => sanitizeFieldPanelSizeEntry(panelId, size),
+        [panelId, size]
+    );
+
+    /** @type {(...args: any[]) => any} */ const stopActiveResize = React.useCallback(() => {
+        if (cleanupRef.current) {
+            const cleanup = cleanupRef.current;
+            cleanupRef.current = null;
+            cleanup();
+        }
+    }, []);
+
+    React.useEffect(() => (
+        () => stopActiveResize()
+    ), [stopActiveResize]);
+
+    /** @type {(...args: any[]) => any} */ const startResize = React.useCallback((event, direction) => {
+        if (!panelRef.current || typeof onSizeChange !== 'function') return;
+        event.preventDefault();
+        event.stopPropagation();
+        stopActiveResize();
+
+        /** @type {any} */ const rect = panelRef.current.getBoundingClientRect();
+        /** @type {any} */ const parentRect = panelRef.current.parentElement
+            ? panelRef.current.parentElement.getBoundingClientRect()
+            : rect;
+        /** @type {Record<string, any>} */ const startState = {
+            startX: event.clientX,
+            startY: event.clientY,
+            startWidth: rect.width,
+            startHeight: rect.height,
+            maxWidth: Math.max(limits.minWidth, Math.min(limits.maxWidth, Math.floor(parentRect.width))),
+        };
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = direction === 'both'
+            ? 'nwse-resize'
+            : (direction === 'width' ? 'ew-resize' : 'ns-resize');
+        document.body.style.userSelect = 'none';
+
+        /** @param {any} [moveEvent] @returns {any} */ const onMouseMove = (moveEvent) => {
+            /** @type {any} */ const deltaX = moveEvent.clientX - startState.startX;
+            /** @type {any} */ const deltaY = moveEvent.clientY - startState.startY;
+            /** @type {any} */ const nextWidth = direction === 'height'
+                ? resolvedSize.width
+                : Math.max(limits.minWidth, Math.min(startState.maxWidth, Math.round(startState.startWidth + deltaX)));
+            /** @type {any} */ const nextHeight = direction === 'width'
+                ? resolvedSize.height
+                : Math.max(limits.minHeight, Math.min(limits.maxHeight, Math.round(startState.startHeight + deltaY)));
+            onSizeChange(panelId, { width: nextWidth, height: nextHeight });
+        };
+
+        /** @returns {any} */ const cleanup = () => {
+            document.body.style.cursor = previousCursor;
+            document.body.style.userSelect = previousUserSelect;
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+
+        /** @returns {any} */ const onMouseUp = () => stopActiveResize();
+        cleanupRef.current = cleanup;
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    }, [
+        limits.maxHeight,
+        limits.maxWidth,
+        limits.minHeight,
+        limits.minWidth,
+        onSizeChange,
+        panelId,
+        resolvedSize.height,
+        resolvedSize.width,
+        stopActiveResize,
+    ]);
+
+    const handleColor = `${theme.primary}55`;
+
+    return (
+        <div
+            ref={panelRef}
+            style={{
+                position: 'relative',
+                width: resolvedSize.width === null ? '100%' : `${resolvedSize.width}px`,
+                maxWidth: '100%',
+                height: `${resolvedSize.height}px`,
+                minHeight: `${limits.minHeight}px`,
+                maxHeight: `${limits.maxHeight}px`,
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+                ...outerStyle,
+            }}
+        >
+            <div
+                style={{
+                    width: '100%',
+                    height: '100%',
+                    overflow: 'auto',
+                    boxSizing: 'border-box',
+                    ...contentStyle,
+                }}
+            >
+                {children}
+            </div>
+            <div
+                onMouseDown={(event) => startResize(event, 'width')}
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    bottom: '12px',
+                    width: '12px',
+                    cursor: 'ew-resize',
+                    zIndex: 4,
+                    touchAction: 'none',
+                }}
+                title={`Resize ${panelLabel} width`}
+            >
+            </div>
+            <div
+                onMouseDown={(event) => startResize(event, 'height')}
+                style={{
+                    position: 'absolute',
+                    left: 0,
+                    right: '12px',
+                    bottom: 0,
+                    height: '12px',
+                    cursor: 'ns-resize',
+                    zIndex: 4,
+                    touchAction: 'none',
+                }}
+                title={`Resize ${panelLabel} height`}
+            >
+            </div>
+            <div
+                onMouseDown={(event) => startResize(event, 'both')}
+                style={{
+                    position: 'absolute',
+                    right: 0,
+                    bottom: 0,
+                    width: '14px',
+                    height: '14px',
+                    cursor: 'nwse-resize',
+                    zIndex: 5,
+                    touchAction: 'none',
+                }}
+                title={`Resize ${panelLabel}`}
+            >
+                <div
+                    style={{
+                        position: 'absolute',
+                        right: '4px',
+                        bottom: '4px',
+                        width: '3px',
+                        height: '3px',
+                        borderRadius: '999px',
+                        background: handleColor,
+                        boxShadow: `-4px 0 0 ${handleColor}, 0 -4px 0 ${handleColor}, -4px -4px 0 ${handleColor}`,
+                    }}
+                />
+            </div>
+        </div>
+    );
+}
+
+/** @param {any} p0 @returns {any} */ function MeasureAxisControls({ measureAxis, setMeasureAxis, theme, valueSelectStyle, regularValueCount }) {
+    /** @type {any} */ const normalized = React.useMemo(() => normalizeMeasureAxisPanelValue(measureAxis), [measureAxis]);
+    /** @type {(...args: any[]) => any} */ const updateMeasureAxis = React.useCallback((patch) => {
+        if (typeof setMeasureAxis !== 'function') return;
+        setMeasureAxis(/** @param {any} [previous] @returns {any} */ (previous) => ({
+            ...normalizeMeasureAxisPanelValue(previous),
+            ...(typeof patch === 'function' ? patch(normalizeMeasureAxisPanelValue(previous)) : patch),
+        }));
+    }, [setMeasureAxis]);
+
+    /** @type {Record<string, any>} */ const compactInputStyle = {
+        ...valueSelectStyle,
+        width: '112px',
+        padding: '3px 6px',
+        fontSize: '10px',
+    };
+
+    return (
+        <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'wrap',
+            padding: '6px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radiusSm || '6px',
+            background: theme.surfaceInset || theme.headerSubtleBg || theme.background,
+        }}>
+            <span style={{fontSize:'10px', color: theme.textSec, fontWeight: 700, textTransform:'uppercase'}}>Values as</span>
+            <select
+                value={normalized.placement}
+                onChange={(event) => updateMeasureAxis({ placement: event.target.value })}
+                style={{...valueSelectStyle, width:'98px'}}
+                title="Values placement"
+            >
+                <option value="none">Columns</option>
+                <option value="rows">Rows</option>
+                <option value="columns">Column Axis</option>
+            </select>
+            {normalized.placement !== 'none' && (
+                <>
+                    <input
+                        value={normalized.labelField}
+                        onChange={(event) => updateMeasureAxis({ labelField: event.target.value })}
+                        style={compactInputStyle}
+                        title="Measure label field"
+                    />
+                    <input
+                        value={normalized.valueField}
+                        onChange={(event) => updateMeasureAxis({ valueField: event.target.value })}
+                        style={{...compactInputStyle, width:'82px'}}
+                        title="Measure value field"
+                    />
+                    <label style={{display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color: theme.textSec}}>
+                        <input
+                            type="checkbox"
+                            checked={normalized.suppressEmptyMembers}
+                            onChange={(event) => updateMeasureAxis({ suppressEmptyMembers: event.target.checked })}
+                        />
+                        Empty
+                    </label>
+                    <label style={{display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color: theme.textSec}}>
+                        <input
+                            type="checkbox"
+                            checked={normalized.suppressZeroMembers}
+                            onChange={(event) => updateMeasureAxis({ suppressZeroMembers: event.target.checked })}
+                        />
+                        Zero
+                    </label>
+                </>
+            )}
+            <span style={{fontSize:'10px', color: theme.textSec}}>
+                {regularValueCount} selected
+            </span>
+        </div>
+    );
+}
+
+/** @type {any} */ export const SidebarPanel = React.memo(/** @param {any} p0 @returns {any} */ function SidebarPanel({
+    sidebarTab, setSidebarTab,
+    rowFields, setRowFields,
+    colFields, setColFields,
+    valConfigs, setValConfigs,
+    measureAxis = {},
+    setMeasureAxis = null,
+    columnVisibility, setColumnVisibility,
+    columnPinning, setColumnPinning,
+    availableFields,
+    table,
+    pinningPresets,
+    showNotification,
+    filterAnchorEl, setFilterAnchorEl,
+    colSearch, setColSearch,
+    colTypeFilter, setColTypeFilter,
+    selectedCols, setSelectedCols,
+    dropLine, onDragStart, onDragOver, onDrop, onDragEnd,
+    onKeyboardFieldDrop,
+    handleHeaderFilter, handleFilterClick, requestFilterOptions,
+    handleExpandAllRows, handlePinColumn,
+    toggleAllColumnsPinned,
+    activeFilterCol, closeFilterPopover, filterOptions,
+    filterOptionMeta = {},
+    clientFilterOptionMap = {},
+    data,
+    sidebarWidth, setSidebarWidth,
+    fieldPanelSizes, setFieldPanelSizes,
+    fixedSparklineValueKeys = [],
+    sparklineFields = null,
+    displayedColumnOptions = [],
+    reportEditorSelection = null,
+    showReportConfigColumn = true,
+    setShowReportConfigColumn = null,
+    formulaErrors = {},
+    serverSide = false,
+}) {
+    usePivotRenderCounter('SidebarPanel');
+    /** @type {any} */ const { theme, styles } = usePivotTheme();
+    /** @type {any} */ const {
+        filters, setFilters,
+        pivotMode,
+        reportDef, setReportDef,
+        savedReports, setSavedReports,
+        activeReportId, setActiveReportId,
+        customDimensions, setCustomDimensions,
+    } = usePivotConfig();
+    /** @type {[any, (...args: any[]) => any]} */ const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
+    /** @type {[any, (...args: any[]) => any]} */ const [activeFormulaField, setActiveFormulaField] = React.useState(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [formulaModalField, setFormulaModalField] = React.useState(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [reportTab, setReportTab] = React.useState('report');
+    /** @type {any} */ const reportFieldsDragIdx = React.useRef(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [reportFieldsDragOver, setReportFieldsDragOver] = React.useState(null);
+    /** @type {any} */ const sidebarRef = React.useRef(null);
+    /** @type {any} */ const sidebarScrollTopRef = React.useRef(0);
+    /** @type {any} */ const resizeDragRef = React.useRef(null);
+    /** @type {any} */ const dragScrollRafRef = React.useRef(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [keyboardDragItem, setKeyboardDragItem] = React.useState(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [availableFieldSearch, setAvailableFieldSearch] = React.useState('');
+    /** @type {any} */ const fixedSparklineValueKeySet = React.useMemo(
+        () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
+        [fixedSparklineValueKeys]
+    );
+    /** @type {(...args: any[]) => any} */ const getFieldLabel = React.useCallback(
+        (field) => formatCustomAwareFieldLabel(field, customDimensions),
+        [customDimensions]
+    );
+    /** @type {any} */ const normalizedMeasureAxis = React.useMemo(
+        () => normalizeMeasureAxisPanelValue(measureAxis),
+        [measureAxis]
+    );
+    /** @type {any} */ const measureAxisLabelField = normalizedMeasureAxis.labelField || 'Measure Name';
+    /** @type {any} */ const allAvailableFields = React.useMemo(
+        () => (availableFields || []).filter(/** @param {any} [field] @returns {any} */ (field) => field),
+        [availableFields]
+    );
+    /** @type {any} */ const baseAvailableFields = React.useMemo(
+        () => allAvailableFields.filter(/** @param {any} [field] @returns {any} */ (field) => field && !isCustomCategoryField(field)),
+        [allAvailableFields]
+    );
+    const showMeasureAxisAvailableField = (
+        Array.isArray(valConfigs)
+        && valConfigs.length > 0
+        && measureAxisLabelField
+        && !allAvailableFields.includes(measureAxisLabelField)
+    );
+    /** @type {any} */ const displayAvailableFields = React.useMemo(
+        () => showMeasureAxisAvailableField
+            ? [measureAxisLabelField, ...allAvailableFields]
+            : allAvailableFields,
+        [allAvailableFields, measureAxisLabelField, showMeasureAxisAvailableField]
+    );
+    /** @type {any} */ const normalizedAvailableFieldSearch = availableFieldSearch.trim().toLowerCase();
+    /** @type {(...args: any[]) => any} */ const matchesAvailableFieldSearch = React.useCallback((field) => {
+        if (!normalizedAvailableFieldSearch) return true;
+        /** @type {any} */ const virtualSearchText = showMeasureAxisAvailableField && field === measureAxisLabelField
+            ? 'measure name measure names metric metrics value values'
+            : '';
+        return (
+            String(field || '').toLowerCase().includes(normalizedAvailableFieldSearch)
+            || String(getFieldLabel(field) || '').toLowerCase().includes(normalizedAvailableFieldSearch)
+            || virtualSearchText.includes(normalizedAvailableFieldSearch)
+        );
+    }, [getFieldLabel, measureAxisLabelField, normalizedAvailableFieldSearch, showMeasureAxisAvailableField]);
+    /** @type {any} */ const visibleAvailableFields = React.useMemo(
+        () => displayAvailableFields.length > 8
+            ? displayAvailableFields.filter(matchesAvailableFieldSearch)
+            : displayAvailableFields,
+        [displayAvailableFields, matchesAvailableFieldSearch]
+    );
+    /** @type {any} */ const visibleBaseAvailableFields = React.useMemo(
+        () => baseAvailableFields.length > 8
+            ? baseAvailableFields.filter(matchesAvailableFieldSearch)
+            : baseAvailableFields,
+        [baseAvailableFields, matchesAvailableFieldSearch]
+    );
+    /** @type {(...args: any[]) => any} */ const handleDeleteCustomCategoryField = React.useCallback((field) => {
+        setRowFields(/** @param {any} [prev] @returns {any} */ (prev) => (prev || []).filter(/** @param {any} [item] @returns {any} */ (item) => item !== field));
+        setColFields(/** @param {any} [prev] @returns {any} */ (prev) => (prev || []).filter(/** @param {any} [item] @returns {any} */ (item) => item !== field));
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => (prev || []).filter(/** @param {any} [item] @returns {any} */ (item) => !(item && item.field === field)));
+        setFilters(/** @param {any} [prev] @returns {any} */ (prev) => {
+            if (!prev || !Object.prototype.hasOwnProperty.call(prev, field)) return prev;
+            /** @type {Record<string, any>} */ const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+    }, [setColFields, setFilters, setRowFields, setValConfigs]);
+
+    /** @type {(...args: any[]) => any} */ const startDragScroll = React.useCallback((e) => {
+        const el = sidebarRef.current;
+        if (!el) return;
+        const ZONE = 60;
+        const SPEED = 12;
+        /** @type {any} */ const rect = el.getBoundingClientRect();
+        const y = e.clientY;
+        /** @type {any} */ const distTop = y - rect.top;
+        /** @type {any} */ const distBottom = rect.bottom - y;
+        let dir = 0;
+        if (distTop < ZONE && distTop >= 0) dir = -1;
+        else if (distBottom < ZONE && distBottom >= 0) dir = 1;
+        if (dir === 0) {
+            if (dragScrollRafRef.current) { cancelAnimationFrame(dragScrollRafRef.current); dragScrollRafRef.current = null; }
+            return;
+        }
+        /** @returns {any} */ const scroll = () => {
+            if (!sidebarRef.current) return;
+            sidebarRef.current.scrollTop += dir * SPEED;
+            dragScrollRafRef.current = requestAnimationFrame(scroll);
+        };
+        if (!dragScrollRafRef.current) dragScrollRafRef.current = requestAnimationFrame(scroll);
+    }, []);
+
+    /** @type {(...args: any[]) => any} */ const stopDragScroll = React.useCallback(() => {
+        if (dragScrollRafRef.current) { cancelAnimationFrame(dragScrollRafRef.current); dragScrollRafRef.current = null; }
+    }, []);
+    /** @type {any} */ const formulaConfigs = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.agg === 'formula'),
+        [valConfigs]
+    );
+    /** @type {any} */ const formulaCount = React.useMemo(
+        () => formulaConfigs.length,
+        [formulaConfigs]
+    );
+    /** @type {any} */ const regularValueCount = React.useMemo(
+        () => valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.agg !== 'formula').length,
+        [valConfigs]
+    );
+    /** @type {any} */ const zoneDescriptors = React.useMemo(() => ([
+        {id:'rows', label:'Rows', icon: <Icons.List/>},
+        {id:'cols', label:'Columns', icon: <Icons.Columns/>},
+        {id:'vals', label:'Values', icon: <Icons.Sigma/>},
+        {id:'filter', label:'Filters', icon: <Icons.Filter/>}
+    ]), []);
+    /** @type {any} */ const zoneItemsById = React.useMemo(() => ({
+        filter: Object.keys(filters || {}).filter(k => k !== 'global'),
+        rows: rowFields || [],
+        cols: colFields || [],
+        vals: valConfigs || [],
+    }), [colFields, filters, rowFields, valConfigs]);
+    /** @type {(...args: any[]) => any} */ const cancelKeyboardFieldDrag = React.useCallback(() => {
+        if (keyboardDragItem && showNotification) {
+            showNotification('Keyboard move cancelled.', 'info');
+        }
+        setKeyboardDragItem(null);
+    }, [keyboardDragItem, showNotification]);
+    /** @type {(...args: any[]) => any} */ const startKeyboardFieldDrag = React.useCallback((field, zone, idx, label) => {
+        if (typeof onKeyboardFieldDrop !== 'function') return;
+        /** @type {Record<string, any>} */ const nextItem = { field, zone, idx, label };
+        setKeyboardDragItem(nextItem);
+        if (showNotification) {
+            showNotification(`Picked up ${label}. Focus a target field or zone and press Enter.`, 'info');
+        }
+    }, [onKeyboardFieldDrop, showNotification]);
+    /** @type {(...args: any[]) => any} */ const dropKeyboardField = React.useCallback((targetZone, targetIdx = null) => {
+        if (!keyboardDragItem || typeof onKeyboardFieldDrop !== 'function') return false;
+        /** @type {any} */ const zoneItems = zoneItemsById[targetZone] || [];
+        /** @type {any} */ const numericTargetIdx = Number(targetIdx);
+        /** @type {any} */ const resolvedTargetIdx = Number.isFinite(numericTargetIdx)
+            ? Math.max(0, Math.min(Math.floor(numericTargetIdx), zoneItems.length))
+            : zoneItems.length;
+        /** @type {any} */ const applied = onKeyboardFieldDrop({
+            field: keyboardDragItem.field,
+            srcZone: keyboardDragItem.zone,
+            srcIdx: keyboardDragItem.idx,
+            targetZone,
+            targetIdx: resolvedTargetIdx,
+            source: 'layout:keyboard-drop',
+        });
+        if (applied !== false) {
+            if (showNotification) showNotification(`Moved ${keyboardDragItem.label}.`, 'success');
+            setKeyboardDragItem(null);
+        }
+        return applied !== false;
+    }, [keyboardDragItem, onKeyboardFieldDrop, showNotification, zoneItemsById]);
+    /** @type {(...args: any[]) => any} */ const handleDraggableKeyDown = React.useCallback((event, field, zone, idx, label) => {
+        if (isKeyboardControlTarget(event.target)) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelKeyboardFieldDrag();
+            return;
+        }
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (keyboardDragItem) {
+            dropKeyboardField(zone, idx);
+        } else {
+            startKeyboardFieldDrag(field, zone, idx, label);
+        }
+    }, [cancelKeyboardFieldDrag, dropKeyboardField, keyboardDragItem, startKeyboardFieldDrag]);
+    /** @type {(...args: any[]) => any} */ const handleDropZoneKeyDown = React.useCallback((event, zoneId) => {
+        if (isKeyboardControlTarget(event.target)) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelKeyboardFieldDrag();
+            return;
+        }
+        if (!keyboardDragItem || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dropKeyboardField(zoneId, (zoneItemsById[zoneId] || []).length);
+    }, [cancelKeyboardFieldDrag, dropKeyboardField, keyboardDragItem, zoneItemsById]);
+
+    // Sidebar resize drag handlers
+    /** @type {(...args: any[]) => any} */ const onResizeMouseDown = React.useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        /** @type {any} */ const startWidth = sidebarWidth || 288;
+        resizeDragRef.current = { startX, startWidth };
+        /** @param {any} [ev] @returns {any} */ const onMouseMove = (ev) => {
+            /** @type {any} */ const delta = ev.clientX - resizeDragRef.current.startX;
+            /** @type {any} */ const next = Math.max(200, Math.min(520, resizeDragRef.current.startWidth + delta));
+            setSidebarWidth(next);
+        };
+        /** @returns {any} */ const onMouseUp = () => {
+            resizeDragRef.current = null;
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    }, [sidebarWidth, setSidebarWidth]);
+    /** @type {(...args: any[]) => any} */ const handleFieldPanelSizeChange = React.useCallback((panelId, nextSize) => {
+        if (typeof setFieldPanelSizes !== 'function') return;
+        setFieldPanelSizes(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {any} */ const next = mergeFieldPanelSize(prev, panelId, nextSize);
+            /** @type {any} */ const previousEntry = prev && prev[panelId] ? prev[panelId] : null;
+            const nextEntry = next[panelId];
+            if (
+                previousEntry
+                && previousEntry.width === nextEntry.width
+                && previousEntry.height === nextEntry.height
+            ) {
+                return prev;
+            }
+            return next;
+        });
+    }, [setFieldPanelSizes]);
+    /** @type {any} */ const dropZonePadding = (styles.dropZone && styles.dropZone.padding) || '8px';
+    /** @type {any} */ const dropZoneBaseStyle = React.useMemo(() => {
+        /** @type {Record<string, any>} */ const baseStyle = { ...(styles.dropZone || {}) };
+        delete baseStyle.minHeight;
+        delete baseStyle.maxHeight;
+        delete baseStyle.overflowY;
+        delete baseStyle.padding;
+        delete baseStyle.border;
+        delete baseStyle.boxShadow;
+        return baseStyle;
+    }, [styles.dropZone]);
+    /** @type {(...args: any[]) => any} */ const getFilterOptionsForColumn = React.useCallback((columnId) => {
+        if (filterOptions && filterOptions[columnId]) return filterOptions[columnId];
+        if (clientFilterOptionMap && clientFilterOptionMap[columnId]) return clientFilterOptionMap[columnId];
+        if (!table || !table.getColumn) return [];
+        /** @type {any} */ const col = table.getColumn(columnId);
+        if (!col) return [];
+
+        /** @type {any} */ const unique = new Set();
+        /** @type {any} */ const rows = table.getCoreRowModel ? table.getCoreRowModel().rows : [];
+        rows.forEach(/** @param {any} [row] @returns {any} */ (row) => {
+            /** @type {any} */ const val = row.getValue(columnId);
+            if (val !== null && val !== undefined && val !== '') unique.add(val);
+        });
+
+        return Array.from(unique).sort((left, right) => (
+            String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' })
+        ));
+    }, [clientFilterOptionMap, filterOptions, table]);
+    /** @type {any} */ const valueSelectStyle = React.useMemo(() => ({
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
+        color: theme.text,
+        cursor: 'pointer',
+        borderRadius: theme.radiusSm || '8px',
+        fontSize: '9px',
+        lineHeight: 1.2,
+        padding: '1px 4px',
+        minHeight: '20px',
+        outline: 'none',
+    }), [theme.background, theme.border, theme.headerSubtleBg, theme.radiusSm, theme.surfaceInset, theme.text]);
+    /** @type {(...args: any[]) => any} */ const handleValueAggChange = React.useCallback((measureIndex, nextAgg) => {
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {any[]} */ const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+
+            if (isWeightedAverageAgg(nextAgg) && !current.weightField) {
+                /** @type {any} */ const suggestedWeightField = Array.isArray(baseAvailableFields) && baseAvailableFields.length > 0
+                    ? (baseAvailableFields.find((field) => field !== current.field) || baseAvailableFields[0])
+                    : '';
+                /** @type {any} */ const promptValue = typeof window !== 'undefined'
+                    ? window.prompt(
+                        `Weight field for weighted average of ${formatDisplayLabel(current.field)}`,
+                        current.weightField || suggestedWeightField || ''
+                    )
+                    : current.weightField || suggestedWeightField || '';
+                /** @type {any} */ const chosenWeightField = typeof promptValue === 'string' ? promptValue.trim() : '';
+
+                if (!chosenWeightField) {
+                    if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
+                    return prev;
+                }
+                if (Array.isArray(baseAvailableFields) && baseAvailableFields.length > 0 && !baseAvailableFields.includes(chosenWeightField)) {
+                    if (showNotification) showNotification(`Unknown weight field: ${chosenWeightField}`, 'warning');
+                    return prev;
+                }
+
+                next[measureIndex] = { ...current, agg: nextAgg, weightField: chosenWeightField };
+                return next;
+            }
+
+            next[measureIndex] = { ...current, agg: nextAgg };
+            return next;
+        });
+    }, [baseAvailableFields, setValConfigs, showNotification]);
+    /** @type {(...args: any[]) => any} */ const handleValueWeightFieldChange = React.useCallback((measureIndex, nextWeightField) => {
+        if (!nextWeightField) {
+            if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
+            return;
+        }
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {any[]} */ const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+            next[measureIndex] = { ...current, weightField: nextWeightField };
+            return next;
+        });
+    }, [setValConfigs, showNotification]);
+    /** @type {(...args: any[]) => any} */ const handleValueWindowFnChange = React.useCallback((measureIndex, nextWindowFn) => {
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => {
+            /** @type {any[]} */ const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+            next[measureIndex] = {
+                ...current,
+                windowFn: nextWindowFn === 'none' ? null : nextWindowFn,
+            };
+            return next;
+        });
+    }, [setValConfigs]);
+    /** @type {(...args: any[]) => any} */ const handleAddFormulaValue = React.useCallback(() => {
+        /** @type {any} */ const nextFieldId = createFormulaFieldId(valConfigs);
+        /** @type {any} */ const baseValues = valConfigs.filter(/** @param {any} [config] @returns {any} */ (config) => config && config.agg !== 'formula');
+        const nextLabel = `Formula ${formulaCount + 1}`;
+        /** @type {any} */ const nextFormula = buildSuggestedFormula(baseValues);
+        /** @type {any} */ const nextFormulaRef = buildFormulaReferenceKey(nextLabel, valConfigs, nextFieldId);
+        setActiveFormulaField(nextFieldId);
+        setFormulaModalField(nextFieldId);
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => [
+            ...prev,
+            {
+                field: nextFieldId,
+                agg: 'formula',
+                label: nextLabel,
+                formula: nextFormula,
+                formulaRef: nextFormulaRef,
+                formulaScope: 'measures',
+            },
+        ]);
+        if (showNotification) {
+            if (baseValues.length === 0) {
+                showNotification('Added a formula column. Add at least one regular value measure to reference in it.', 'warning');
+            } else {
+                showNotification(`Added ${nextLabel}.`, 'success');
+            }
+        }
+    }, [formulaCount, setFormulaModalField, setValConfigs, setActiveFormulaField, showNotification, valConfigs]);
+    /** @param {any} [e] @param {any} [columnId] @returns {any} */ const openSidebarFilter = (e, columnId) => {
+        e.stopPropagation();
+        if (sidebarRef.current) {
+            sidebarScrollTopRef.current = sidebarRef.current.scrollTop;
+        }
+        setSidebarFilterState(/** @param {any} [prev] @returns {any} */ (prev) => (
+            prev.columnId === columnId
+                ? { columnId: null, anchorEl: null }
+                : { columnId, anchorEl: e.currentTarget }
+        ));
+        if (requestFilterOptions) {
+            requestFilterOptions(columnId);
+        }
+    };
+    /** @returns {any} */ const closeSidebarFilter = () => setSidebarFilterState({ columnId: null, anchorEl: null });
+
+    React.useEffect(() => {
+        if (!sidebarRef.current) return;
+        if (!sidebarFilterState.columnId) return;
+        sidebarRef.current.scrollTop = sidebarScrollTopRef.current;
+    }, [filterOptions, sidebarFilterState.columnId]);
+
+    React.useEffect(() => {
+        if (formulaConfigs.length === 0) {
+            if (activeFormulaField !== null) setActiveFormulaField(null);
+            if (formulaModalField !== null) setFormulaModalField(null);
+            return;
+        }
+        /** @type {any} */ const hasActiveFormula = formulaConfigs.some(/** @param {any} [config] @returns {any} */ (config) => config.field === activeFormulaField);
+        if (!hasActiveFormula) {
+            setActiveFormulaField(formulaConfigs[formulaConfigs.length - 1].field);
+        }
+        if (formulaModalField && !formulaConfigs.some(/** @param {any} [config] @returns {any} */ (config) => config.field === formulaModalField)) {
+            setFormulaModalField(null);
+        }
+    }, [activeFormulaField, formulaConfigs, formulaModalField]);
+
+    /** @type {any} */ const formulaModalIndex = React.useMemo(
+        () => valConfigs.findIndex(/** @param {any} [config] @returns {any} */ (config) => config && config.agg === 'formula' && config.field === formulaModalField),
+        [formulaModalField, valConfigs]
+    );
+    /** @type {any} */ const formulaModalConfig = formulaModalIndex >= 0 ? valConfigs[formulaModalIndex] : null;
+    /** @type {(...args: any[]) => any} */ const openFormulaModal = React.useCallback((field) => {
+        setActiveFormulaField(field);
+        setFormulaModalField(field);
+    }, []);
+    /** @type {(...args: any[]) => any} */ const removeValueAtIndex = React.useCallback((removeIndex) => {
+        /** @type {any} */ const removingFormulaField = valConfigs[removeIndex] && valConfigs[removeIndex].agg === 'formula'
+            ? valConfigs[removeIndex].field
+            : null;
+        setValConfigs(/** @param {any} [prev] @returns {any} */ (prev) => prev.filter(/** @param {any} [_] @param {any} [index] @returns {any} */ (_, index) => index !== removeIndex));
+        if (removingFormulaField && removingFormulaField === activeFormulaField) {
+            /** @type {any} */ const remainingFormula = formulaConfigs.find(/** @param {any} [config] @returns {any} */ (config) => config.field !== removingFormulaField);
+            setActiveFormulaField(remainingFormula ? remainingFormula.field : null);
+        }
+        if (removingFormulaField && removingFormulaField === formulaModalField) {
+            setFormulaModalField(null);
+        }
+    }, [activeFormulaField, formulaConfigs, formulaModalField, setValConfigs, valConfigs]);
+
+    /** @type {any} */ const isReportMode = pivotMode === 'report';
+    /** @type {any} */ const w = Math.max(sidebarWidth || 288, isReportMode ? 380 : 0);
+    /** @param {any} [fieldCount] @param {any} [visibleCount] @returns {any} */ const renderAvailableFieldSearch = (fieldCount, visibleCount) => {
+        if (fieldCount <= 8) return null;
+        /** @type {any} */ const hasQuery = availableFieldSearch.trim().length > 0;
+        return (
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                margin: '0 2px 8px',
+                padding: '5px 8px',
+                border: `1px solid ${theme.border}`,
+                borderRadius: theme.radiusSm || '8px',
+                background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
+            }}>
+                <Icons.Search style={{flexShrink: 0, color: theme.textSec}} />
+                <input
+                    type="search"
+                    aria-label="Search available fields"
+                    placeholder={`Search ${fieldCount} fields...`}
+                    value={availableFieldSearch}
+                    onChange={(event) => setAvailableFieldSearch(event.target.value)}
+                    style={{
+                        flex: 1,
+                        minWidth: 0,
+                        border: 'none',
+                        outline: 'none',
+                        background: 'transparent',
+                        color: theme.text,
+                        fontSize: '12px',
+                    }}
+                />
+                {hasQuery && (
+                    <button
+                        type="button"
+                        aria-label="Clear available field search"
+                        title="Clear search"
+                        onClick={() => setAvailableFieldSearch('')}
+                        style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.textSec,
+                            cursor: 'pointer',
+                            padding: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                        }}
+                    >
+                        <Icons.Close />
+                    </button>
+                )}
+                {hasQuery && (
+                    <span style={{fontSize: '10px', color: theme.textSec, whiteSpace: 'nowrap'}}>
+                        {visibleCount}/{fieldCount}
+                    </span>
+                )}
+            </div>
+        );
+    };
+    return (
+        <div style={{position:'relative', display:'flex', flexShrink:0}}>
+                <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel" onDragOver={startDragScroll} onDragLeave={stopDragScroll} onDrop={stopDragScroll}>
+                    <div
+                        id="pivot-sidebar-keyboard-dnd-help"
+                        style={{position:'absolute', width:1, height:1, padding:0, margin:-1, overflow:'hidden', clip:'rect(0 0 0 0)', whiteSpace:'nowrap', border:0}}
+                    >
+                        Press Enter or Space on a field to pick it up. Focus a target field or zone and press Enter or Space to drop it. Press Escape to cancel.
+                    </div>
+                    {isReportMode ? (
+                        <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
+                            {[
+                                { id: 'report', label: 'Builder', icon: <Icons.Report /> },
+                                { id: 'fields', label: 'Fields', icon: <Icons.Sigma /> },
+                                { id: 'columns', label: 'Columns', icon: <Icons.Columns /> },
+                            ].map((t) => (
+                                <div
+                                    key={t.id}
+                                    onClick={() => setReportTab(t.id)}
+                                    style={{
+                                        padding: '8px 14px', cursor: 'pointer',
+                                        borderBottom: reportTab === t.id ? `2px solid ${theme.primary}` : '2px solid transparent',
+                                        fontWeight: reportTab === t.id ? 600 : 400,
+                                        color: reportTab === t.id ? theme.primary : theme.textSec,
+                                        display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px',
+                                    }}
+                                >
+                                    {t.icon}{t.label}
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                    <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
+                        <div
+                            onClick={() => setSidebarTab('fields')}
+                            style={{
+                                padding: '8px 16px', cursor: 'pointer',
+                                borderBottom: sidebarTab === 'fields' ? `2px solid ${theme.primary}` : 'none',
+                                fontWeight: sidebarTab === 'fields' ? 600 : 400,
+                                color: sidebarTab === 'fields' ? theme.primary : theme.textSec
+                            }}
+                        >Fields</div>
+                        <div
+                            onClick={() => setSidebarTab('filters')}
+                            style={{
+                                padding: '8px 16px', cursor: 'pointer',
+                                borderBottom: sidebarTab === 'filters' ? `2px solid ${theme.primary}` : 'none',
+                                fontWeight: sidebarTab === 'filters' ? 600 : 400,
+                                color: sidebarTab === 'filters' ? theme.primary : theme.textSec,
+                                display: 'flex', alignItems: 'center', gap: '6px'
+                            }}
+                        >
+                            Filters
+                            {Object.keys(filters).length > 0 && (
+                                <div style={{width: '6px', height: '6px', borderRadius: '50%', background: '#d32f2f'}} />
+                            )}
+                        </div>
+                        <div
+                            onClick={() => setSidebarTab('columns')}
+                            style={{
+                                padding: '8px 16px', cursor: 'pointer',
+                                borderBottom: sidebarTab === 'columns' ? `2px solid ${theme.primary}` : 'none',
+                                fontWeight: sidebarTab === 'columns' ? 600 : 400,
+                                color: sidebarTab === 'columns' ? theme.primary : theme.textSec
+                            }}
+                        >Columns</div>
+                    </div>
+                    )}
+
+                    {isReportMode && reportTab === 'report' ? (
+                        <div style={{flex: 1, overflowY: 'auto', padding: '0 12px 12px'}}>
+                            <ReportEditor
+                                reportDef={reportDef}
+                                setReportDef={setReportDef}
+                                availableFields={availableFields}
+                                customDimensions={customDimensions}
+                                theme={theme}
+                                styles={styles}
+                                data={data}
+                                valConfigs={valConfigs}
+                                colFields={colFields}
+                                setColFields={setColFields}
+                                setValConfigs={setValConfigs}
+                                savedReports={savedReports}
+                                setSavedReports={setSavedReports}
+                                activeReportId={activeReportId}
+                                setActiveReportId={setActiveReportId}
+                                showNotification={showNotification}
+                                requestedSelection={reportEditorSelection}
+                                showReportConfigColumn={showReportConfigColumn}
+                                setShowReportConfigColumn={setShowReportConfigColumn}
+                            />
+                        </div>
+                    ) : isReportMode && reportTab === 'fields' ? (
+                        <div style={{padding: '0 4px'}}>
+                            <CustomCategoriesEditor
+                                availableFields={availableFields}
+                                customDimensions={customDimensions}
+                                setCustomDimensions={setCustomDimensions}
+                                data={data}
+                                theme={theme}
+                                showNotification={showNotification}
+                                getFieldLabel={getFieldLabel}
+                                onDeleteField={handleDeleteCustomCategoryField}
+                            />
+                            <div style={{fontSize:'10px',color:theme.textSec,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'6px',padding:'0 2px'}}><Icons.Database style={{verticalAlign:'middle',marginRight:'4px'}}/>Available Fields — click to add</div>
+                            {renderAvailableFieldSearch(baseAvailableFields.length, visibleBaseAvailableFields.length)}
+                            <div style={{display:'flex',flexWrap:'wrap',gap:'4px',marginBottom:'14px'}}>
+                                {visibleBaseAvailableFields.map(/** @param {any} [f] @returns {any} */ f => {
+                                    /** @type {any} */ const alreadyAdded = valConfigs.some(/** @param {any} [c] @returns {any} */ c => c && c.field === f && c.agg !== 'formula');
+                                    return (
+                                        <div
+                                            key={f}
+                                            onClick={() => {
+                                                if (alreadyAdded) return;
+                                                setValConfigs(/** @param {any} [prev] @returns {any} */ prev => [...prev, {field: f, agg: 'sum', label: getFieldLabel(f)}]);
+                                            }}
+                                            style={{
+                                                padding:'3px 9px', fontSize:'11px', lineHeight:1.4, fontWeight:500,
+                                                borderRadius:'999px',
+                                                border:`1px solid ${alreadyAdded ? theme.border : (theme.isDark ? theme.border : '#D7DDEA')}`,
+                                                background: alreadyAdded ? (theme.select||theme.headerBg) : (theme.isDark ? theme.background : '#ffffff'),
+                                                color: alreadyAdded ? theme.primary : theme.text,
+                                                cursor: alreadyAdded ? 'default' : 'pointer',
+                                                opacity: alreadyAdded ? 0.6 : 1,
+                                                userSelect:'none',
+                                            }}
+                                            title={alreadyAdded ? `${getFieldLabel(f)} already in values` : `Add ${getFieldLabel(f)} to values`}
+                                        >
+                                            {getFieldLabel(f)}{alreadyAdded ? ' ✓' : ''}
+                                        </div>
+                                    );
+                                })}
+                                {baseAvailableFields.length > 8 && visibleBaseAvailableFields.length === 0 && (
+                                    <div style={{width:'100%',padding:'8px 2px',fontSize:'11px',color:theme.textSec}}>
+                                        No fields match the current search.
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{borderTop:`1px solid ${theme.border}`,paddingTop:'10px',marginBottom:'8px'}}>
+                                <div style={{display:'flex', alignItems:'center', gap:'8px', padding:'0 2px 8px 2px', flexWrap:'wrap'}}>
+                                    <button type="button" onClick={handleAddFormulaValue} style={{border:`1px solid ${theme.primary}66`,background:`${theme.primary}12`,color:theme.primary,borderRadius:'999px',cursor:'pointer',padding:'4px 10px',fontSize:'11px',fontWeight:700}}>+ Add Formula</button>
+                                    <span style={{fontSize:'10px',color:theme.textSec}}>{regularValueCount} value{regularValueCount===1?'':'s'} · {formulaCount} formula{formulaCount===1?'':'s'}</span>
+                                </div>
+                                <MeasureAxisControls
+                                    measureAxis={measureAxis}
+                                    setMeasureAxis={setMeasureAxis}
+                                    theme={theme}
+                                    valueSelectStyle={valueSelectStyle}
+                                    regularValueCount={regularValueCount}
+                                />
+                            </div>
+                            {valConfigs.map(/** @param {any} [item] @param {any} [idx] @returns {any} */ (item, idx) => {
+                                /** @type {any} */ const isFormula = item && item.agg === 'formula';
+                                if (!item) return null;
+                                /** @type {any} */ const isDragOver = reportFieldsDragOver === idx;
+                                return (
+                                    <div
+                                        key={item.field || idx}
+                                        draggable
+                                        onDragStart={() => { reportFieldsDragIdx.current = idx; }}
+                                        onDragOver={(e) => { e.preventDefault(); setReportFieldsDragOver(idx); }}
+                                        onDragLeave={() => setReportFieldsDragOver(null)}
+                                        onDrop={(e) => {
+                                            e.preventDefault();
+                                            const from = reportFieldsDragIdx.current;
+                                            setReportFieldsDragOver(null);
+                                            reportFieldsDragIdx.current = null;
+                                            if (from === null || from === idx) return;
+                                            setValConfigs(/** @param {any} [prev] @returns {any} */ prev => {
+                                                /** @type {any[]} */ const next = [...prev];
+                                                /** @type {any} */ const [moved] = next.splice(from, 1);
+                                                next.splice(idx, 0, moved);
+                                                return next;
+                                            });
+                                        }}
+                                        onDragEnd={() => { reportFieldsDragIdx.current = null; setReportFieldsDragOver(null); }}
+                                        style={{marginBottom:'6px', borderTop: isDragOver ? `2px solid ${theme.primary}` : '2px solid transparent', cursor:'grab'}}
+                                    >
+                                        {isFormula ? (
+                                            <FormulaListItem item={item} idx={idx} selected={item.field===formulaModalField} onSelect={openFormulaModal} onRemove={removeValueAtIndex} setValConfigs={setValConfigs} theme={theme} styles={styles} dropLine={null} zoneId="vals" valueSelectStyle={valueSelectStyle} colFields={colFields} fixedSparklineValueKeySet={fixedSparklineValueKeySet} showNotification={showNotification} serverError={(formulaErrors && formulaErrors[item.field]) || null} />
+                                        ) : (
+                                            <div style={{...styles.chip,flexWrap:'wrap',alignItems:'flex-start'}}>
+                                                <div style={{display:'flex',alignItems:'center',gap:'8px',minWidth:0,flex:1}}>
+                                                    <Icons.DragIndicator style={{flexShrink:0,opacity:0.4}}/>
+                                                    <b style={{fontWeight:500,minWidth:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{getFieldLabel(item.field)}</b>
+                                                </div>
+                                                <div style={{display:'flex',alignItems:'center',gap:'4px',marginLeft:'8px',flexWrap:'nowrap',flexShrink:0}}>
+                                                    <select value={item.agg} onChange={e=>handleValueAggChange(idx,e.target.value)} style={{...valueSelectStyle,width:'74px'}}>
+                                                        <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
+                                                    </select>
+                                                    <span onClick={()=>removeValueAtIndex(idx)} style={{cursor:'pointer',color:'#9CA3AF',display:'flex',alignItems:'center'}}><Icons.Close/></span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            {valConfigs.length === 0 && <div style={{opacity:0.5,fontSize:'11px',padding:'12px',textAlign:'center'}}>No value fields. Click a field above or add a formula.</div>}
+                        </div>
+                    ) : (!isReportMode && sidebarTab === 'filters') ? (
+                        <div style={{flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px'}}>
+                            <div style={{marginBottom: '10px', display: 'flex', alignItems: 'center', background: theme.background, borderRadius: '6px', padding: '4px 8px', border: `1px solid ${theme.border}`}}>
+                                <Icons.Search />
+                                <input 
+                                    placeholder="Search columns..."
+                                    value={colSearch} 
+                                    onChange={e => setColSearch(e.target.value)} 
+                                    style={{border:'none', background:'transparent', marginLeft:'10px', outline:'none', width:'100%', color: theme.text, fontSize: '13px'}}
+                                />
+                            </div>
+                            {(() => {
+                                const allFields = availableFields;
+                                /** @type {any} */ const colsForDisplay = allFields.map(/** @param {any} [field] @returns {any} */ field => {
+                                    /** @type {any} */ const tableCol = table.getColumn(field);
+                                    if (tableCol) return tableCol;
+                                    return { id: field, header: getFieldLabel(field), columnDef: { header: getFieldLabel(field) } };
+                                });
+                                /** @type {any} */ const filtered = colsForDisplay.filter(/** @param {any} [col] @returns {any} */ col => {
+                                    /** @type {any} */ const header = (col.columnDef && typeof col.columnDef.header === 'string') ? col.columnDef.header : (typeof col.header === 'string' ? col.header : col.id);
+                                    return String(header).toLowerCase().includes(colSearch.toLowerCase()) || col.id.toLowerCase().includes(colSearch.toLowerCase());
+                                });
+                                return (
+                                    <div style={{display: 'flex', flexDirection: 'column'}}>
+                                        {filtered.map(/** @param {any} [col] @returns {any} */ col => (
+                                            <SidebarFilterItem
+                                                key={col.id}
+                                                column={col}
+                                                theme={theme}
+                                                styles={styles}
+                                                onFilter={/** @param {any} [val] @returns {any} */ (val) => handleHeaderFilter(col.id, val)}
+                                                currentFilter={filters[col.id]}
+                                                options={getFilterOptionsForColumn(col.id)}
+                                                optionMeta={filterOptionMeta && filterOptionMeta[col.id]}
+                                                onSearchOptions={serverSide ? /** @param {any} [search] @returns {any} */ (search) => requestFilterOptions && requestFilterOptions(col.id, { search, offset: 0 }) : undefined}
+                                                onLoadMoreOptions={serverSide ? /** @param {any} [search] @param {any} [offset] @returns {any} */ (search, offset) => requestFilterOptions && requestFilterOptions(col.id, { search, offset }) : undefined}
+                                                onOpen={requestFilterOptions}
+                                            />
+                                        ))}
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    ) : (isReportMode ? reportTab !== 'columns' : sidebarTab !== 'columns') ? (
+                        <>
+                            {sidebarTab === 'fields' && (
+                                <div>
+                                    <CustomCategoriesEditor
+                                        availableFields={availableFields}
+                                        customDimensions={customDimensions}
+                                        setCustomDimensions={setCustomDimensions}
+                                        data={data}
+                                        theme={theme}
+                                        showNotification={showNotification}
+                                        getFieldLabel={getFieldLabel}
+                                        onDeleteField={handleDeleteCustomCategoryField}
+                                    />
+                                    <div style={styles.sectionTitleSm}><Icons.Database/> Available Fields</div>
+                                    {renderAvailableFieldSearch(displayAvailableFields.length, visibleAvailableFields.length)}
+                                    <ResizableFieldPanel
+                                        panelId="availableFields"
+                                        panelLabel="Available Fields"
+                                        size={fieldPanelSizes && fieldPanelSizes.availableFields}
+                                        onSizeChange={handleFieldPanelSizeChange}
+                                        theme={theme}
+                                        outerStyle={dropZoneBaseStyle}
+                                        contentStyle={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: '4px',
+                                            alignContent: 'flex-start',
+                                            padding: '2px 12px 12px 2px',
+                                        }}
+                                    >
+                                        {visibleAvailableFields.map(/** @param {any} [f] @returns {any} */ f => {
+                                            /** @type {any} */ const isMeasureAxisVirtualField = showMeasureAxisAvailableField && f === measureAxisLabelField;
+                                            /** @type {any} */ const fieldLabel = isMeasureAxisVirtualField ? 'Measure Names' : getFieldLabel(f);
+                                            /** @type {any} */ const sourceZone = isMeasureAxisVirtualField ? 'measureAxis' : 'pool';
+                                            return (
+                                                <div
+                                                    key={isMeasureAxisVirtualField ? `__measure_axis__${f}` : f}
+                                                    draggable
+                                                    data-sidebar-field-chip={isMeasureAxisVirtualField ? 'measure-axis-label' : 'available'}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                                    aria-grabbed={keyboardDragItem && keyboardDragItem.zone === sourceZone && keyboardDragItem.field === f ? 'true' : 'false'}
+                                                    aria-label={`Move ${fieldLabel}`}
+                                                    onDragStart={e=>onDragStart(e,f,sourceZone)}
+                                                    onDragEnd={onDragEnd}
+                                                    onKeyDown={(e) => handleDraggableKeyDown(e, f, sourceZone, -1, fieldLabel)}
+                                                    title={isMeasureAxisVirtualField ? 'Drag to Rows or Columns to show measure names' : `Move ${getFieldLabel(f)}`}
+                                                    style={{
+                                                    padding: '4px 8px',
+                                                    fontSize: '11px',
+                                                    lineHeight: 1.2,
+                                                    fontWeight: isMeasureAxisVirtualField ? 700 : 500,
+                                                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                                                    borderRadius: theme.radiusSm || theme.radius || '10px',
+                                                    border: isMeasureAxisVirtualField ? `1px dashed ${theme.primary}` : `1px solid ${theme.isDark ? theme.border : '#D7DDEA'}`,
+                                                    background: isMeasureAxisVirtualField ? `${theme.primary}12` : (theme.isDark ? theme.background : (theme.surfaceInset || '#ffffff')),
+                                                    color: isMeasureAxisVirtualField ? theme.primary : (theme.isDark ? theme.text : '#334155'),
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
+                                                    cursor: 'grab',
+                                                    userSelect: 'none',
+                                                    minHeight: '24px',
+                                                }}>
+                                                    {isMeasureAxisVirtualField && <Icons.Sigma />}
+                                                    {fieldLabel}
+                                                </div>
+                                            );
+                                        })}
+                                        {displayAvailableFields.length > 8 && visibleAvailableFields.length === 0 && (
+                                            <div style={{width:'100%',padding:'8px 2px',fontSize:'11px',color:theme.textSec}}>
+                                                No fields match the current search.
+                                            </div>
+                                        )}
+                                    </ResizableFieldPanel>
+                                </div>
+                            )}
+                            {zoneDescriptors.map(/** @param {any} [zone] @returns {any} */ zone => {
+                                /** @type {any} */ const zoneItems = zoneItemsById[zone.id] || [];
+                                return (
+                                <div key={zone.id} style={{marginBottom: '20px'}}>
+                                    <div style={styles.sectionTitle}>{zone.icon}{zone.label}</div>
+                                    {zone.id === 'vals' && (
+                                        <div style={{display:'flex', alignItems:'center', gap:'8px', padding:'0 4px 8px 4px', flexWrap:'wrap'}}>
+                                            <button
+                                                type="button"
+                                                onClick={handleAddFormulaValue}
+                                                style={{
+                                                    border: `1px solid ${theme.primary}66`,
+                                                    background: `${theme.primary}12`,
+                                                    color: theme.primary,
+                                                    borderRadius: '999px',
+                                                    cursor: 'pointer',
+                                                    padding: '4px 10px',
+                                                    fontSize: '11px',
+                                                    fontWeight: 700,
+                                                }}
+                                            >
+                                                + Add Formula
+                                            </button>
+                                            <span style={{fontSize:'10px', color: theme.textSec}}>
+                                                {regularValueCount} value measure{regularValueCount === 1 ? '' : 's'} available
+                                            </span>
+                                            {formulaCount > 0 && (
+                                                <span style={{fontSize:'10px', color: theme.textSec}}>
+                                                    {formulaCount} formula{formulaCount === 1 ? '' : 's'}
+                                                </span>
+                                            )}
+                                            <MeasureAxisControls
+                                                measureAxis={measureAxis}
+                                                setMeasureAxis={setMeasureAxis}
+                                                theme={theme}
+                                                valueSelectStyle={valueSelectStyle}
+                                                regularValueCount={regularValueCount}
+                                            />
+                                        </div>
+                                    )}
+                                    {zone.id === 'rows' && rowFields.length > 0 && (
+                                        <div style={{display:'flex', gap:'4px', padding:'0 4px 6px 4px'}}>
+                                            <button
+                                                title="Expand all hierarchy levels"
+                                                onClick={() => handleExpandAllRows(true)}
+                                                style={{flex:1, border:`1px solid ${theme.primary}`, background:theme.select, cursor:'pointer', padding:'3px 6px', fontSize:'11px', color:theme.primary, borderRadius:'4px', fontWeight:600}}
+                                            >+ Expand All</button>
+                                            <button
+                                                title="Collapse all rows"
+                                                onClick={() => handleExpandAllRows(false)}
+                                                style={{flex:1, border:`1px solid ${theme.border}`, background:theme.background, cursor:'pointer', padding:'3px 6px', fontSize:'11px', color:theme.textSec, borderRadius:'4px'}}
+                                            >- Collapse All</button>
+                                        </div>
+                                    )}
+                                    <ResizableFieldPanel
+                                        panelId={zone.id}
+                                        panelLabel={zone.label}
+                                        size={fieldPanelSizes && fieldPanelSizes[zone.id]}
+                                        onSizeChange={handleFieldPanelSizeChange}
+                                        theme={theme}
+                                        outerStyle={dropZoneBaseStyle}
+                                        contentStyle={{padding: `${dropZonePadding} 12px 12px ${dropZonePadding}`}}
+                                    >
+                                        <div
+                                            data-sidebar-drop-zone={zone.id}
+                                            role="group"
+                                            tabIndex={0}
+                                            aria-label={`${zone.label} drop zone`}
+                                            aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                            onKeyDown={(e) => handleDropZoneKeyDown(e, zone.id)}
+                                            onDragOver={(e) => {
+                                                if (e.target === e.currentTarget) onDragOver(e, zone.id, zoneItems.length);
+                                                else {
+                                                    e.preventDefault();
+                                                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                                                }
+                                            }}
+                                            onDrop={e=>onDrop(e, zone.id)}
+                                        >
+                                            {zoneItems.map(/** @param {any} [item] @param {any} [idx] @returns {any} */ (item, idx) => {
+                                                /** @type {any} */ const label = zone.id==='vals' ? item.field : item;
+                                                /** @type {any} */ const displayLabel = zone.id === 'vals'
+                                                    ? (item.agg === 'formula' ? (item.label || 'Formula') : getFieldLabel(item.field))
+                                                    : getFieldLabel(item);
+                                                const isMeasureAxisZoneField = (
+                                                    (zone.id === 'rows' || zone.id === 'cols')
+                                                    && label === measureAxisLabelField
+                                                    && normalizedMeasureAxis.placement !== 'none'
+                                                );
+                                                return (
+                                                    <div
+                                                        key={idx}
+                                                        draggable
+                                                        data-sidebar-field-chip="zone"
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                                        aria-grabbed={keyboardDragItem && keyboardDragItem.zone === zone.id && keyboardDragItem.idx === idx ? 'true' : 'false'}
+                                                        aria-label={`Move ${displayLabel}`}
+                                                        onKeyDown={(e) => handleDraggableKeyDown(e, item, zone.id, idx, displayLabel)}
+                                                        onDragStart={e=>onDragStart(e,item,zone.id,idx)}
+                                                        onDragOver={e=>onDragOver(e,zone.id,idx)}
+                                                        onDragEnd={onDragEnd}
+                                                    >
+                                                        {zone.id === 'vals' && item.agg === 'formula' ? (
+                                                            <FormulaListItem
+                                                                item={item}
+                                                                idx={idx}
+                                                                selected={item.field === activeFormulaField}
+                                                                onSelect={openFormulaModal}
+                                                                onRemove={removeValueAtIndex}
+                                                                setValConfigs={setValConfigs}
+                                                                theme={theme}
+                                                                styles={styles}
+                                                                dropLine={dropLine}
+                                                                zoneId={zone.id}
+                                                                valueSelectStyle={valueSelectStyle}
+                                                                colFields={colFields}
+                                                                fixedSparklineValueKeySet={fixedSparklineValueKeySet}
+                                                                showNotification={showNotification}
+                                                                serverError={(formulaErrors && formulaErrors[item.field]) || null}
+                                                            />
+                                                        ) : (
+                                                            <div style={{
+                                                                ...styles.chip,
+                                                                ...(zone.id === 'vals' ? { flexWrap: 'wrap', alignItems: 'flex-start' } : {}),
+                                                            }}>
+                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
+                                                                <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
+                                                                    <Icons.DragIndicator/>
+                                                                    <b style={{fontWeight:500, display:'block', minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
+                                                                </div>
+                                                                {zone.id === 'vals' && (
+                                                                    <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
+                                                                        <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
+                                                                            <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option><option value="array_agg">Series</option>
+                                                                        </select>
+                                                                        {isWeightedAverageAgg(item.agg) && (
+                                                                            <select value={item.weightField || ''} onChange={e => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'92px'}} title="Weight field">
+                                                                                <option value="" disabled>Weight</option>
+                                                                                {baseAvailableFields.map(/** @param {any} [fieldName] @returns {any} */ (fieldName) => (
+                                                                                    <option key={fieldName} value={fieldName}>{getFieldLabel(fieldName)}</option>
+                                                                                ))}
+                                                                            </select>
+                                                                        )}
+                                                                        <select value={item.windowFn || 'none'} onChange={e=>handleValueWindowFnChange(idx, e.target.value)} style={{...valueSelectStyle, width:'56px'}}>
+                                                                            <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
+                                                                        </select>
+                                                                    </div>
+                                                                )}
+                                                                <div style={{display:'flex', gap:'4px', marginLeft:'auto', alignItems: 'center'}}>
+                                                                    {zone.id==='filter' && (
+                                                                        <div onClick={(e) => openSidebarFilter(e, label)} style={{cursor:'pointer', display:'flex', alignItems:'center', padding: '2px', borderRadius: '4px'}}><Icons.Filter /></div>
+                                                                    )}
+                                                                    <span onClick={()=>{
+                                                                        if (isMeasureAxisZoneField && typeof setMeasureAxis === 'function') {
+                                                                            setMeasureAxis(/** @param {any} [previous] @returns {any} */ (previous) => ({
+                                                                                ...normalizeMeasureAxisPanelValue(previous),
+                                                                                placement: 'none',
+                                                                            }));
+                                                                            return;
+                                                                        }
+                                                                        if (zone.id==='filter'){/** @type {Record<string, any>} */ const n={...filters};delete n[label];setFilters(n)}
+                                                                        if (zone.id==='rows') setRowFields(/** @param {any} [p] @returns {any} */ p=>p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label));
+                                                                        if (zone.id==='cols') setColFields(/** @param {any} [p] @returns {any} */ p=>p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label));
+                                                                        if (zone.id==='vals') removeValueAtIndex(idx);
+                                                                    }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
+                                                                </div>
+                                                                {zone.id === 'filter' && sidebarFilterState.columnId === label && (
+                                                                    <FilterPopover
+                                                                        column={{header: displayLabel, id: label}}
+                                                                        anchorEl={sidebarFilterState.anchorEl}
+                                                                        onClose={closeSidebarFilter}
+                                                                        onFilter={/** @param {any} [filterValue] @returns {any} */ (filterValue) => handleHeaderFilter(label, filterValue)}
+                                                                        currentFilter={filters[label]}
+                                                                        options={getFilterOptionsForColumn(label)}
+                                                                        optionMeta={filterOptionMeta && filterOptionMeta[label]}
+                                                                        onSearchOptions={serverSide ? /** @param {any} [search] @returns {any} */ (search) => requestFilterOptions && requestFilterOptions(label, { search, offset: 0 }) : undefined}
+                                                                        onLoadMoreOptions={serverSide ? /** @param {any} [search] @param {any} [offset] @returns {any} */ (search, offset) => requestFilterOptions && requestFilterOptions(label, { search, offset }) : undefined}
+                                                                        theme={theme}
+                                                                    />
+                                                                )}
+                                                                {zone.id === 'vals' && (
+                                                                    <ValueSparklineControls
+                                                                        item={item}
+                                                                        idx={idx}
+                                                                        setValConfigs={setValConfigs}
+                                                                        theme={theme}
+                                                                        valueSelectStyle={valueSelectStyle}
+                                                                        colFields={colFields}
+                                                                        fixedSparklineValueKeySet={fixedSparklineValueKeySet}
+                                                                        showNotification={showNotification}
+                                                                    />
+                                                                )}
+                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div style={{...styles.dropLine,bottom:-2}}/>}
+                                                            </div>
+                                                        )}
+                                                        {zone.id ==='filter' && filters[label] && filters[label].conditions && (
+                                                            <div style={{fontSize: '10px', color: theme.primary, padding: '0 8px 4px 8px', marginTop: '-4px'}}>
+                                                                {filters[label].conditions.map(/** @param {any} [c] @returns {any} */ c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[label].operator} `)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
+                                            {zoneItems.length === 0 && (
+                                                <div style={{opacity:0.5, fontSize:'11px', padding:'8px', textAlign:'center', pointerEvents:'none'}}>Drag fields here</div>
+                                            )}
+                                            <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,zoneItems.length)} onDrop={e=>onDrop(e, zone.id)} />
+                                        </div>
+                                    </ResizableFieldPanel>
+                                </div>
+                                );
+                            })}
+                        </>
+                    ) : (
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', overflow: 'hidden'}}>
+                            {/* Enhanced Search Header */}
+                            <div style={{display: 'flex', flexDirection: 'column', gap: '10px', padding: '8px', background: theme.headerBg, borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)'}}>
+                                <div style={{display: 'flex', alignItems: 'center', background: theme.background, borderRadius: '6px', padding: '8px 12px', border: `2px solid ${theme.border}`, transition: 'border-color 0.2s'}}>
+                                    <Icons.Search />
+                                    <input 
+                                        placeholder="Search columns..."
+                                        value={colSearch} 
+                                        onChange={e => setColSearch(e.target.value)} 
+                                        style={{
+                                            border:'none', 
+                                            background:'transparent', 
+                                            marginLeft:'10px', 
+                                            outline:'none', 
+                                            width:'100%', 
+                                            color: theme.text, 
+                                            fontSize: '13px',
+                                            fontWeight: 500
+                                        }} 
+                                    />
+                                    {colSearch && (
+                                        <span 
+                                            onClick={() => setColSearch('')} 
+                                            style={{
+                                                cursor: 'pointer', 
+                                                display: 'flex', 
+                                                padding: '4px',
+                                                borderRadius: '4px',
+                                                background: theme.hover,
+                                                transition: 'background 0.2s'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.background = theme.select}
+                                            onMouseLeave={e => e.currentTarget.style.background = theme.hover}
+                                        >
+                                            <Icons.Close />
+                                        </span>
+                                    )}
+                                </div>
+                                
+                                {/* Type Filter Pills */}
+                                <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
+                                    {[{"value": "all", "label": "All", "icon": "📊"},
+                                        {"value": "number", "label": "Numbers", "icon": "🔢"},
+                                        {"value": "string", "label": "Text", "icon": "📝"},
+                                        {"value": "date", "label": "Dates", "icon": "📅"}
+                                    ].map(type => (
+                                        <button
+                                            key={type.value}
+                                            onClick={() => setColTypeFilter(type.value)}
+                                            style={{
+                                                padding: '6px 12px',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: colTypeFilter === type.value ? theme.primary : theme.background,
+                                                color: colTypeFilter === type.value ? '#fff' : theme.text,
+                                                cursor: 'pointer',
+                                                fontSize: '11px',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                transition: 'all 0.2s',
+                                                boxShadow: colTypeFilter === type.value ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                                            }}
+                                            onMouseEnter={e => {
+                                                if (colTypeFilter !== type.value) {
+                                                    e.currentTarget.style.background = theme.hover;
+                                                }
+                                            }}
+                                            onMouseLeave={e => {
+                                                if (colTypeFilter !== type.value) {
+                                                    e.currentTarget.style.background = theme.background;
+                                                }
+                                            }}
+                                        >
+                                            <span>{type.icon}</span>
+                                            <span>{type.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Enhanced Action Buttons */}
+                            <div style={{display: 'flex', gap: '6px', padding: '0 8px'}}>
+                                <button 
+                                    onClick={() => table.toggleAllColumnsVisible(true)} 
+                                    style={{
+                                        ...styles.btn, 
+                                        padding: '8px 12px', 
+                                        fontSize: '11px', 
+                                        flex: 1, 
+                                        justifyContent: 'center',
+                                        background: theme.background,
+                                        fontWeight: 600,
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                >
+                                    <Icons.Visibility style={{fontSize: '14px'}} />
+                                    <span>Show All</span>
+                                </button>
+                                <button 
+                                    onClick={() => table.toggleAllColumnsVisible(false)} 
+                                    style={{
+                                        ...styles.btn, 
+                                        padding: '8px 12px', 
+                                        fontSize: '11px', 
+                                        flex: 1, 
+                                        justifyContent: 'center',
+                                        background: theme.background,
+                                        fontWeight: 600,
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                >
+                                    <Icons.VisibilityOff style={{fontSize: '14px'}} />
+                                    <span>Hide All</span>
+                                </button>
+                                <button 
+                                    onClick={() => toggleAllColumnsPinned(false)} 
+                                    style={{
+                                        ...styles.btn, 
+                                        padding: '8px 12px', 
+                                        fontSize: '11px', 
+                                        flex: 1, 
+                                        justifyContent: 'center',
+                                        background: theme.background,
+                                        fontWeight: 600,
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                >
+                                    <Icons.Unpin style={{fontSize: '14px'}} />
+                                    <span>Unpin All</span>
+                                </button>
+                            </div>
+
+                            {/* Enhanced Selection Bar */}
+                            {selectedCols.size > 0 && (
+                                <div style={{
+                                    display: 'flex', 
+                                    flexDirection: 'column',
+                                    gap: '8px', 
+                                    background: `linear-gradient(135deg, ${theme.select}ee, ${theme.select}dd)`, 
+                                    padding: '12px', 
+                                    borderRadius: '8px', 
+                                    border: `2px solid ${theme.primary}66`,
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                                    margin: '0 8px'
+                                }}>
+                                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                        <span style={{
+                                            fontSize: '12px', 
+                                            fontWeight: 700, 
+                                            padding: '4px 10px', 
+                                            color: theme.primary, 
+                                            background: theme.background,
+                                            borderRadius: '6px',
+                                            boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                        }}>
+                                            {selectedCols.size} Column{selectedCols.size > 1 ? 's' : ''} Selected
+                                        </span>
+                                        <button 
+                                            onClick={() => setSelectedCols(new Set())} 
+                                            style={{
+                                                border: 'none', 
+                                                background: theme.background, 
+                                                cursor: 'pointer', 
+                                                display: 'flex', 
+                                                color: theme.textSec,
+                                                padding: '4px',
+                                                borderRadius: '4px',
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.background = theme.hover}
+                                            onMouseLeave={e => e.currentTarget.style.background = theme.background}
+                                        >
+                                            <Icons.Close/>
+                                        </button>
+                                    </div>
+                                    <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
+                                        <button 
+                                            onClick={() => {
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'left')); 
+                                                setSelectedCols(new Set()); 
+                                            }} 
+                                            style={{
+                                                ...styles.btn, 
+                                                padding: '6px 12px', 
+                                                fontSize: '11px', 
+                                                background: theme.background,
+                                                flex: 1,
+                                                justifyContent: 'center',
+                                                fontWeight: 600,
+                                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                        >
+                                            <Icons.PinLeft />
+                                            <span>Pin Left</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, false)); 
+                                                setSelectedCols(new Set()); 
+                                            }} 
+                                            style={{
+                                                ...styles.btn, 
+                                                padding: '6px 12px', 
+                                                fontSize: '11px', 
+                                                background: theme.background,
+                                                flex: 1,
+                                                justifyContent: 'center',
+                                                fontWeight: 600,
+                                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                        >
+                                            <Icons.Unpin />
+                                            <span>Unpin</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'right')); 
+                                                setSelectedCols(new Set()); 
+                                            }} 
+                                            style={{
+                                                ...styles.btn, 
+                                                padding: '6px 12px', 
+                                                fontSize: '11px', 
+                                                background: theme.background,
+                                                flex: 1,
+                                                justifyContent: 'center',
+                                                fontWeight: 600,
+                                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
+                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
+                                        >
+                                            <Icons.PinRight />
+                                            <span>Pin Right</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div style={{flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column'}}>
+                                {(() => {
+                                    /** @type {any} */ const allCols = table.getAllColumns().filter(/** @param {any} [c] @returns {any} */ c => !c.parent && c.id !== 'no_data');
+                                    
+                                    /** @type {any} */ const filteredCols = allCols.filter(/** @param {any} [col] @returns {any} */ col => {
+                                        if (colTypeFilter === 'all') return true;
+                                        let type = 'string';
+                                        
+                                        // Check if it's a value column (aggregated)
+                                        /** @type {any} */ const config = valConfigs.find(/** @param {any} [v] @returns {any} */ v => col.id.includes(v.field));
+                                        
+                                        if (config) {
+                                            type = 'number';
+                                        } else if (data && data.length > 0) {
+                                            // Check the first row's data for this column
+                                            // Handle both flat data and nested/grouped data structures
+                                            const firstRow = data[0];
+                                            let val = firstRow[col.id];
+                                            
+                                            // If value is undefined in flat data, try to find it via accessor if possible, or skip
+                                            if (val === undefined && col.accessorFn) {
+                                                try {
+                                                    val = col.accessorFn(firstRow);
+                                                } catch (e) { /* ignore */ }
+                                            }
+
+                                            if (typeof val === 'number') {
+                                                type = 'number';
+                                            } else if (val instanceof Date) {
+                                                type = 'date';
+                                            } else if (typeof val === 'string') {
+                                                if (!isNaN(Number(val)) && val.trim() !== '') {
+                                                    type = 'number';
+                                                } else if (!isNaN(Date.parse(val)) && val.includes('-')) {
+                                                    type = 'date';
+                                                }
+                                            }
+                                        }
+                                        return type === colTypeFilter;
+                                    });
+
+                                    /** @type {any} */ const leftPinned = filteredCols.filter(/** @param {any} [c] @returns {any} */ c => hasChildrenInZone(c, 'left'));
+                                    /** @type {any} */ const rightPinned = filteredCols.filter(/** @param {any} [c] @returns {any} */ c => hasChildrenInZone(c, 'right'));
+                                    /** @type {any} */ const unpinned = filteredCols.filter(/** @param {any} [c] @returns {any} */ c => hasChildrenInZone(c, 'unpinned'));
+
+                                    /** @param {any} [cols] @param {any} [sectionId] @returns {any} */ const renderColList = (cols, sectionId) => cols.map(/** @param {any} [column] @returns {any} */ column => (
+                                        <ColumnTreeItem 
+                                            key={column.id} 
+                                            column={column} 
+                                            level={0} 
+                                            theme={theme} 
+                                            styles={styles} 
+                                            handlePinColumn={handlePinColumn}
+                                            colSearch={colSearch}
+                                            selectedCols={selectedCols}
+                                            setSelectedCols={setSelectedCols}
+                                            onDrop={handleToolPanelDrop}
+                                            sectionId={sectionId}
+                                        />
+                                    ));
+
+                                    /** @param {any} [colId] @param {any} [sectionId] @param {any} [targetColId] @returns {any} */ const handleToolPanelDrop = (colId, sectionId, targetColId) => {
+                                        /** @type {any} */ let targetIndex = undefined;
+                                        /** @type {any} */ const currentPinning = columnPinning || { left: [], right: [] };
+
+                                        if (targetColId) {
+                                            /** @type {any} */ const list = sectionId === 'left' ? currentPinning.left : (sectionId === 'right' ? currentPinning.right : null);
+                                            if (list) {
+                                                targetIndex = list.indexOf(targetColId);
+                                                
+                                                // If not found, maybe it's a group?
+                                                if (targetIndex === -1) {
+                                                    /** @type {any} */ const targetCol = table.getColumn(targetColId);
+                                                    if (targetCol && isGroupColumn(targetCol)) {
+                                                        /** @type {any} */ const leaves = getAllLeafIdsFromColumn(targetCol);
+                                                        /** @type {any} */ const firstPinnedLeaf = leaves.find(/** @param {any} [id] @returns {any} */ id => list.includes(id));
+                                                        if (firstPinnedLeaf) {
+                                                            targetIndex = list.indexOf(firstPinnedLeaf);
+                                                        }
+                                                    }
+                                                }
+
+                                                if (targetIndex === -1) targetIndex = undefined;
+                                            }
+                                        }
+
+                                        if (sectionId === 'left') handlePinColumn(colId, 'left', targetIndex);
+                                        else if (sectionId === 'right') handlePinColumn(colId, 'right', targetIndex);
+                                        else handlePinColumn(colId, false);
+                                    };
+
+                                    return (
+                                        <>
+                                            {leftPinned.length > 0 && (
+                                                <ToolPanelSection 
+                                                    title="Pinned Left" 
+                                                    count={leftPinned.length} 
+                                                    theme={theme} 
+                                                    styles={styles}
+                                                    sectionId="left"
+                                                    onDrop={handleToolPanelDrop}
+                                                >
+                                                    {renderColList(leftPinned, 'left')}
+                                                </ToolPanelSection>
+                                            )}
+
+                                            {rightPinned.length > 0 && (
+                                                <ToolPanelSection 
+                                                    title="Pinned Right" 
+                                                    count={rightPinned.length} 
+                                                    theme={theme} 
+                                                    styles={styles}
+                                                    sectionId="right"
+                                                    onDrop={handleToolPanelDrop}
+                                                >
+                                                    {renderColList(rightPinned, 'right')}
+                                                </ToolPanelSection>
+                                            )}
+                                            
+                                            <ToolPanelSection 
+                                                title="Columns" 
+                                                count={unpinned.length} 
+                                                theme={theme} 
+                                                styles={styles}
+                                                sectionId="unpinned"
+                                                onDrop={handleToolPanelDrop}
+                                            >
+                                                {renderColList(unpinned, 'unpinned')}
+                                            </ToolPanelSection>
+                                        </>
+                                    );
+                                })()}
+                            </div>
+                            
+                            {pinningPresets && pinningPresets.length > 0 && (
+                                <div style={{padding: '8px', borderTop: `1px solid ${theme.border}`}}>
+                                    <div style={styles.sectionTitle}>Pinning Presets</div>
+                                    <div style={{display: 'flex', gap: '4px', flexWrap: 'wrap'}}>
+                                        {pinningPresets.map(/** @param {any} [preset] @param {any} [i] @returns {any} */ (preset, i) => (
+                                            <button 
+                                                key={i}
+                                                onClick={() => {
+                                                    setColumnPinning(preset.config);
+                                                    showNotification(`Applied preset: ${preset.name}`);
+                                                }}
+                                                style={{...styles.btn, fontSize: '11px', background: theme.headerBg}}
+                                            >
+                                                {preset.name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div style={{fontSize: '11px', color: theme.textSec, fontStyle: 'italic', padding: '8px', background: theme.headerBg, borderTop: `1px solid ${theme.border}44`}}>
+                                <Icons.Lock style={{ verticalAlign: 'middle', marginRight: '4px', opacity: 0.5 }} />
+                                Drag columns or use pin icons to freeze areas.
+                            </div>
+                        </div>
+                    )}
+                </div>
+            {formulaModalConfig && (
+                <FormulaEditorModal
+                    item={formulaModalConfig}
+                    idx={formulaModalIndex}
+                    valConfigs={valConfigs}
+                    setValConfigs={setValConfigs}
+                    theme={theme}
+                    onClose={() => setFormulaModalField(null)}
+                    onRemove={removeValueAtIndex}
+                    displayedColumnOptions={displayedColumnOptions}
+                    availableRawFields={baseAvailableFields}
+                    serverError={(formulaErrors && formulaErrors[formulaModalConfig.field]) || null}
+                />
+            )}
+            {/* Resize handle */}
+            <div
+                onMouseDown={onResizeMouseDown}
+                style={{
+                    position:'absolute', right:0, top:0, bottom:0, width:'5px',
+                    cursor:'col-resize', zIndex:10,
+                    background:'transparent',
+                }}
+                title="Drag to resize panel"
+            >
+                <div style={{
+                    position:'absolute', right:0, top:0, bottom:0, width:'2px',
+                    background: theme.border,
+                    transition: 'background 0.15s',
+                }} />
+            </div>
+        </div>
+    );
+});

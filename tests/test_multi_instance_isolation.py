@@ -1,7 +1,7 @@
 """
 test_multi_instance_isolation.py
 ----------------------------------
-Explicit multi-instance isolation tests for dash-tanstack-pivot.
+Explicit multi-instance isolation tests for serverside-pivot.
 
 Covers:
 1. Table-scoped request isolation: two instances with distinct tables never share query state

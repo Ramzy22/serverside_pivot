@@ -21,7 +21,7 @@ Goal:
 Create:
 
 ```text
-dash_tanstack_pivot/pivot_engine/pivot_engine/editing/
+serverside_pivot/pivot_engine/pivot_engine/editing/
   __init__.py
   models.py
   target_resolver.py
@@ -45,7 +45,7 @@ Rationale:
 Create:
 
 ```text
-dash_tanstack_pivot/src/lib/hooks/useEditEngine/
+serverside_pivot/src/lib/hooks/useEditEngine/
   index.js
   constants.js
   cellEditStore.js
@@ -64,30 +64,30 @@ It must never be used as the source of truth for hidden descendants or revert le
 
 ### 2.1 Backend Files To Modify
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/models.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/models.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py`
 
 ### 2.2 Frontend Files To Modify
 
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
-- `dash_tanstack_pivot/src/lib/hooks/useColumnDefs.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditableCell.js`
-- `dash_tanstack_pivot/src/lib/components/Table/PivotTableBody.js`
-- `dash_tanstack_pivot/src/lib/utils/editing.js`
-- `dash_tanstack_pivot/src/lib/index.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/hooks/useColumnDefs.js`
+- `serverside_pivot/src/lib/components/Table/EditableCell.js`
+- `serverside_pivot/src/lib/components/Table/PivotTableBody.js`
+- `serverside_pivot/src/lib/utils/editing.js`
+- `serverside_pivot/src/lib/index.js`
 
 ### 2.3 Generated Dash Artifacts To Regenerate After Frontend Prop Changes
 
-- `dash_tanstack_pivot/dash_tanstack_pivot/DashTanstackPivot.py`
-- `dash_tanstack_pivot/dash_tanstack_pivot/PivotAppBar.py`
-- `dash_tanstack_pivot/dash_tanstack_pivot/_imports_.py`
-- `dash_tanstack_pivot/dash_tanstack_pivot/metadata.json`
-- `dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.min.js`
-- `dash_tanstack_pivot/dash_tanstack_pivot/package-info.json`
+- `serverside_pivot/serverside_pivot/DashTanstackPivot.py`
+- `serverside_pivot/serverside_pivot/PivotAppBar.py`
+- `serverside_pivot/serverside_pivot/_imports_.py`
+- `serverside_pivot/serverside_pivot/metadata.json`
+- `serverside_pivot/serverside_pivot/serverside_pivot.min.js`
+- `serverside_pivot/serverside_pivot/package-info.json`
 
 ## 3. Test Files In Scope
 
@@ -150,20 +150,20 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/index.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/constants.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/cellEditStore.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/optimisticValues.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/editSerializer.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/treeWalker.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/selectors.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/index.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/constants.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/cellEditStore.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/optimisticValues.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/editSerializer.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/treeWalker.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/selectors.js`
 
 Modify:
 
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
 
 Frontend work:
 
@@ -196,19 +196,19 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/models.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/models.py`
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/models.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/models.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
 
 Backend work:
 
@@ -248,15 +248,15 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/target_resolver.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/scope_index.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/propagation_planner.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/target_resolver.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/scope_index.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/propagation_planner.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
 
 Backend work:
 
@@ -294,20 +294,20 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/conflict_manager.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/session_manager.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/conflict_manager.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/session_manager.py`
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/service.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/index.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
-- `dash_tanstack_pivot/src/lib/hooks/useColumnDefs.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/index.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/hooks/useColumnDefs.js`
 
 Backend work:
 
@@ -345,19 +345,19 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/event_store.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/event_store.py`
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/index.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/index.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
 
 Backend work:
 
@@ -400,17 +400,17 @@ Objective:
 
 Create:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/patch_planner.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/patch_planner.py`
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/index.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/index.js`
 
 Backend work:
 
@@ -445,15 +445,15 @@ Objective:
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/propagation_planner.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/propagation_planner.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/scalable_pivot_controller.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
-- `dash_tanstack_pivot/src/lib/utils/editing.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/utils/editing.js`
 
 Backend work:
 
@@ -483,14 +483,14 @@ Objective:
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/target_resolver.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/target_resolver.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/components/Table/EditSidePanel.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/components/Table/EditSidePanel.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/propagationGate.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
 
 Backend work:
 
@@ -519,15 +519,15 @@ Objective:
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/session_manager.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/event_store.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/editing/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/session_manager.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/event_store.py`
+- `serverside_pivot/pivot_engine/pivot_engine/editing/service.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/editSerializer.js`
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/index.js`
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/editSerializer.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/index.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
 
 Backend work:
 
@@ -561,13 +561,13 @@ Objective:
 
 Modify backend:
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/service.py`
 
 Modify frontend:
 
-- `dash_tanstack_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
-- `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js`
+- `serverside_pivot/src/lib/hooks/useEditEngine/transactionHistory.js`
+- `serverside_pivot/src/lib/components/DashTanstackPivot.react.js`
 - generated Dash artifacts
 
 Work:

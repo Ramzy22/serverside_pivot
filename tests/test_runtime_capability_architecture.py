@@ -4,7 +4,7 @@ from pathlib import Path
 
 RUNTIME_ROOT = (
     Path(__file__).resolve().parents[1]
-    / "dash_tanstack_pivot"
+    / "serverside_pivot"
     / "pivot_engine"
     / "pivot_engine"
     / "runtime"
@@ -32,6 +32,7 @@ def test_runtime_capability_modules_do_not_import_service_facade():
         "profile.py",
         "request_factory.py",
         "export_service.py",
+        "export_style_helpers.py",
         "bounded_export.py",
         "report_service.py",
         "drill_service.py",
@@ -60,6 +61,7 @@ def test_runtime_capabilities_stay_below_god_object_limit():
         "profile.py",
         "request_factory.py",
         "export_service.py",
+        "export_style_helpers.py",
         "bounded_export.py",
         "report_service.py",
         "drill_service.py",

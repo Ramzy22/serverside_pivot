@@ -15,7 +15,7 @@ import streamlit as st
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-_PACKAGE_ROOT = _ROOT / "dash_tanstack_pivot"
+_PACKAGE_ROOT = _ROOT / "serverside_pivot"
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 

@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const frontendRoot = path.resolve(__dirname, '../dash_tanstack_pivot');
+const frontendRoot = path.resolve(__dirname, '../serverside_pivot');
 const babel = require(path.join(frontendRoot, 'node_modules/@babel/core'));
 const presetEnv = require(path.join(frontendRoot, 'node_modules/@babel/preset-env'));
 const {createTable, getCoreRowModel} = require(path.join(frontendRoot, 'node_modules/@tanstack/react-table'));

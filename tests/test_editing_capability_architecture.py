@@ -5,7 +5,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ENGINE_ROOT = (
     REPOSITORY_ROOT
-    / "dash_tanstack_pivot"
+    / "serverside_pivot"
     / "pivot_engine"
     / "pivot_engine"
 )
@@ -58,7 +58,7 @@ def test_transaction_capability_stays_below_god_object_limit():
 
 
 def test_editing_package_is_included_in_distribution():
-    pyproject = (REPOSITORY_ROOT / "dash_tanstack_pivot" / "pyproject.toml").read_text(
+    pyproject = (REPOSITORY_ROOT / "serverside_pivot" / "pyproject.toml").read_text(
         encoding="utf-8"
     )
     assert '"pivot_engine.editing"' in pyproject

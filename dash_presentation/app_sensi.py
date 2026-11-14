@@ -12,7 +12,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-_PE_DIR = _REPO_ROOT / "dash_tanstack_pivot" / "pivot_engine"
+_PE_DIR = _REPO_ROOT / "serverside_pivot" / "pivot_engine"
 if _PE_DIR.is_dir() and str(_PE_DIR) not in sys.path:
     sys.path.insert(0, str(_PE_DIR))
 
@@ -20,7 +20,7 @@ import pandas as pd
 import pyarrow as pa
 from dash import Dash, html
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 import pivot_engine.tanstack_adapter as _ta
 

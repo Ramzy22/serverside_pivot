@@ -501,7 +501,7 @@ mutation_policy = RuntimeMutationAuthorizer({
 ```python
 import pyarrow as pa
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 data = pa.Table.from_pydict({
@@ -543,7 +543,7 @@ if __name__ == "__main__":
 ```python
 import pandas as pd
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 
 # Direct Pandas DataFrame or list of dicts
 df = pd.DataFrame({
@@ -586,7 +586,7 @@ if __name__ == "__main__":
 
 ```python
 from dash import Dash, html
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import (
     create_tanstack_adapter,
     configure_pivot_execution,
@@ -656,7 +656,7 @@ import {
   HttpPivotTransport,
   LatestViewportScheduler,
   type ValConfig,
-} from 'dash_tanstack_pivot/react';
+} from 'serverside_pivot/react';
 
 const transport = new LatestViewportScheduler(
   new HttpPivotTransport({ endpoint: 'http://localhost:8765/v1/runtime' })
@@ -681,7 +681,7 @@ export function ServerPivot() {
 
 ```tsx
 import React from 'react';
-import { PivotWorkspace, type ValConfig } from 'dash_tanstack_pivot/react';
+import { PivotWorkspace, type ValConfig } from 'serverside_pivot/react';
 
 const localRecords = [
   { region: 'North', product: 'Laptop', quarter: 'Q1', sales: 120000 },

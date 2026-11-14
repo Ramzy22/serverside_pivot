@@ -32,7 +32,7 @@ from typing import Any, Iterable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOT = REPOSITORY_ROOT / "dash_tanstack_pivot"
+PACKAGE_ROOT = REPOSITORY_ROOT / "serverside_pivot"
 ENGINE_ROOT = PACKAGE_ROOT / "pivot_engine"
 for import_root in (REPOSITORY_ROOT, PACKAGE_ROOT, ENGINE_ROOT):
     if str(import_root) not in sys.path:
@@ -49,7 +49,7 @@ from selenium.webdriver.support import expected_conditions as expected_condition
 from selenium.webdriver.support.ui import WebDriverWait
 from werkzeug.serving import WSGIRequestHandler, make_server
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 

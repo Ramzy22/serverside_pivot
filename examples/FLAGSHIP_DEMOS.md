@@ -26,7 +26,7 @@ Showcases demonstrating host-neutral execution across Dash, React, and Streamlit
 | Host | Entry point | What it demonstrates |
 | --- | --- | --- |
 | **Dash** | `python examples/flagship_dash.py` | Traditional Dash component/callback adapter. |
-| **React** | `node dash_tanstack_pivot/node_modules/vite/bin/vite.js --config examples/flagship_react/vite.config.ts` | Public `PivotWorkspace` React API with direct HTTP transport. |
+| **React** | `node serverside_pivot/node_modules/vite/bin/vite.js --config examples/flagship_react/vite.config.ts` | Public `PivotWorkspace` React API with direct HTTP transport. |
 | **Streamlit** | `streamlit run examples/flagship_streamlit.py --server.port 8502` | Streamlit zero-rerun component: viewport requests do not trigger Python re-execution. |
 
 React and Streamlit share the host-neutral V1 service:

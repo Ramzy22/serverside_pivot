@@ -10,25 +10,25 @@ __pycache__/
 .Python
 build/
 # The Streamlit V2 component is distributed with its compiled, hashed assets.
-!dash_tanstack_pivot/streamlit_pivot/
-!dash_tanstack_pivot/streamlit_pivot/frontend/
-!dash_tanstack_pivot/streamlit_pivot/frontend/build
-!dash_tanstack_pivot/streamlit_pivot/frontend/build/
-!dash_tanstack_pivot/streamlit_pivot/frontend/build/**
-dash_tanstack_pivot/streamlit_pivot/frontend/node_modules/
+!serverside_pivot/streamlit_pivot/
+!serverside_pivot/streamlit_pivot/frontend/
+!serverside_pivot/streamlit_pivot/frontend/build
+!serverside_pivot/streamlit_pivot/frontend/build/
+!serverside_pivot/streamlit_pivot/frontend/build/**
+serverside_pivot/streamlit_pivot/frontend/node_modules/
 .setuptools-build/
 develop-eggs/
 dist/
-dash_tanstack_pivot/dist/*
-!dash_tanstack_pivot/dist/react/
-!dash_tanstack_pivot/dist/react/**
+serverside_pivot/dist/*
+!serverside_pivot/dist/react/
+!serverside_pivot/dist/react/**
 downloads/
 eggs/
 .eggs/
 lib64/
 # lib/ excluded except JS source
 /lib/
-!dash_tanstack_pivot/src/lib/
+!serverside_pivot/src/lib/
 parts/
 sdist/
 var/
@@ -61,7 +61,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 pytest-cache-files-*/
-dash_tanstack_pivot/pytest-cache-files-*/
+serverside_pivot/pytest-cache-files-*/
 
 # Translations
 *.mo
@@ -200,10 +200,20 @@ release-package.tgz
 *.whl
 
 # Ignore built python distributions in package subfolder
-dash_tanstack_pivot/dist/*.whl
-dash_tanstack_pivot/dist/*.tar.gz
+serverside_pivot/dist/*.whl
+serverside_pivot/dist/*.tar.gz
 
 # Video render & marketing scratch outputs
 brag-output/
 brag-output-*/
 scratch/
+
+# AI agent, planning, and temporary files (never commit)
+.agents/
+.claude/
+.planning/
+artifacts/
+AGENTS.md
+CLAUDE.md
+tmp/
+*.tmp

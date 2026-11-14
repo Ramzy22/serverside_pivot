@@ -54,14 +54,14 @@ Do not overload one expander to do both.
 
 These parts already exist and should be reused:
 
-- unified runtime router: [service.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py)
-- unified Dash callback transport: [dash_callbacks.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py)
-- server-side pivot adapter: [tanstack_adapter.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py)
+- unified runtime router: [service.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/service.py)
+- unified Dash callback transport: [dash_callbacks.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py)
+- server-side pivot adapter: [tanstack_adapter.py](../serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py)
 - grouped hierarchy row metadata: `_path`, `_pathFields`, `_has_children`, `_is_expanded`
-- drill-through transport path: [service.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py)
-- current detail surfaces: [InlineDetailPanel.js](../dash_tanstack_pivot/src/lib/components/Table/InlineDetailPanel.js)
-- current hierarchy/grid shell: [DashTanstackPivot.react.js](../dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js)
-- current pivot/table columns: [useColumnDefs.js](../dash_tanstack_pivot/src/lib/hooks/useColumnDefs.js)
+- drill-through transport path: [service.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/service.py)
+- current detail surfaces: [InlineDetailPanel.js](../serverside_pivot/src/lib/components/Table/InlineDetailPanel.js)
+- current hierarchy/grid shell: [DashTanstackPivot.react.js](../serverside_pivot/src/lib/components/DashTanstackPivot.react.js)
+- current pivot/table columns: [useColumnDefs.js](../serverside_pivot/src/lib/hooks/useColumnDefs.js)
 
 ## Implemented State
 
@@ -323,16 +323,16 @@ Keep one transport:
 
 ### Keep
 
-- [runtime/service.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/service.py)
-- [runtime/models.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/models.py)
-- [runtime/dash_callbacks.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py)
-- [tanstack_adapter.py](../dash_tanstack_pivot/pivot_engine/pivot_engine/tanstack_adapter.py)
+- [runtime/service.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/service.py)
+- [runtime/models.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/models.py)
+- [runtime/dash_callbacks.py](../serverside_pivot/pivot_engine/pivot_engine/runtime/dash_callbacks.py)
+- [tanstack_adapter.py](../serverside_pivot/pivot_engine/pivot_engine/tanstack_adapter.py)
 
 ### Add
 
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/tree_service.py`
-- `dash_tanstack_pivot/pivot_engine/pivot_engine/runtime/detail_service.py`
-- optionally `dash_tanstack_pivot/pivot_engine/pivot_engine/tree_controller.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/tree_service.py`
+- `serverside_pivot/pivot_engine/pivot_engine/runtime/detail_service.py`
+- optionally `serverside_pivot/pivot_engine/pivot_engine/tree_controller.py`
 
 ### Responsibility Split
 
@@ -364,16 +364,16 @@ Keep one transport:
 
 ### Keep
 
-- [DashTanstackPivot.react.js](../dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js)
-- [useServerSideRowModel.js](../dash_tanstack_pivot/src/lib/hooks/useServerSideRowModel.js)
-- [useColumnDefs.js](../dash_tanstack_pivot/src/lib/hooks/useColumnDefs.js)
+- [DashTanstackPivot.react.js](../serverside_pivot/src/lib/components/DashTanstackPivot.react.js)
+- [useServerSideRowModel.js](../serverside_pivot/src/lib/hooks/useServerSideRowModel.js)
+- [useColumnDefs.js](../serverside_pivot/src/lib/hooks/useColumnDefs.js)
 
 ### Add
 
-- `dash_tanstack_pivot/src/lib/components/Table/InlineDetailPanel.js`
-- `dash_tanstack_pivot/src/lib/components/Table/DetailSidePanel.js`
-- `dash_tanstack_pivot/src/lib/components/Table/DetailDrawer.js`
-- `dash_tanstack_pivot/src/lib/components/Table/DetailSurfaceContent.js`
+- `serverside_pivot/src/lib/components/Table/InlineDetailPanel.js`
+- `serverside_pivot/src/lib/components/Table/DetailSidePanel.js`
+- `serverside_pivot/src/lib/components/Table/DetailDrawer.js`
+- `serverside_pivot/src/lib/components/Table/DetailSurfaceContent.js`
 
 ### Frontend Rules
 

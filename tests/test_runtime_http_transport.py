@@ -308,7 +308,7 @@ def test_expired_export_job_is_missing_and_shutdown_cleans_running_work():
 
 def test_dash_export_jobs_share_authenticated_semantics_and_completed_download():
     from dash import Dash, html
-    from dash_tanstack_pivot import DashTanstackPivot
+    from serverside_pivot import DashTanstackPivot
     from pivot_engine.runtime.dash_callbacks import register_dash_pivot_transport_callback
     adapter = _JobAdapter()
     service = PivotRuntimeService(lambda: adapter)
@@ -364,7 +364,7 @@ def test_dash_export_jobs_share_authenticated_semantics_and_completed_download()
 
 def _dash_job_host(registrations):
     from dash import Dash, html
-    from dash_tanstack_pivot import DashTanstackPivot
+    from serverside_pivot import DashTanstackPivot
     from pivot_engine.runtime.dash_callbacks import register_dash_pivot_transport_callback
     app = Dash(__name__)
     app.layout = html.Div([DashTanstackPivot(id=name, table=table)
@@ -578,7 +578,7 @@ def test_dash_process_exit_cancels_exports_before_executor_threads_join():
     ''')
     env = dict(os.environ)
     root = Path(__file__).resolve().parents[1]
-    env["PYTHONPATH"] = str(root / "dash_tanstack_pivot" / "pivot_engine") + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(root / "serverside_pivot" / "pivot_engine") + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

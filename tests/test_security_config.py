@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "dash_tanstack_pivot"))
-sys.path.append(str(ROOT / "dash_tanstack_pivot" / "pivot_engine"))
+sys.path.append(str(ROOT / "serverside_pivot"))
+sys.path.append(str(ROOT / "serverside_pivot" / "pivot_engine"))
 
 
 def _reload_security():
@@ -29,7 +29,7 @@ def test_api_jwt_dependency_uses_maintained_crypto_backend():
         import tomli as tomllib
     from packaging.requirements import Requirement
 
-    config = tomllib.loads((ROOT / "dash_tanstack_pivot/pyproject.toml").read_text())
+    config = tomllib.loads((ROOT / "serverside_pivot/pyproject.toml").read_text())
     requirements = [Requirement(value) for value in config["project"]["optional-dependencies"]["api"]]
     assert not any(value.name.lower() in {"python-jose", "ecdsa"} for value in requirements)
     assert any(value.name.lower() == "pyjwt" and "crypto" in value.extras for value in requirements)

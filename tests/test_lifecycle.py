@@ -6,7 +6,7 @@ import pytest
 
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
-sys.path.append(os.path.join(os.getcwd(), "dash_tanstack_pivot"))
+sys.path.append(os.path.join(os.getcwd(), "serverside_pivot"))
 
 from pivot_engine.lifecycle import TaskManager
 

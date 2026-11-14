@@ -5,7 +5,7 @@ import re
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-LIB_ROOT = REPOSITORY_ROOT / "dash_tanstack_pivot" / "src" / "lib"
+LIB_ROOT = REPOSITORY_ROOT / "serverside_pivot" / "src" / "lib"
 
 
 def _source(relative_path: str) -> str:
@@ -24,7 +24,7 @@ def test_public_component_only_depends_on_the_internal_runtime_root():
 
 def test_typed_public_component_is_the_dash_metadata_source():
     source = _source("components/DashTanstackPivot.react.tsx")
-    build_source = (REPOSITORY_ROOT / "dash_tanstack_pivot" / "scripts" / "build_py_strict.py").read_text(encoding="utf-8")
+    build_source = (REPOSITORY_ROOT / "serverside_pivot" / "scripts" / "build_py_strict.py").read_text(encoding="utf-8")
 
     assert "export interface DashTanstackPivotProps" in source
     assert "DashTanstackPivot.react.tsx" in build_source
@@ -38,8 +38,8 @@ def test_editing_is_not_a_public_runtime_feature_and_legacy_props_are_noops():
     public_source = _source("components/DashTanstackPivot.react.tsx")
     setup_source = _source("runtime/useCoreRuntimeStage.tsx")
     domain_source = _source("runtime/runtimeDomains.ts")
-    build_source = (REPOSITORY_ROOT / "dash_tanstack_pivot" / "scripts" / "build_py_strict.py").read_text(encoding="utf-8")
-    package_readme = (REPOSITORY_ROOT / "dash_tanstack_pivot" / "README.md").read_text(encoding="utf-8")
+    build_source = (REPOSITORY_ROOT / "serverside_pivot" / "scripts" / "build_py_strict.py").read_text(encoding="utf-8")
+    package_readme = (REPOSITORY_ROOT / "serverside_pivot" / "README.md").read_text(encoding="utf-8")
 
     for prop_name in ("cellUpdate", "cellUpdates", "editingConfig", "editLifecycleEvent", "editState"):
         assert f"{prop_name}?:" in public_source
@@ -60,7 +60,7 @@ def test_editing_is_not_a_public_runtime_feature_and_legacy_props_are_noops():
 def test_generated_metadata_keeps_optional_nested_types_from_typescript():
     import json
 
-    metadata_path = REPOSITORY_ROOT / "dash_tanstack_pivot" / "dash_tanstack_pivot" / "metadata.json"
+    metadata_path = REPOSITORY_ROOT / "serverside_pivot" / "serverside_pivot" / "metadata.json"
     component = next(iter(json.loads(metadata_path.read_text(encoding="utf-8")).values()))
     value_config = component["props"]["valConfigs"]["type"]
     chart_pane = component["props"]["chartCanvasPanes"]["type"]

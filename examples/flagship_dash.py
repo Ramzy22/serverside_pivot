@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dash_tanstack_pivot import DashTanstackPivot
+from serverside_pivot import DashTanstackPivot
 from pivot_engine import RuntimeDatasetAuthorizer, register_pivot_app
 
 from examples.flagship_demo_data import DEMO_ROW_COUNT, TABLE_NAME, get_demo_adapter, workspace_config

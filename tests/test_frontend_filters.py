@@ -8,7 +8,7 @@ import os
 # Add root and pivot_engine source to path
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), 'pivot_engine'))
-sys.path.append(os.path.join(os.getcwd(), 'dash_tanstack_pivot'))
+sys.path.append(os.path.join(os.getcwd(), 'serverside_pivot'))
 
 from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation
 

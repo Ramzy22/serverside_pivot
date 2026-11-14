@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {test} = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const frontend = path.resolve(__dirname, '../dash_tanstack_pivot');
+const frontend = path.resolve(__dirname, '../serverside_pivot');
 const sourcePath = path.join(frontend, 'src/lib/components/Charts/PivotCharts.js');
 
 test('chart export escapes the chart pane clipping boundary through a portal', () => {

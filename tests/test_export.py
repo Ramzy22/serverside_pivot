@@ -18,7 +18,7 @@ import os
 sys.path.insert(
     0,
     os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "dash_tanstack_pivot", "pivot_engine")
+        os.path.join(os.path.dirname(__file__), "..", "serverside_pivot", "pivot_engine")
     ),
 )
 

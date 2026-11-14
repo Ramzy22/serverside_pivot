@@ -39,7 +39,7 @@ used as a deployment credential.
 
 ## Review procedure
 
-1. Run `bandit -r dash_tanstack_pivot/pivot_engine/pivot_engine -q -f json`.
+1. Run `bandit -r serverside_pivot/pivot_engine/pivot_engine -q -f json`.
 2. Confirm the JSON report has no unsuppressed findings.
 3. Review every changed `# nosec` line against this register and the affected
    authorization tests.

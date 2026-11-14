@@ -33,7 +33,7 @@ from uuid import uuid4
 
 UTC = timezone.utc
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "dash_tanstack_pivot"
+PACKAGE = ROOT / "serverside_pivot"
 DEFAULT_ARTIFACT_DIR = ROOT / "artifacts" / "flagship-certification"
 EXPORT_QUALIFICATION_ARTIFACT_DIR = ROOT / "artifacts" / "export-qualification"
 EXPORT_PUBLICATION_MARKER = ".pivot-export-qualification-publication-v1"
@@ -223,7 +223,7 @@ def _run_with_hosts(
         ))
         _wait_for("http://127.0.0.1:8050", process=dash)
         react = stack.enter_context(_process(
-            [node, "dash_tanstack_pivot/node_modules/vite/bin/vite.js", "--config", "examples/flagship_react/vite.config.ts", "--host", "127.0.0.1", "--port", "5174"],
+            [node, "serverside_pivot/node_modules/vite/bin/vite.js", "--config", "examples/flagship_react/vite.config.ts", "--host", "127.0.0.1", "--port", "5174"],
             name="react", artifact_dir=artifact_dir, environment=environment,
         ))
         _wait_for("http://127.0.0.1:5174", process=react)

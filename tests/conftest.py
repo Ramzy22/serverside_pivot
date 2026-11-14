@@ -2,12 +2,12 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_ENGINE_PATH = _ROOT / "dash_tanstack_pivot" / "pivot_engine"
+_ENGINE_PATH = _ROOT / "serverside_pivot" / "pivot_engine"
 if str(_ENGINE_PATH) not in sys.path:
     sys.path.insert(0, str(_ENGINE_PATH))
 
 collect_ignore_glob = [
-    "dash_tanstack_pivot/pytest-cache-files-*",
+    "serverside_pivot/pytest-cache-files-*",
 ]
 
 

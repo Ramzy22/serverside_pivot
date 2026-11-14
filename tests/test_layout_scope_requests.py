@@ -19,7 +19,7 @@ def test_frontend_layout_commit_rejects_mixed_and_superseded_deliveries():
 
 def test_filter_scope_change_resends_manifest_without_reusing_revision():
     script = """
-      import { pivotLayoutRequestFields } from './dash_tanstack_pivot/src/lib/utils/columnOrder.js';
+      import { pivotLayoutRequestFields } from './serverside_pivot/src/lib/utils/columnOrder.js';
       const args = [['path:q1|sales'], 'old-revision', 'path:q1|sales', [], null, false, {}, true];
       console.log(JSON.stringify(pivotLayoutRequestFields(...args)));
     """
@@ -34,7 +34,7 @@ def test_filter_scope_change_resends_manifest_without_reusing_revision():
 
 def test_unchanged_scope_uses_compact_revision():
     script = """
-      import { pivotLayoutRequestFields } from './dash_tanstack_pivot/src/lib/utils/columnOrder.js';
+      import { pivotLayoutRequestFields } from './serverside_pivot/src/lib/utils/columnOrder.js';
       const args = [['path:q1|sales'], 'known-revision', 'path:q1|sales', [], null, false, {}, false];
       console.log(JSON.stringify(pivotLayoutRequestFields(...args)));
     """

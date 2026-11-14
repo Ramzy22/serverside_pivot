@@ -217,7 +217,7 @@ def _wheel_assets(wheel: Path) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {"dash": {}, "streamlit": {}}
     with zipfile.ZipFile(wheel) as archive:
         for name in archive.namelist():
-            if name.startswith("dash_tanstack_pivot/") and name.endswith((".js", ".css")):
+            if name.startswith("serverside_pivot/") and name.endswith((".js", ".css")):
                 result["dash"][f"/_dash-component-suites/{name}"] = _digest(archive.read(name))
             if name.startswith("streamlit_pivot/frontend/build/") and name.endswith((".js", ".css")):
                 result["streamlit"][f"/{name}"] = _digest(archive.read(name))
@@ -228,8 +228,8 @@ def _wheel_assets(wheel: Path) -> dict[str, dict[str, str]]:
 
 def _installed_module_paths(python: Path, cwd: Path) -> dict[str, str]:
     probe = (
-        "import json,dash_tanstack_pivot,streamlit_pivot,pivot_engine;"
-        "print(json.dumps({'dash':dash_tanstack_pivot.__file__,"
+        "import json,serverside_pivot,streamlit_pivot,pivot_engine;"
+        "print(json.dumps({'dash':serverside_pivot.__file__,"
         "'streamlit':streamlit_pivot.__file__,'engine':pivot_engine.__file__}))"
     )
     return json.loads(_run([str(python), "-c", probe], cwd))
@@ -265,7 +265,7 @@ def build_artifacts(source: Path, output: Path, *, build_wheelhouse: Path | None
 
 
 def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_wheelhouse: Path | None = None) -> ArtifactBinding:
-    package = snapshot / "dash_tanstack_pivot"
+    package = snapshot / "serverside_pivot"
     build_environment = _prepare_build_wheelhouse(build_wheelhouse, package, output) if build_wheelhouse is not None else None
     npm = shutil.which("npm")
     if npm is None:
@@ -316,7 +316,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
     # commit and bound separately by SHA-256, so its lock entry has no stale
     # integrity from an earlier release.
     _run([npm, "ci", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], react_app)
-    installed_package = react_app / "node_modules" / "dash_tanstack_pivot" / "dist" / "react" / "index.mjs"
+    installed_package = react_app / "node_modules" / "serverside_pivot" / "dist" / "react" / "index.mjs"
     if not installed_package.is_file() or installed_package.read_bytes() != (package / "dist" / "react" / "index.mjs").read_bytes():
         raise RuntimeError("React example did not resolve the packed package")
     _run([npm, "run", "build"], react_app)
@@ -702,7 +702,7 @@ def verify_browser_assets(binding: ArtifactBinding, host: str, driver, entries: 
             continue
         own_asset = (
             host == "react" and path.startswith("/assets/")
-            or host == "dash" and path.startswith("/_dash-component-suites/dash_tanstack_pivot/")
+            or host == "dash" and path.startswith("/_dash-component-suites/serverside_pivot/")
             or host == "streamlit" and (
                 path.startswith("/_stcore/bidi-components/serverside-pivot.")
                 or path.startswith("/_stcore/component/serverside-pivot/")
