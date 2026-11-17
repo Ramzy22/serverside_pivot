@@ -3,10 +3,11 @@ import React from 'react';
 import Icons from '../utils/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
 import { flexRender } from '@tanstack/react-table';
-import { buildEditedCellVisualStyle, mergeStateStyles, withAlpha, resolveDepthToken, resolveGridLineBorders, toCssPx } from '../utils/styles';
+import { buildEditedCellVisualStyle, mergeStateStyles, withAlpha, resolveDepthToken, resolveGridLineBorders, toCssPx, toFiniteNumber } from '../utils/styles';
 import { formatDisplayLabel } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
-import { findSortSpecifier, isAbsoluteSortSpecifier } from '../utils/sorting';
+import { findSortSpecifier, isAbsoluteSortSpecifier, shouldUseAbsoluteSort } from '../utils/sorting';
+import { createTextWidthMeasurer, measureLongestHeaderWord } from '../utils/pivotLayoutUtils';
 import {
     HEADER_STYLE_CONFIG_KEYS,
     addHeaderCandidate,
@@ -16,7 +17,7 @@ import {
     normalizeHeaderStyle,
 } from '../presentation/headerFormatting';
 import { CellErrorBoundary, SafeCellContent } from '../presentation/safeCellContent';
-import { resolveDataBarMaximum } from '../utils/dataBars';
+import { normalizeDataBarVariant, resolveDataBarMaximum } from '../utils/dataBars';
 
 /** @type {any} */
 const HEADER_FORMATTING_RESERVED_KEYS = new Set([
@@ -85,6 +86,9 @@ export function useRenderHelpers({
     rightCols,
     columnPinning,
     sorting,
+    sortOptions,
+    fontFamily,
+    fontSize,
     handleHeaderContextMenu,
     autoSizeColumn,
     autoSizeBounds,
@@ -113,6 +117,7 @@ export function useRenderHelpers({
     getHeaderStickyStyle,
     dataBarsColumns,
     dataBarMaximums,
+    dataBarVariant,
     colorScaleStats,
     cellFormatRules,
     resolveEditedCellMarker,
@@ -436,6 +441,23 @@ export function useRenderHelpers({
             isFillSelected ? fillOverlayRef : EMPTY_STYLE,
         );
         /** @type {any} */
+        const shouldUseHoverTint = Boolean(
+            hasExplicitCellBg
+            && !isSelected
+            && !isReportConfigGutter
+            && (!cellStateStyle.background || (
+                typeof cellStateStyle.background === 'string'
+                && !cellStateStyle.background.includes('gradient(')
+                && !cellStateStyle.background.includes('url(')
+            ))
+        );
+        /** @type {any} */
+        let finalCellStateStyle = cellStateStyle;
+        if (shouldUseHoverTint && typeof cellStateStyle.background === 'string') {
+            const { background: bgValue, ...restCellStateStyle } = cellStateStyle;
+            finalCellStateStyle = { ...restCellStateStyle, backgroundColor: bgValue };
+        }
+        /** @type {any} */
         const cellTextAlign = cellFmt && ['left', 'center', 'right'].includes(cellFmt.textAlign)
             ? cellFmt.textAlign
             : null;
@@ -488,19 +510,37 @@ export function useRenderHelpers({
         // Data bars
         const rawNumValue = resolvedCellValue;
         /** @type {any} */
+        const dataMeasureAttr = (!isHierarchy && !isReportConfigGutter && col.id !== '__row_number__' && col.id !== '__row_checkbox__')
+            ? (col.columnDef?.meta?.measureField || col.id)
+            : undefined;
+        /** @type {any} */
+        const hasConfiguredDataBar = Boolean(
+            (dataBarsColumns && (
+                dataBarsColumns.has(col.id)
+                || (dataMeasureAttr && dataBarsColumns.has(dataMeasureAttr))
+            ))
+            || col.columnDef?.meta?.dataBars
+        );
+        /** @type {any} */
         const isDataBar = !isHierarchy
             && !isReportConfigGutter
-            && dataBarsColumns && dataBarsColumns.has(col.id)
+            && hasConfiguredDataBar
             && typeof rawNumValue === 'number'
             && !Number.isNaN(rawNumValue)
             && !(row.original && row.original._isTotal);
+        /** @type {'fill' | 'underbar'} */
+        const resolvedDataBarVariant = normalizeDataBarVariant(dataBarVariant || theme.dataBarStyle);
         /** @type {any} */
         let dataBarEl = null;
         if (isDataBar) {
             /** @type {any} */
             const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
             /** @type {any} */
-            const absMax = resolveDataBarMaximum(dataBarMaximums && dataBarMaximums[col.id], stats);
+            const explicitBarMax = dataBarMaximums && (
+                dataBarMaximums[col.id] ?? (dataMeasureAttr ? dataBarMaximums[dataMeasureAttr] : undefined)
+            );
+            /** @type {any} */
+            const absMax = resolveDataBarMaximum(explicitBarMax, stats);
             if (absMax !== null) {
                 /** @type {any} */
                 const pct = Math.min(1, Math.abs(rawNumValue) / absMax);
@@ -520,26 +560,56 @@ export function useRenderHelpers({
                 const barBorder = isNeg
                     ? (theme.dataBarNegative ? (withAlpha(rawNegColor, 0.55, rawNegColor) || rawNegColor) : (isDarkTheme(theme) ? 'rgba(255,100,100,0.5)' : 'rgba(220,38,38,0.35)'))
                     : (theme.dataBarPositive ? (withAlpha(rawPosColor, 0.65, rawPosColor) || rawPosColor) : (isDarkTheme(theme) ? 'rgba(100,180,255,0.6)' : 'rgba(37,99,235,0.45)'));
-                dataBarEl = (
-                    <div style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: `${pct * 100}%`,
-                        background: barColor,
-                        borderRight: pct > 0.01 ? `2px solid ${barBorder}` : 'none',
-                        pointerEvents: 'none',
-                        zIndex: 0,
-                    }} />
-                );
+                if (resolvedDataBarVariant === 'underbar') {
+                    dataBarEl = (
+                        <div
+                            aria-hidden="true"
+                            data-databar-track="underbar"
+                            style={{
+                                position: 'absolute',
+                                left: '10px',
+                                right: '10px',
+                                bottom: '4px',
+                                height: '3px',
+                                borderRadius: '999px',
+                                background: isDarkTheme(theme) ? 'rgba(255,255,255,0.09)' : 'rgba(15,23,42,0.08)',
+                                overflow: 'hidden',
+                                pointerEvents: 'none',
+                                zIndex: 0,
+                            }}
+                        >
+                            <div
+                                style={{
+                                    width: `${pct * 100}%`,
+                                    height: '100%',
+                                    borderRadius: '999px',
+                                    background: isNeg
+                                        ? (theme.dataBarNegative ? barBorder : (isDarkTheme(theme) ? '#FB7185' : '#DC2626'))
+                                        : (theme.dataBarPositive ? barBorder : (theme.primary || '#4F46E5')),
+                                    transition: 'width 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                }}
+                            />
+                        </div>
+                    );
+                } else {
+                    dataBarEl = (
+                        <div style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: `${pct * 100}%`,
+                            background: barColor,
+                            borderRight: pct > 0.01 ? `2px solid ${barBorder}` : 'none',
+                            transition: 'width 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                            pointerEvents: 'none',
+                            zIndex: 0,
+                        }} />
+                    );
+                }
             }
         }
 
-        /** @type {any} */
-        const dataMeasureAttr = (!isHierarchy && !isReportConfigGutter && col.id !== '__row_number__' && col.id !== '__row_checkbox__')
-            ? (col.columnDef?.meta?.measureField || col.id)
-            : undefined;
         /** @type {any} */
         const resolvedCellFontFamily = (!isHierarchy && !isReportConfigGutter && col.id !== '__row_number__' && theme.numericFontFamily)
             ? theme.numericFontFamily
@@ -554,6 +624,8 @@ export function useRenderHelpers({
                 data-colid={col.id}
                 data-measure={dataMeasureAttr}
                 data-databar={dataBarEl ? 'true' : undefined}
+                data-databar-variant={dataBarEl ? resolvedDataBarVariant : undefined}
+                data-grid-cell-tint={shouldUseHoverTint ? 'true' : undefined}
                 data-rowspan={rowSpanHeight ? rowSpanState.rowSpan : undefined}
                 data-report-config-gutter={isReportConfigGutter ? 'true' : undefined}
                 onMouseDown={isReportConfigGutter ? undefined : (e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
@@ -597,7 +669,7 @@ export function useRenderHelpers({
                                         : ((isHierarchy || isReportConfigGutter)
                                             ? (theme.text || undefined)
                                             : (isTotalCol ? themeBgs.totalText : (theme.textSec || theme.text))),
-                    ...cellStateStyle,
+                    ...finalCellStateStyle,
                     position: !disableSticky && cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
                     zIndex: rowSpanHeight
                         ? Math.max(Number(cellStateStyle.zIndex) || 0, 6)
@@ -617,7 +689,7 @@ export function useRenderHelpers({
                 onContextMenu={isReportConfigGutter ? undefined : e => handleContextMenu(e, resolvedCellValue, col.id, row)}
             >
                 {dataBarEl}
-                <span style={dataBarEl ? DATA_BAR_SPAN_STYLE : undefined}>{cellContent}</span>
+                <span style={dataBarEl ? (resolvedDataBarVariant === 'underbar' ? { ...DATA_BAR_SPAN_STYLE, marginBottom: '4px' } : DATA_BAR_SPAN_STYLE) : undefined}>{cellContent}</span>
                 {isLastSelected && Object.keys(selectedCells).length === 1 && isSelected && (
                     <div onMouseDown={handleFillMouseDown} style={fillHandleStyle} />
                 )}
@@ -640,6 +712,7 @@ export function useRenderHelpers({
         getConditionalStyle,
         dataBarsColumns,
         dataBarMaximums,
+    dataBarVariant,
         colorScaleStats,
         cellFormatRules,
         resolveEditedCellMarker,
@@ -724,7 +797,7 @@ export function useRenderHelpers({
         minWidth: 0,
         whiteSpace: 'normal',
         wordBreak: 'normal',
-        overflowWrap: 'break-word',
+        overflowWrap: 'normal',
         lineHeight: theme.headerLineHeight !== undefined && theme.headerLineHeight !== null ? theme.headerLineHeight : 1.3,
     }) : ({
         overflow: 'hidden',
@@ -734,6 +807,18 @@ export function useRenderHelpers({
         minWidth: 0,
         ...(theme.headerLineHeight !== undefined && theme.headerLineHeight !== null ? { lineHeight: theme.headerLineHeight } : {}),
     }), [effectiveHeaderWrap, theme.headerLineHeight]);
+
+    /** @type {any} */
+    const measureHeaderLabelWidth = useMemo(() => {
+        /** @type {any} */
+        const headerPx = toFiniteNumber(
+            theme.headerFontSize !== undefined && theme.headerFontSize !== null ? theme.headerFontSize : theme.fontSize,
+            toFiniteNumber(fontSize, 13)
+        ) ?? 13;
+        /** @type {any} */
+        const family = theme.fontFamily || fontFamily || "'Inter', system-ui, sans-serif";
+        return createTextWidthMeasurer(`600 ${headerPx}px ${family}`, headerPx * 0.58);
+    }, [theme.headerFontSize, theme.fontSize, fontSize, theme.fontFamily, fontFamily]);
 
     /** @type {any} */
     const moreVertStyle = useMemo(() => ({
@@ -995,7 +1080,7 @@ export function useRenderHelpers({
         /** @type {any} */
         const sortSpecifier = findSortSpecifier(sorting, header.column.id);
         /** @type {any} */
-        const isAbsoluteSort = isAbsoluteSortSpecifier(sortSpecifier);
+        const isAbsoluteSort = isAbsoluteSortSpecifier(sortSpecifier) || shouldUseAbsoluteSort(sorting, sortOptions, header.column.id);
         /** @type {any} */
         const hasSortPriority = !isGroupHeader && !isEmptyPlaceholder && isSorted && Number.isFinite(Number(sortIndex)) && Number(sortIndex) >= 0;
         /** @type {any} */
@@ -1125,6 +1210,20 @@ export function useRenderHelpers({
         const showSortPriorityBadge = theme.showSortPriority !== false;
         /** @type {any} */
         const headerControlsMode = theme.headerControls || 'always';
+        /** @type {any} */
+        const showAbsoluteSortBadgeOpt = theme.showAbsoluteSortBadge;
+        /** @type {any} */
+        const shouldShowAbsoluteSortBadge = Boolean(
+            !isGroupHeader
+            && isSorted
+            && isAbsoluteSort
+            && showAbsoluteSortBadgeOpt !== false
+            && (showAbsoluteSortBadgeOpt === true || headerControlsMode !== 'never')
+        );
+        /** @type {any} */
+        const absoluteSortBadgeHoverOnly = shouldShowAbsoluteSortBadge
+            && headerControlsMode === 'hover'
+            && showAbsoluteSortBadgeOpt !== true;
         const headerMeasureField = header.column.columnDef?.meta?.measureField;
         /** @type {any} */
         const rawHeaderAlign = typeof theme.headerAlign === 'string'
@@ -1361,16 +1460,58 @@ export function useRenderHelpers({
                         aria-hidden="true"
                     >⠿</span>
                 )}
-                <span style={{ ...headerTextStyle, textAlign: resolvedHeaderTextAlign }}
-                data-header-text="true">
-                    {isEmptyPlaceholder ? null : (typeof header.column.columnDef.header === 'string'
-                        ? (header.column.columnDef.meta?.shortLabel && headerWidth < 80
-                            ? header.column.columnDef.meta.shortLabel
-                            : (header.column.columnDef.meta?.preserveHeaderLabel
-                                ? header.column.columnDef.header
-                                : formatDisplayLabel(header.column.columnDef.header)))
-                        : flexRender(header.column.columnDef.header, header.getContext()))}
-                </span>
+                {(() => {
+                    /** @type {any} */
+                    const rawHeaderLabel = typeof header.column.columnDef.header === 'string'
+                        ? header.column.columnDef.header
+                        : null;
+                    /** @type {any} */
+                    const fullHeaderLabel = rawHeaderLabel === null
+                        ? null
+                        : (header.column.columnDef.meta?.preserveHeaderLabel
+                            ? rawHeaderLabel
+                            : formatDisplayLabel(rawHeaderLabel));
+                    /** @type {any} */
+                    const configuredShortLabel = header.column.columnDef.meta?.shortLabel || null;
+                    /** @type {any} */
+                    const headerPadPx = (toFiniteNumber(theme.headerPaddingX, toFiniteNumber(theme.cellPaddingX, 12)) ?? 12) * 2 + 8;
+                    /** @type {any} */
+                    const visibleControlsReserve = (
+                        (!isGroupHeader && isSorted && sortIndicatorMode === 'arrow' ? 16 : 0)
+                        + (hasSortPriority && showSortPriorityBadge ? 18 : 0)
+                        + (shouldShowAbsoluteSortBadge && !absoluteSortBadgeHoverOnly ? 26 : 0)
+                        + (headerControlsMode === 'always' && !isGroupHeader && !isEmptyPlaceholder ? 34 : 0)
+                    );
+                    /** @type {any} */
+                    const availableHeaderTextWidth = Math.max(0, headerWidth - headerPadPx - visibleControlsReserve);
+                    /** @type {any} */
+                    const useShortHeaderLabel = Boolean(
+                        fullHeaderLabel !== null
+                        && configuredShortLabel
+                        && (
+                            headerWidth < 80
+                            || (effectiveHeaderWrap
+                                ? (
+                                    measureLongestHeaderWord(fullHeaderLabel, measureHeaderLabelWidth) > availableHeaderTextWidth
+                                    || measureHeaderLabelWidth(fullHeaderLabel) > availableHeaderTextWidth * 2
+                                )
+                                : measureHeaderLabelWidth(fullHeaderLabel) > availableHeaderTextWidth)
+                        )
+                    );
+                    /** @type {any} */
+                    const displayedHeaderLabel = useShortHeaderLabel ? configuredShortLabel : fullHeaderLabel;
+                    return (
+                        <span
+                            style={{ ...headerTextStyle, textAlign: resolvedHeaderTextAlign }}
+                            title={useShortHeaderLabel && fullHeaderLabel ? fullHeaderLabel : undefined}
+                            data-header-text="true"
+                        >
+                            {isEmptyPlaceholder ? null : (displayedHeaderLabel !== null
+                                ? displayedHeaderLabel
+                                : flexRender(header.column.columnDef.header, header.getContext()))}
+                        </span>
+                    );
+                })()}
 
                 {headerControlsMode !== 'never' && !isGroupHeader && filterColumnId && header.column.id !== '__row_number__' && !isEmptyPlaceholder && (
                     <div
@@ -1412,8 +1553,12 @@ export function useRenderHelpers({
                 {hasSortPriority && showSortPriorityBadge && (
                     <span style={sortPriorityBadgeStyle} title={`Sort priority ${sortIndex + 1}`}>{sortIndex + 1}</span>
                 )}
-                {!isGroupHeader && isSorted && isAbsoluteSort && (
-                    <span style={absoluteSortBadgeStyle} title="Absolute value sort">|x|</span>
+                {shouldShowAbsoluteSortBadge && (
+                    <span
+                        className={absoluteSortBadgeHoverOnly ? 'sp-header-control sp-header-badge' : 'sp-header-badge'}
+                        style={absoluteSortBadgeStyle}
+                        title="Absolute value sort"
+                    >|x|</span>
                 )}
 
                 {headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && (
@@ -1472,6 +1617,8 @@ export function useRenderHelpers({
                 )}
 
                 {header.column.getCanResize() && <div
+                    className="sp-resize-handle"
+                    data-resizing={isResizeHandleVisible ? 'true' : undefined}
                     onMouseDown={(e) => {
                         e.stopPropagation();
                         header.getResizeHandler()(e);
@@ -1495,11 +1642,25 @@ export function useRenderHelpers({
                         cursor: 'col-resize',
                         touchAction: 'none',
                         zIndex: 4,
-                        opacity: isResizeHandleVisible ? 1 : 0.14,
-                        transition: 'opacity 120ms ease',
-                        background: isResizeHandleVisible ? theme.primary : 'transparent'
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'transparent',
                     }}
-                />}
+                >
+                    <span
+                        className="sp-resize-pill"
+                        aria-hidden="true"
+                        style={{
+                            width: '2px',
+                            height: isResizeHandleVisible ? '100%' : '58%',
+                            borderRadius: '999px',
+                            background: isResizeHandleVisible ? theme.primary : theme.border,
+                            opacity: isResizeHandleVisible ? 1 : 0.35,
+                            pointerEvents: 'none',
+                        }}
+                    />
+                </div>}
             </div>
         );
 
@@ -1567,7 +1728,9 @@ export function useRenderHelpers({
         moreVertStyle,
         sortPriorityBadgeStyle,
         absoluteSortBadgeStyle,
+        measureHeaderLabelWidth,
         resolveHeaderFormatStyle,
+        sortOptions,
         sortingSignature,
         wrapHeaders,
         table,

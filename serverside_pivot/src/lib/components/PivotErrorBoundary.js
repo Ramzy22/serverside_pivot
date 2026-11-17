@@ -26,18 +26,35 @@ class PivotErrorBoundary extends React.Component {
       const msg = (this.state.error ? this.state.error.message : null) || 'An unexpected error occurred.';
       return (
         <div style={{
-          padding: '16px',
-          color: '#d32f2f',
-          border: '1px solid #ffcdd2',
-          borderRadius: '4px',
-          background: '#fff8f8',
-          fontFamily: 'sans-serif'
+          padding: '20px',
+          color: 'var(--sp-text, #111827)',
+          border: '1px solid rgba(239, 68, 68, 0.35)',
+          borderRadius: '12px',
+          background: 'var(--sp-surface-bg, #ffffff)',
+          boxShadow: 'var(--sp-shadow-sm, 0 4px 16px rgba(0,0,0,0.08))',
+          fontFamily: 'var(--sp-font-sans, system-ui, -apple-system, sans-serif)',
+          margin: '12px',
         }}>
-          <strong>Pivot table error</strong>
-          <p style={{ marginTop: '8px', fontSize: '13px' }}>{msg}</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', fontWeight: 700, fontSize: '14px' }}>
+            <span aria-hidden="true" style={{ width: '8px', height: '8px', borderRadius: '999px', background: '#ef4444' }} />
+            <span>Pivot table error</span>
+          </div>
+          <p style={{ marginTop: '8px', marginBottom: 0, fontSize: '13px', color: 'var(--sp-text-sec, #4b5563)', lineHeight: 1.5 }}>{msg}</p>
           <button
+            type="button"
+            className="sp-btn sp-btn-primary"
             onClick={() => this.setState({ hasError: false, error: null })}
-            style={{ marginTop: '8px', padding: '4px 12px', cursor: 'pointer' }}
+            style={{
+              marginTop: '14px',
+              padding: '7px 16px',
+              borderRadius: '999px',
+              border: 'none',
+              background: 'var(--sp-primary, #2563eb)',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
           >
             Retry
           </button>

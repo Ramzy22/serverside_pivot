@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { useChartExportMenu } from './useChartExportMenu';
 import Icons from '../../utils/Icons';
+import ThemedSelect from '../ThemedSelect';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { formatDisplayLabel } from '../../utils/helpers';
 import {
@@ -250,12 +251,13 @@ const ChartConfigSection = ({ title, theme, children, defaultCollapsed = true, f
                         {title}
                     </div>
                     <span style={{
-                        fontSize: '9px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
                         color: theme.textSec,
-                        transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                        transform: collapsed ? 'scale(0.8) rotate(-90deg)' : 'scale(0.8) rotate(0deg)',
                         transition: 'transform 0.15s ease',
                     }}>
-                        ▼
+                        <Icons.ChevronDown />
                     </span>
                 </div>
             ) : null}
@@ -607,9 +609,11 @@ const ChartLayerEditor = ({
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
                                 Measure
                             </span>
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Measure"
                                 value={layer.columnId || ''}
-                                onChange={(event) => {
+                                onChange={(/** @type {any} */ event) => {
                                     /** @type {any} */
                                     const nextOption = optionById.get(event.target.value) || null;
                                     updateLayer(layer.id, {
@@ -633,42 +637,48 @@ const ChartLayerEditor = ({
                                         ))}
                                     </optgroup>
                                 ))}
-                            </select>
+                            </ThemedSelect>
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
                                 Layer Type
                             </span>
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Layer Type"
                                 value={layer.type}
-                                onChange={(event) => updateLayer(layer.id, { type: event.target.value })}
+                                onChange={(/** @type {any} */ event) => updateLayer(layer.id, { type: event.target.value })}
                                 style={inputStyle}
                             >
                                 <option value="bar">Bar</option>
                                 <option value="line">Line</option>
                                 <option value="area">Area</option>
-                            </select>
+                            </ThemedSelect>
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
                                 Axis
                             </span>
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Axis"
                                 value={layer.axis}
-                                onChange={(event) => updateLayer(layer.id, { axis: event.target.value })}
+                                onChange={(/** @type {any} */ event) => updateLayer(layer.id, { axis: event.target.value })}
                                 style={inputStyle}
                             >
                                 <option value="left">Left Axis</option>
                                 <option value="right">Right Axis</option>
-                            </select>
+                            </ThemedSelect>
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
                                 Format
                             </span>
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Format"
                                 value={layer.valueFormat || 'auto'}
-                                onChange={(event) => updateLayer(layer.id, { valueFormat: event.target.value })}
+                                onChange={(/** @type {any} */ event) => updateLayer(layer.id, { valueFormat: event.target.value })}
                                 style={inputStyle}
                             >
                                 <option value="auto">Auto</option>
@@ -676,7 +686,7 @@ const ChartLayerEditor = ({
                                 <option value="compact">Compact (K/M)</option>
                                 <option value="percent">Percent</option>
                                 <option value="currency">Currency ($)</option>
-                            </select>
+                            </ThemedSelect>
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
@@ -728,9 +738,10 @@ const ChartSortButtons = ({ sortMode, onChange, theme }) => {
     ];
 
     return (
-        <select
+        <ThemedSelect
+            size="sm"
             value={sortMode}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={(/** @type {any} */ event) => onChange(event.target.value)}
             style={{
                 border: `1px solid ${theme.border}`,
                 background: theme.surfaceBg || theme.background || '#fff',
@@ -746,7 +757,7 @@ const ChartSortButtons = ({ sortMode, onChange, theme }) => {
             {options.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
             ))}
-        </select>
+        </ThemedSelect>
     );
 };
 
@@ -1850,7 +1861,7 @@ const ChartSurface = ({
                             lineHeight: 1,
                         }}
                         title="Close settings"
-                    >✕</button>
+                    ><span style={{ display: 'inline-flex', alignItems: 'center' }}><Icons.Close /></span></button>
                 </div>
                 <div
                     data-chart-settings-scroll="true"
@@ -1871,13 +1882,13 @@ const ChartSurface = ({
                     {/* Chart Type collapsible section */}
                     <button type="button" onClick={() => setChartTypeOpen(/** @param {any} [o] @returns {any} */ o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${theme.border}`, padding: '4px 0', cursor: 'pointer', marginBottom: chartTypeOpen ? '6px' : 0 }}>
                         <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>Chart Type</span>
-                        <span style={{ fontSize: '10px', color: theme.textSec, transform: chartTypeOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>▾</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', color: theme.textSec, transform: chartTypeOpen ? 'scale(0.85) rotate(0deg)' : 'scale(0.85) rotate(-90deg)', transition: 'transform 0.15s' }}><Icons.ChevronDown /></span>
                     </button>
                     {chartTypeOpen && <ChartTypeGallery chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />}
                     {/* Chart Parameters collapsible section */}
                     <button type="button" onClick={() => setChartParamsOpen(/** @param {any} [o] @returns {any} */ o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${theme.border}`, padding: '4px 0', cursor: 'pointer', marginTop: '8px', marginBottom: chartParamsOpen ? '6px' : 0 }}>
                         <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>Parameters</span>
-                        <span style={{ fontSize: '10px', color: theme.textSec, transform: chartParamsOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>▾</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', color: theme.textSec, transform: chartParamsOpen ? 'scale(0.85) rotate(0deg)' : 'scale(0.85) rotate(-90deg)', transition: 'transform 0.15s' }}><Icons.ChevronDown /></span>
                     </button>
                     {chartParamsOpen && <>
                         {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
@@ -2107,22 +2118,22 @@ const ChartSurface = ({
                     {(chartType === 'line' || chartType === 'scatter' || chartType === 'bubble' || chartType === 'area' || chartType === 'radar' || isComboChart) ? (<>
                         <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Markers</div>
                         <ChartConfigField label="Shape" theme={theme} controlMinWidth="100%">
-                            <select value={markerShape} onChange={e => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                            <ThemedSelect size="sm" aria-label="Marker shape" value={markerShape} onChange={(/** @type {any} */ e) => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
                                 <option value="none">None (line only)</option>
                                 <option value="circle">Circle</option>
                                 <option value="square">Square</option>
                                 <option value="diamond">Diamond</option>
                                 <option value="triangle">Triangle</option>
                                 <option value="cross">Cross</option>
-                            </select>
+                            </ThemedSelect>
                         </ChartConfigField>
                         <ChartConfigField label="Size" theme={theme} controlMinWidth="80px">
-                            <select value={markerSize} onChange={e => setMarkerSize(Number(e.target.value))} style={{ ...compactInputStyle, width: '80px' }}>
+                            <ThemedSelect size="sm" aria-label="Marker size" value={markerSize} onChange={(/** @type {any} */ e) => setMarkerSize(Number(e.target.value))} style={{ ...compactInputStyle, width: '92px' }}>
                                 <option value={3}>Small</option>
                                 <option value={5}>Medium</option>
                                 <option value={7}>Large</option>
                                 <option value={10}>XLarge</option>
-                            </select>
+                            </ThemedSelect>
                         </ChartConfigField>
                     </>) : null}
                     {(chartType === 'line' || chartType === 'area' || isComboChart) && Array.isArray(model && model.series) && model.series.length > 0 ? (<>
@@ -2138,11 +2149,11 @@ const ChartSurface = ({
                         </ChartConfigField>
                         {showTrendline ? (<>
                             <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
-                                <select value={trendlineMode} onChange={e => setTrendlineMode(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                <ThemedSelect size="sm" aria-label="Trendline type" value={trendlineMode} onChange={(/** @type {any} */ e) => setTrendlineMode(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
                                     <option value="linear">Linear Regression</option>
                                     <option value="moving_avg">Moving Average</option>
                                     <option value="exponential">Exponential Smoothing</option>
-                                </select>
+                                </ThemedSelect>
                             </ChartConfigField>
                             {trendlineMode === 'moving_avg' ? (
                                 <ChartConfigField label="Period" theme={theme} controlMinWidth="80px">
@@ -2169,31 +2180,31 @@ const ChartSurface = ({
                     ) : null}
                     {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' ? (
                         <ChartConfigField label="Format" theme={theme} controlMinWidth="100%">
-                            <select value={valueFormat} onChange={(event) => setValueFormat(event.target.value)} style={{ ...compactInputStyle, width: '100%' }} title="Value format for axis labels">
+                            <ThemedSelect size="sm" value={valueFormat} onChange={(/** @type {any} */ event) => setValueFormat(event.target.value)} style={{ ...compactInputStyle, width: '100%' }} title="Value format for axis labels">
                                 {VALUE_FORMAT_MODES.map((opt) => (
                                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                                 ))}
-                            </select>
+                            </ThemedSelect>
                         </ChartConfigField>
                     ) : null}
                     {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
                         <ChartConfigField label="Decimals" theme={theme} controlMinWidth="100%">
-                            <select value={decimalPlaces} onChange={e => setDecimalPlaces(Number(e.target.value))} style={{ ...compactInputStyle, width: '100%' }}>
+                            <ThemedSelect size="sm" aria-label="Decimals" value={decimalPlaces} onChange={(/** @type {any} */ e) => setDecimalPlaces(Number(e.target.value))} style={{ ...compactInputStyle, width: '100%' }}>
                                 <option value={-1}>Auto</option>
                                 <option value={0}>0  (e.g. 1,234)</option>
                                 <option value={1}>1  (e.g. 1.2)</option>
                                 <option value={2}>2  (e.g. 1.23)</option>
                                 <option value={3}>3  (e.g. 1.234)</option>
-                            </select>
+                            </ThemedSelect>
                         </ChartConfigField>
                     ) : null}
                     {showDataLabels && chartType === 'bar' ? (
                         <ChartConfigField label="Position" theme={theme} controlMinWidth="100%">
-                            <select value={labelPosition} onChange={e => setLabelPosition(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                            <ThemedSelect size="sm" aria-label="Label position" value={labelPosition} onChange={(/** @type {any} */ e) => setLabelPosition(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
                                 <option value="outside">Outside</option>
                                 <option value="inside">Inside top</option>
                                 <option value="center">Center</option>
-                            </select>
+                            </ThemedSelect>
                         </ChartConfigField>
                     ) : null}
                     {(chartType === 'pie' || chartType === 'donut') ? (
@@ -2587,9 +2598,11 @@ const PivotChartPanelContent = ({
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {Array.isArray(chartDefinitions) && chartDefinitions.length > 0 ? (
                             <>
-                                <select
+                                <ThemedSelect
+                                    size="sm"
+                                    aria-label="Active chart"
                                     value={activeChartId || ''}
-                                    onChange={(event) => {
+                                    onChange={(/** @type {any} */ event) => {
                                         if (typeof onActiveChartChange === 'function') onActiveChartChange(event.target.value);
                                     }}
                                     style={{
@@ -2606,7 +2619,7 @@ const PivotChartPanelContent = ({
                                     {chartDefinitions.map((definition) => (
                                         <option key={definition.id} value={definition.id}>{definition.name || definition.id}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                                 <input
                                     type="text"
                                     value={(chartDefinitions.find((definition) => definition.id === activeChartId) || {}).name || ''}

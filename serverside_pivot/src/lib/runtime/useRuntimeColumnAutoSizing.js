@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { formatDisplayLabel, formatValue } from '../utils/helpers';
+import { createTextWidthMeasurer, measureColumnFitMetric } from '../utils/pivotLayoutUtils';
 
 const HIERARCHY_INDENT_PX = 24;
 const HIERARCHY_EXPAND_PX = 22;
@@ -23,69 +24,121 @@ export function useRuntimeColumnAutoSizing({
   queueHeaderFitValidation,
   table,
   valConfigs,
+  valueScale,
+  unitSuffix,
 }) {
   /** @type {(...args: any[]) => any} */
   const autoSizeColumn = useCallback((columnId, includeHeader = true) => {
     if (!table) return;
     const rows = table.getRowModel().rows;
-    /** @type {any} */
-    const sampleRows = getAutoSizeSampleRows(rows);
-    let maxWidth = autoSizeBounds.minWidth;
-    /** @type {any} */
-    const canvas = document.createElement('canvas');
-    /** @type {any} */
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    const bodyFont = `${fontSize || '14px'} ${fontFamily || "'Inter', system-ui, sans-serif"}`;
-    const headerFont = `600 ${fontSize || '14px'} ${fontFamily || "'Inter', system-ui, sans-serif"}`;
+    const pinnedTop = typeof table.getTopRows === 'function' ? table.getTopRows() : [];
+    const pinnedBottom = typeof table.getBottomRows === 'function' ? table.getBottomRows() : [];
+    const sampledBody = getAutoSizeSampleRows(rows);
+    const seenRowIds = new Set();
+    /** @type {any[]} */
+    const sampleRows = [];
+    [...pinnedTop, ...sampledBody, ...pinnedBottom].forEach((row) => {
+      if (!row || (row.id !== undefined && seenRowIds.has(row.id))) return;
+      if (row.id !== undefined) seenRowIds.add(row.id);
+      sampleRows.push(row);
+    });
+
     /** @type {any} */
     const column = table.getColumn(columnId);
-    if (!column || column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder) return;
+    if (!column || (column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder)) return;
+
+    const resolvedFont = fontFamily || "'Inter', system-ui, sans-serif";
+    const resolvedSize = fontSize || '14px';
+    const measureBodyText = createTextWidthMeasurer(`${resolvedSize} ${resolvedFont}`, 7.5);
+    const measureHeaderText = createTextWidthMeasurer(`600 ${resolvedSize} ${resolvedFont}`, 7.5);
+
     /** @type {any} */
-    const matchingValueConfig = Array.isArray(valConfigs) ? valConfigs.find(config => matchesSelectedColumnToValueConfig(columnId, config)) || null : null;
-    /** @type {any} */
-    const headerTextStack = getDisplayHeaderTextStackForColumn(column);
+    const matchingValueConfig = Array.isArray(valConfigs)
+      ? valConfigs.find(config => matchesSelectedColumnToValueConfig(columnId, config)) || null
+      : null;
+    const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[columnId] !== undefined
+      ? columnDecimalOverrides[columnId]
+      : decimalPlaces;
+    const effectiveFormat = Object.prototype.hasOwnProperty.call(columnFormatOverrides || {}, columnId)
+      ? columnFormatOverrides[columnId]
+      : ((matchingValueConfig && matchingValueConfig.format) || defaultValueFormat || null);
+    const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[columnId] !== undefined
+      ? columnGroupSeparatorOverrides[columnId]
+      : numberGroupSeparator;
+    const effectiveValueScale = (matchingValueConfig && matchingValueConfig.valueScale !== undefined && matchingValueConfig.valueScale !== null)
+      ? matchingValueConfig.valueScale
+      : valueScale;
+    const effectiveUnitSuffix = (matchingValueConfig && matchingValueConfig.unitSuffix !== undefined && matchingValueConfig.unitSuffix !== null)
+      ? matchingValueConfig.unitSuffix
+      : unitSuffix;
+    const displayOptions = (effectiveValueScale !== undefined && effectiveValueScale !== null) || effectiveUnitSuffix
+      ? { valueScale: effectiveValueScale, unitSuffix: effectiveUnitSuffix }
+      : undefined;
+
+    const headerLines = includeHeader ? getDisplayHeaderTextStackForColumn(column) : [];
+    const metric = measureColumnFitMetric({
+      columnId,
+      baseSize: (column.columnDef && column.columnDef.size) || autoSizeBounds.minWidth,
+      rows: sampleRows,
+      /** @param {any} [row] @param {any} [colId] @returns {any} */
+      getCellRawValue: (row, colId) => row.getValue(colId),
+      /** @param {any} [val] @returns {any} */
+      formatCellText: (val) => formatValue(val, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator, displayOptions),
+      formatHierarchyLabel: formatDisplayLabel,
+      headerLines,
+      shortLabel: null,
+      headerWrap: false,
+      headerControlsMode: 'always',
+      canSort: false,
+      sortIndicator: 'none',
+      measureBodyText,
+      measureHeaderText,
+      cellPaddingX: Math.max(0, Math.round((autoSizeBounds.cellPadding || 0) / 2)),
+      headerPaddingX: Math.max(0, Math.round((autoSizeBounds.headerPadding || 0) / 2)),
+      numericPaddingRight: 0,
+      hierarchyIndentPx: HIERARCHY_INDENT_PX,
+      hierarchyExpandPx: HIERARCHY_EXPAND_PX,
+      cellOverscan: autoSizeBounds.cellOverscan || 0,
+      headerOverscan: autoSizeBounds.headerOverscan || 0,
+    });
+
+    let maxWidth = Math.max(autoSizeBounds.minWidth, metric ? metric.contentSize : autoSizeBounds.minWidth);
     if (includeHeader) {
-      context.font = headerFont;
-      headerTextStack.forEach(/** @param {any} [headerText] @returns {any} */ headerText => {
-        maxWidth = Math.max(maxWidth, context.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan);
-      });
       /** @type {any} */
       const renderedHeaderWidth = getRenderedHeaderWidthForColumn(columnId);
       if (Number.isFinite(renderedHeaderWidth)) maxWidth = Math.max(maxWidth, renderedHeaderWidth);
     }
-    context.font = bodyFont;
-    sampleRows.forEach(/** @param {any} [row] @returns {any} */ row => {
-      /** @type {any} */
-      const cellValue = row.getValue(columnId);
-      /** @type {any} */
-      let width;
-      if (columnId === 'hierarchy') {
-        /** @type {any} */
-        const depth = row.original && typeof row.original.depth === 'number' ? row.original.depth : row.depth || 0;
-        /** @type {any} */
-        const label = row.original ? formatDisplayLabel(String(row.original._label != null ? row.original._label : row.original._id != null ? row.original._id : '')) : '';
-        width = context.measureText(label).width + depth * HIERARCHY_INDENT_PX + HIERARCHY_EXPAND_PX + autoSizeBounds.cellPadding + autoSizeBounds.cellOverscan;
-      } else {
-        /** @type {any} */
-        const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[columnId] !== undefined ? columnDecimalOverrides[columnId] : decimalPlaces;
-        /** @type {any} */
-        const effectiveFormat = Object.prototype.hasOwnProperty.call(columnFormatOverrides || {}, columnId) ? columnFormatOverrides[columnId] : matchingValueConfig && matchingValueConfig.format || defaultValueFormat || null;
-        /** @type {any} */
-        const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[columnId] !== undefined ? columnGroupSeparatorOverrides[columnId] : numberGroupSeparator;
-        width = context.measureText(formatValue(cellValue, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator)).width + autoSizeBounds.cellPadding + autoSizeBounds.cellOverscan;
-      }
-      if (width > maxWidth) maxWidth = width;
-    });
     /** @type {any} */
-    const renderedCellWidth = columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__' ? getRenderedCellWidthForColumn(columnId) : null;
+    const renderedCellWidth = columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__'
+      ? getRenderedCellWidthForColumn(columnId)
+      : null;
     if (Number.isFinite(renderedCellWidth)) maxWidth = Math.max(maxWidth, renderedCellWidth);
     maxWidth = Math.ceil(maxWidth);
     maxWidth = Math.min(maxWidth, autoSizeBounds.maxWidth);
     maxWidth = Math.max(maxWidth, autoSizeBounds.minWidth);
     table.setColumnSizing(/** @param {any} [previous] @returns {any} */ previous => ({ ...previous, [columnId]: maxWidth }));
     queueHeaderFitValidation(columnId, maxWidth);
-  }, [autoSizeBounds, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, decimalPlaces, defaultValueFormat, fontFamily, fontSize, getAutoSizeSampleRows, getDisplayHeaderTextStackForColumn, getRenderedCellWidthForColumn, getRenderedHeaderWidthForColumn, matchesSelectedColumnToValueConfig, numberGroupSeparator, queueHeaderFitValidation, table, valConfigs]);
+  }, [
+    autoSizeBounds,
+    columnDecimalOverrides,
+    columnFormatOverrides,
+    columnGroupSeparatorOverrides,
+    decimalPlaces,
+    defaultValueFormat,
+    fontFamily,
+    fontSize,
+    getAutoSizeSampleRows,
+    getDisplayHeaderTextStackForColumn,
+    getRenderedCellWidthForColumn,
+    getRenderedHeaderWidthForColumn,
+    matchesSelectedColumnToValueConfig,
+    numberGroupSeparator,
+    queueHeaderFitValidation,
+    table,
+    unitSuffix,
+    valConfigs,
+    valueScale,
+  ]);
 
   /** @type {(...args: any[]) => any} */
   const autoSizeVisibleColumns = useCallback((includeHeader = true) => {

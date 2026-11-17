@@ -26,10 +26,16 @@ function createEmptyCellMetrics(): AggregatedCellMetrics {
     };
 }
 
+function valConfigRequiresValues(vc: NormalizedValConfig): boolean {
+    const agg = (vc.agg || '').toLowerCase();
+    return agg === 'array_agg' || agg === 'percentile' || agg.startsWith('p');
+}
+
 function accumulateCellMetrics(
     cell: AggregatedCellMetrics,
     row: { [key: string]: unknown },
-    vc: NormalizedValConfig
+    vc: NormalizedValConfig,
+    collectValues = false
 ): void {
     const raw = row[vc.field];
     cell.count += 1;
@@ -38,7 +44,9 @@ function accumulateCellMetrics(
     }
     if (raw !== null && raw !== undefined) {
         cell.lastValue = raw;
-        cell.values.push(raw);
+        if (collectValues) {
+            cell.values.push(raw);
+        }
     }
 
     const num = typeof raw === 'number' ? raw : Number(raw);
@@ -271,6 +279,8 @@ function compareRowValues(
         const left = rule.absoluteSort ? Math.abs(aNum) : aNum;
         const right = rule.absoluteSort ? Math.abs(bNum) : bNum;
         if (left !== right) return (left - right) * dir;
+        if (aNum !== bNum) return (aNum - bNum) * dir;
+        return 0;
     }
 
     const cmp = String(aRaw).localeCompare(String(bRaw), undefined, {
@@ -383,13 +393,13 @@ function buildUnbalancedGroupTree(
     return convertMap(rootMap);
 }
 
-function buildGroupTree(
+function buildGroupTreeLevel(
     rows: Array<{ [key: string]: unknown }>,
     rowFields: string[],
     depth: number,
     parentPath: string[]
 ): HierarchyGroupNode[] {
-    if (depth >= rowFields.length) return [];
+    if (depth >= rowFields.length || rows.length === 0) return [];
     const field = rowFields[depth];
     const buckets = new Map<string, Array<{ [key: string]: unknown }>>();
     for (const row of rows) {
@@ -406,9 +416,6 @@ function buildGroupTree(
     const nodes: HierarchyGroupNode[] = [];
     for (const [label, groupRows] of Array.from(buckets.entries())) {
         const pathParts = [...parentPath, label];
-        const children = depth + 1 < rowFields.length
-            ? buildGroupTree(groupRows, rowFields, depth + 1, pathParts)
-            : [];
         nodes.push({
             key: pathParts.join('|||'),
             label,
@@ -416,7 +423,7 @@ function buildGroupTree(
             depth,
             field,
             rows: groupRows,
-            children,
+            children: [],
         });
     }
     return nodes;
@@ -436,17 +443,19 @@ function computeAggregatedRecord(
 ): { [key: string]: unknown } {
     const out: { [key: string]: unknown } = {};
     const nonFormulaConfigs = plan.valConfigs.filter((vc) => vc.agg !== 'formula');
+    const nonFormulaSuffixes = nonFormulaConfigs.map((vc) => getMeasureSuffix(vc));
+    const nonFormulaCollectValues = nonFormulaConfigs.map((vc) => valConfigRequiresValues(vc));
     const formulaConfigs = plan.valConfigs.filter((vc) => vc.agg === 'formula' && vc.formula);
 
     if (plan.colFields.length === 0) {
         const cells = new Map<string, AggregatedCellMetrics>();
-        for (const vc of nonFormulaConfigs) {
-            cells.set(getMeasureSuffix(vc), createEmptyCellMetrics());
+        for (let i = 0; i < nonFormulaConfigs.length; i += 1) {
+            cells.set(nonFormulaSuffixes[i], createEmptyCellMetrics());
         }
         for (const row of groupRows) {
-            for (const vc of nonFormulaConfigs) {
-                const cell = cells.get(getMeasureSuffix(vc))!;
-                accumulateCellMetrics(cell, row, vc);
+            for (let i = 0; i < nonFormulaConfigs.length; i += 1) {
+                const cell = cells.get(nonFormulaSuffixes[i])!;
+                accumulateCellMetrics(cell, row, nonFormulaConfigs[i], nonFormulaCollectValues[i]);
             }
         }
         const formulaContext: { [key: string]: unknown } = {};
@@ -470,29 +479,39 @@ function computeAggregatedRecord(
     // Pivot with column dimensions
     const colCells = new Map<string, AggregatedCellMetrics>();
     const rowTotalCells = new Map<string, AggregatedCellMetrics>();
-    for (const vc of nonFormulaConfigs) {
-        rowTotalCells.set(`__RowTotal__${getMeasureSuffix(vc)}`, createEmptyCellMetrics());
+    for (let i = 0; i < nonFormulaConfigs.length; i += 1) {
+        rowTotalCells.set(`__RowTotal__${nonFormulaSuffixes[i]}`, createEmptyCellMetrics());
     }
 
+    const singleColField = plan.colFields.length === 1 ? plan.colFields[0] : null;
     for (const row of groupRows) {
-        const colPrefix = plan.colFields
-            .map((cf) => {
-                const v = row[cf];
-                return v === null || v === undefined ? 'null' : String(v);
-            })
-            .join('_');
+        let colPrefix: string;
+        if (singleColField !== null) {
+            const v = row[singleColField];
+            colPrefix = v === null || v === undefined ? 'null' : String(v);
+        } else {
+            const parts: string[] = [];
+            for (let i = 0; i < plan.colFields.length; i += 1) {
+                const v = row[plan.colFields[i]];
+                parts.push(v === null || v === undefined ? 'null' : String(v));
+            }
+            colPrefix = parts.join('_');
+        }
 
-        for (const vc of nonFormulaConfigs) {
-            const cellId = `${colPrefix}_${getMeasureSuffix(vc)}`;
+        for (let i = 0; i < nonFormulaConfigs.length; i += 1) {
+            const vc = nonFormulaConfigs[i];
+            const suffix = nonFormulaSuffixes[i];
+            const collectValues = nonFormulaCollectValues[i];
+            const cellId = `${colPrefix}_${suffix}`;
             let cell = colCells.get(cellId);
             if (!cell) {
                 cell = createEmptyCellMetrics();
                 colCells.set(cellId, cell);
             }
-            accumulateCellMetrics(cell, row, vc);
+            accumulateCellMetrics(cell, row, vc, collectValues);
 
-            const totalCell = rowTotalCells.get(`__RowTotal__${getMeasureSuffix(vc)}`)!;
-            accumulateCellMetrics(totalCell, row, vc);
+            const totalCell = rowTotalCells.get(`__RowTotal__${suffix}`)!;
+            accumulateCellMetrics(totalCell, row, vc, collectValues);
         }
     }
 
@@ -624,17 +643,29 @@ function buildPivotVisibleRows(
     formulaErrors: { [key: string]: string }
 ): { rows: Array<{ [key: string]: unknown }>; grandTotalRow: { [key: string]: unknown } | null } {
     const colCombinations = executed.colCombinations;
-    const rootNodes = plan.groupAllowUnbalanced
-        ? buildUnbalancedGroupTree(executed.filteredRows, plan.rowFields, plan.unbalancedValues)
-        : buildGroupTree(executed.filteredRows, plan.rowFields, 0, []);
+    const lazyBalancedGrouping = !plan.groupAllowUnbalanced;
+    const expandedPathSet = !plan.expandedAll
+        ? new Set(plan.expandedPaths.map((p) => p.join('|||')))
+        : null;
+    const collapsedPathSet = plan.expandedAll
+        ? new Set(plan.collapsedPaths.map((p) => p.join('|||')))
+        : null;
+    const isNodeExpanded = (pathKey: string): boolean => (
+        plan.expandedAll
+            ? !(collapsedPathSet && collapsedPathSet.has(pathKey))
+            : Boolean(expandedPathSet && expandedPathSet.has(pathKey))
+    );
+    const rootNodes = lazyBalancedGrouping
+        ? buildGroupTreeLevel(executed.filteredRows, plan.rowFields, 0, [])
+        : buildUnbalancedGroupTree(executed.filteredRows, plan.rowFields, plan.unbalancedValues);
 
     const materializeNodeRecord = (node: HierarchyGroupNode, isSubtotal = false): { [key: string]: unknown } => {
         const metrics = computeAggregatedRecord(node.rows, plan, colCombinations, formulaErrors);
-        const hasChildren = plan.groupAllowUnbalanced
-            ? node.children.length > 0
-            : (node.depth + 1 < plan.rowFields.length && node.children.length > 0);
+        const hasChildren = lazyBalancedGrouping
+            ? (node.depth + 1 < plan.rowFields.length && node.rows.length > 0)
+            : node.children.length > 0;
         const tabularForceExpand = plan.layoutMode === 'tabular';
-        const expanded = hasChildren && (tabularForceExpand || isPathExpanded(node.pathParts, plan));
+        const expanded = hasChildren && (tabularForceExpand || isNodeExpanded(node.key));
         const rowObj: { [key: string]: unknown } = {
             ...metrics,
             _id: isSubtotal ? `${node.label} Total` : node.label,
@@ -688,14 +719,21 @@ function buildPivotVisibleRows(
 
         for (const node of nodes) {
             const rec = recordMap.get(node)!;
-            const nodeHasChildren = plan.groupAllowUnbalanced
-                ? node.children.length > 0
-                : (node.depth + 1 < plan.rowFields.length && node.children.length > 0);
+            const nodeHasChildren = lazyBalancedGrouping
+                ? (node.depth + 1 < plan.rowFields.length && node.rows.length > 0)
+                : node.children.length > 0;
             const expanded = Boolean(rec._is_expanded);
+            const childrenToWalk = nodeHasChildren && (expanded || plan.layoutMode === 'tabular')
+                ? (
+                    lazyBalancedGrouping && node.children.length === 0
+                        ? buildGroupTreeLevel(node.rows, plan.rowFields, node.depth + 1, node.pathParts)
+                        : node.children
+                )
+                : [];
 
             if (plan.layoutMode === 'tabular') {
                 if (nodeHasChildren) {
-                    walkNodes(node.children);
+                    walkNodes(childrenToWalk);
                     if (plan.showSubtotalFooters) {
                         visibleRows.push(materializeNodeRecord(node, true));
                     }
@@ -707,7 +745,7 @@ function buildPivotVisibleRows(
                 // already carries the aggregate subtotal (matching Python hierarchy_rows.py).
                 visibleRows.push(rec);
                 if (nodeHasChildren && expanded) {
-                    walkNodes(node.children);
+                    walkNodes(childrenToWalk);
                 }
             }
         }
@@ -730,7 +768,7 @@ function buildPivotVisibleRows(
     }
 
     let grandTotalRow: { [key: string]: unknown } | null = null;
-    if ((plan.includeGrandTotal || plan.showColTotals) && executed.filteredRows.length > 0) {
+    if (plan.includeGrandTotal && executed.filteredRows.length > 0) {
         const grandMetrics = computeAggregatedRecord(executed.filteredRows, plan, colCombinations, formulaErrors);
         grandTotalRow = {
             ...grandMetrics,
@@ -1459,6 +1497,9 @@ export class ClientResponsePostProcessor {
             rowCount: totalRows,
             total_rows: measureAdjusted.rows.length,
             columns: allColumnObjects as unknown as JsonObject[],
+            ...(Array.isArray(executed.availableFields) && executed.availableFields.length > 0
+                ? { availableFields: executed.availableFields }
+                : {}),
             colSchema: colSchema as unknown as JsonObject,
             col_schema: colSchema as unknown as JsonObject,
             dataOffset: plan.start,

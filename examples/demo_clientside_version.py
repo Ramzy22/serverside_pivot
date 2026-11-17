@@ -105,6 +105,41 @@ def _badge(label: str, value: str, bg: str = "#eff6ff", fg: str = "#1d4ed8") -> 
 def create_app(row_count: int = DEFAULT_CLIENT_ROWS) -> dash.Dash:
     adapter, records = get_hybrid_demo_state(row_count=row_count)
     ws = saas_workspace_config()
+    flash_val_configs = [
+        {
+            "field": "arr",
+            "agg": "sum",
+            "label": "Annual ARR",
+            "format": "currency",
+            "dataBars": True,
+        },
+        {
+            "field": "nrr_delta",
+            "agg": "formula",
+            "formula": "[net_revenue_retention] - 1",
+            "label": "NRR Expansion %",
+            "format": "pill:signed_percent",
+        },
+        {
+            "field": "net_revenue_retention",
+            "agg": "avg",
+            "label": "Net NRR %",
+            "format": "percent",
+            "formulaRef": "net_revenue_retention",
+        },
+        {
+            "field": "active_seats",
+            "agg": "sum",
+            "label": "Active Seats",
+            "format": "fixed:0",
+        },
+    ]
+    flash_view_state = {
+        "colorScaleMode": "off",
+        "dataBarVariant": "underbar",
+        "dataBarsColumns": ["arr", "__RowTotal__arr_sum"],
+        "sidebarOpen": True,
+    }
 
     initial_exec = configure_pivot_execution(
         data=records,
@@ -271,9 +306,11 @@ def create_app(row_count: int = DEFAULT_CLIENT_ROWS) -> dash.Dash:
                         defaultTheme="flash",
                         rowFields=ws["rowFields"],
                         colFields=ws["colFields"],
-                        valConfigs=ws["valConfigs"],
+                        valConfigs=flash_val_configs,
                         filters=ws.get("filters", {}),
                         sorting=ws.get("sorting", []),
+                        expanded=ws.get("expanded", {}),
+                        viewState=flash_view_state,
                         customDimensions=ws.get("customDimensions", []),
                         showRowTotals=True,
                         showColTotals=True,

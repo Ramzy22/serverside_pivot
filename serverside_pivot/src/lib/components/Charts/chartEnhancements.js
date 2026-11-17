@@ -3,6 +3,8 @@
  * Imported by PivotCharts.js to keep that file from growing further.
  */
 import React, { useState } from 'react';
+import Icons from '../../utils/Icons';
+import ThemedSelect from '../ThemedSelect';
 
 // ─── Dash pattern helpers ──────────────────────────────────────────────────
 
@@ -155,13 +157,15 @@ export const ChartLineDashEditor = ({ series, lineDashStyles, onChange, seriesCo
                     <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: color, flexShrink: 0 }} />
                         <span style={{ fontSize: '11px', color: theme.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ser.name || `Series ${si + 1}`}</span>
-                        <select
+                        <ThemedSelect
+                            size="sm"
+                            aria-label={`${ser.name || 'Series'} dash style`}
                             value={current}
-                            onChange={e => onChange({ ...lineDashStyles, [ser.name]: e.target.value })}
-                            style={{ ...compactInputStyle, width: '82px', flexShrink: 0 }}
+                            onChange={(/** @type {any} */ e) => onChange({ ...lineDashStyles, [ser.name]: e.target.value })}
+                            style={{ ...compactInputStyle, width: '88px', flexShrink: 0 }}
                         >
                             {DASH_STYLES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                        </select>
+                        </ThemedSelect>
                     </div>
                 );
             })}
@@ -203,7 +207,7 @@ export const ChartCustomPaletteEditor = ({ customColors, onChange, theme, compac
                             title={`Color ${i + 1}`}
                         />
                         {colors.length > 2 && (
-                            <button type="button" onClick={() => removeColor(i)} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '9px', padding: 0, lineHeight: 1 }}>✕</button>
+                            <button type="button" onClick={() => removeColor(i)} title="Remove color" style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', padding: 0, lineHeight: 1, display: 'inline-flex', alignItems: 'center' }}><span style={{ display: 'inline-flex', transform: 'scale(0.72)' }}><Icons.Close /></span></button>
                         )}
                     </div>
                 ))}
@@ -388,7 +392,7 @@ export const ChartTypeGallery = ({ chartType, onChange, theme, includeHierarchyC
                             <Icon color={iconColor} />
                             <span style={{ flex: 1 }}>{activeType ? activeType.label : name}</span>
                             {!single && (
-                                <span style={{ fontSize: '8px', color: iconColor, transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.12s', flexShrink: 0 }}>▼</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', color: iconColor, transform: isExpanded ? 'scale(0.8) rotate(0deg)' : 'scale(0.8) rotate(-90deg)', transition: 'transform 0.15s', flexShrink: 0 }}><Icons.ChevronDown /></span>
                             )}
                         </button>
                         {!single && isExpanded && (
@@ -457,15 +461,16 @@ export const ChartReflineRow = ({ line, onUpdate, onRemove, exportButtonStyle, c
                 style={{ width: '28px', height: '28px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none', flexShrink: 0 }}
                 title="Line color"
             />
-            <select
+            <ThemedSelect
+                size="sm"
                 value={line.dash || 'dashed'}
-                onChange={e => onUpdate({ ...line, dash: e.target.value })}
-                style={{ ...compactInputStyle, width: '74px', flexShrink: 0 }}
+                onChange={(/** @type {any} */ e) => onUpdate({ ...line, dash: e.target.value })}
+                style={{ ...compactInputStyle, width: '80px', flexShrink: 0 }}
                 title="Line style"
             >
                 {DASH_STYLES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-            </select>
-            <button type="button" onClick={onRemove} style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0 }}>✕</button>
+            </ThemedSelect>
+            <button type="button" onClick={onRemove} title="Remove reference line" style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}><span style={{ display: 'inline-flex', transform: 'scale(0.8)' }}><Icons.Close /></span></button>
         </div>
     );
 };

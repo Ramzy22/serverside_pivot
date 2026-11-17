@@ -179,7 +179,7 @@ export function useWorkspaceRuntimeStage(input) {
             signature,
             request: {
               ...baseRequest,
-              state_override: workspace.chartPanelLocked && workspace.chartPanelLockedRequest ? workspace.chartPanelLockedRequest.stateOverride || undefined : undefined
+              ...(workspace.chartPanelLocked && workspace.chartPanelLockedRequest?.stateOverride ? { state_override: workspace.chartPanelLockedRequest.stateOverride } : {})
             }
           });
         }
@@ -212,7 +212,7 @@ export function useWorkspaceRuntimeStage(input) {
         signature,
         request: {
           ...baseRequest,
-          state_override: pane.locked && pane.lockedRequest ? pane.lockedRequest.stateOverride || undefined : undefined
+          ...(pane.locked && pane.lockedRequest?.stateOverride ? { state_override: pane.lockedRequest.stateOverride } : {})
         }
       });
     });
@@ -222,7 +222,6 @@ export function useWorkspaceRuntimeStage(input) {
   useEffect(() => {
     const nextSignatures = {
       [TABLE_OVERLAY_CHART_PANE_ID]: JSON.stringify({
-        open: workspace.chartPanelOpen,
         source: workspace.chartPanelSource,
         chartType: workspace.chartPanelType,
         seriesColumnIds: getRequestedChartSeriesColumnIds(workspace.chartPanelType, workspace.chartPanelLayers),
@@ -230,9 +229,6 @@ export function useWorkspaceRuntimeStage(input) {
         request: workspace.chartPanelLockedRequest ? workspace.chartPanelLockedRequest.requestSignature : null,
         rowLimit: workspace.chartPanelRowLimit,
         columnLimit: workspace.chartPanelColumnLimit,
-        orientation: workspace.chartPanelOrientation,
-        hierarchyLevel: workspace.chartPanelHierarchyLevel,
-        sortMode: workspace.chartPanelSortMode,
         serverScope: workspace.chartPanelServerScope,
         state: workspace.chartPanelLocked ? null : workspace.liveChartStateFingerprint
       })
@@ -246,9 +242,6 @@ export function useWorkspaceRuntimeStage(input) {
         request: pane.lockedRequest ? pane.lockedRequest.requestSignature : null,
         rowLimit: pane.rowLimit,
         columnLimit: pane.columnLimit,
-        orientation: pane.orientation,
-        hierarchyLevel: pane.hierarchyLevel,
-        sortMode: pane.sortMode,
         serverScope: pane.serverScope,
         state: pane.locked ? null : workspace.liveChartStateFingerprint
       });
@@ -257,6 +250,11 @@ export function useWorkspaceRuntimeStage(input) {
     const changedPaneIds = Object.keys(nextSignatures).filter(paneId => previousSignatures[paneId] && previousSignatures[paneId] !== nextSignatures[paneId]);
     workspace.previousChartRenderSignaturesRef.current = nextSignatures;
     if (changedPaneIds.length === 0) return;
+    if (workspace.completedChartRequestSignaturesRef?.current) {
+      changedPaneIds.forEach(paneId => {
+        delete workspace.completedChartRequestSignaturesRef.current[paneId];
+      });
+    }
     workspace.setChartPaneDataById(previousData => {
       let mutated = false;
       const nextData = {
@@ -270,7 +268,7 @@ export function useWorkspaceRuntimeStage(input) {
       });
       return mutated ? nextData : previousData;
     });
-  }, [workspace.chartCanvasPanes, workspace.chartPanelColumnLimit, workspace.chartPanelHierarchyLevel, workspace.chartPanelLayers, workspace.chartPanelLocked, workspace.chartPanelLockedRequest, workspace.chartPanelOpen, workspace.chartPanelOrientation, workspace.chartPanelRowLimit, workspace.chartPanelServerScope, workspace.chartPanelSortMode, workspace.chartPanelSource, workspace.chartPanelType, workspace.liveChartStateFingerprint]);
+  }, [workspace.chartCanvasPanes, workspace.chartPanelColumnLimit, workspace.chartPanelLayers, workspace.chartPanelLocked, workspace.chartPanelLockedRequest, workspace.chartPanelRowLimit, workspace.chartPanelServerScope, workspace.chartPanelSource, workspace.chartPanelType, workspace.liveChartStateFingerprint]);
   workspace.treeHasDefaultExpansion = useMemo(() => workspace.viewMode === 'tree' && hasTreeDefaultExpansionConfig(workspace.treeConfig), [workspace.treeConfig, workspace.viewMode]);
 
   // Detail cache, surface sync, and reset effects provided by useDetailDrillThrough hook
@@ -352,6 +350,9 @@ export function useWorkspaceRuntimeStage(input) {
     rightCols: workspace.rightCols,
     columnPinning: workspace.columnPinning,
     sorting: workspace.sorting,
+    sortOptions: workspace.effectiveSortOptions,
+    fontFamily: workspace.effectiveFontFamily || workspace.fontFamily,
+    fontSize: workspace.effectiveFontSize || workspace.fontSize,
     handleHeaderContextMenu: workspace.handleHeaderContextMenu,
     autoSizeColumn: workspace.autoSizeColumn,
     autoSizeBounds: workspace.autoSizeBounds,
@@ -380,6 +381,7 @@ export function useWorkspaceRuntimeStage(input) {
     getHeaderStickyStyle: workspace.getHeaderStickyStyle,
     dataBarsColumns: workspace.dataBarsColumns,
     dataBarMaximums: workspace.dataBarMaximums,
+    dataBarVariant: workspace.dataBarVariant,
     colorScaleStats: workspace.colorScaleStats,
     cellFormatRules: workspace.cellFormatRules,
     resolveEditedCellMarker: workspace.resolveEditedCellMarker,

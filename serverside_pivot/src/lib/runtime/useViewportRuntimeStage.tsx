@@ -6,8 +6,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { buildTsvFromRawRows } from '../utils/rawTableTsv';
 import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds, reconcilePivotLayoutOrder, pivotLayoutRequestFields } from '../utils/columnOrder';
 import { compareFilterOptionValues } from '../utils/filterOptions';
-import { toCssPx, toFiniteNumber } from '../utils/styles';
-import { computeFitToWidthLayout } from '../utils/pivotLayoutUtils';
+import { buildThemeCssVars, getStyles, toCssPx, toFiniteNumber } from '../utils/styles';
+import { computeCompactFitThemeOverrides, computeFitToWidthLayout, createTextWidthMeasurer, measureColumnFitMetric, measureLongestHeaderWord } from '../utils/pivotLayoutUtils';
 import Icons from '../utils/Icons';
 import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, isGrandTotalRow, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
@@ -32,9 +32,9 @@ const debugLog = (...args) => {
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
 import { useColumnVirtualizer } from '../hooks/useColumnVirtualizer';
-import { getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
+import { formatDisplayLabel, formatValue, getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
 import { useColumnDefs } from '../hooks/useColumnDefs';
-import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting';
+import { findSortSpecifier, isAbsoluteSortSpecifier, normalizeSortingState, resolveColumnSortOptions, updateSortingForColumn } from '../utils/sorting';
 import { useRuntimeChartModels } from '../runtime/useRuntimeChartModels';
 import { useRuntimeColumnAutoSizing } from '../runtime/useRuntimeColumnAutoSizing';
 import { useRuntimeDataRetry } from './useRuntimeDataRetry';
@@ -83,6 +83,9 @@ export function useViewportRuntimeStage(input, transport) {
           nextLeft = ['hierarchy', ...nextLeft];
           changed = true;
         }
+      } else if (nextLeft.includes('hierarchy')) {
+        nextLeft = nextLeft.filter(id => id !== 'hierarchy');
+        changed = true;
       }
 
       // 2. Keep report row settings in a detached gutter immediately left of the hierarchy.
@@ -139,13 +142,54 @@ export function useViewportRuntimeStage(input, transport) {
       return prev;
     });
   }, [stage.immersiveMode, stage.layoutMode, stage.pivotMode, stage.rowFields.length, stage.showReportConfigColumn, stage.showRowNumbers]);
+  stage.columnSortMetadataRef = useRef(new Map());
+  useEffect(() => {
+    const cache = stage.columnSortMetadataRef.current;
+    (Array.isArray(stage.sorting) ? stage.sorting : []).forEach(spec => {
+      if (spec && spec.id) {
+        const optionSpec = resolveColumnSortOptions(stage.effectiveSortOptions, spec.id);
+        const mergedMeta = {
+          ...(optionSpec || {}),
+          ...(spec || {}),
+        };
+        if (
+          mergedMeta.absoluteSort !== undefined
+          || mergedMeta.sortType !== undefined
+          || mergedMeta.sortMode !== undefined
+          || mergedMeta.sortKeyField !== undefined
+          || mergedMeta.semanticType !== undefined
+          || mergedMeta.sortSemantic !== undefined
+          || mergedMeta.nulls !== undefined
+        ) {
+          cache.set(spec.id, mergedMeta);
+        }
+      }
+    });
+  }, [stage.sorting, stage.effectiveSortOptions]);
   stage.applyHeaderSort = (colId, desc, sortMetadata = {}, append = false) => {
     if (!colId || colId === '__row_number__' || colId === '__report_config__') return;
+    const remembered = stage.columnSortMetadataRef.current.get(colId);
+    const optionSpec = resolveColumnSortOptions(stage.effectiveSortOptions, colId);
+    const currentSpec = findSortSpecifier(stage.sorting, colId);
+    const resolvedMeta = {
+      ...(optionSpec || {}),
+      ...(remembered || {}),
+      ...(isAbsoluteSortSpecifier(currentSpec) ? {
+        absoluteSort: currentSpec.absoluteSort,
+        sortType: currentSpec.sortType,
+        sortMode: currentSpec.sortMode,
+        sortKeyField: currentSpec.sortKeyField,
+        semanticType: currentSpec.semanticType,
+        sortSemantic: currentSpec.sortSemantic,
+        nulls: currentSpec.nulls,
+      } : {}),
+      ...(sortMetadata || {}),
+    };
     const nextSorting = updateSortingForColumn({
       sorting: stage.sorting,
       columnId: colId,
       desc,
-      sortMetadata,
+      sortMetadata: resolvedMeta,
       append
     });
     stage.setSorting(nextSorting);
@@ -849,6 +893,7 @@ export function useViewportRuntimeStage(input, transport) {
     customDimensions: stage.customDimensions,
     dataBarsColumns: stage.dataBarsColumns,
     dataBarMaximums: stage.dataBarMaximums,
+    dataBarVariant: stage.dataBarVariant,
     decimalPlaces: stage.decimalPlaces,
     defaultValueFormat: stage.defaultValueFormat,
     detailConfig: stage.detailConfig,
@@ -1040,7 +1085,7 @@ export function useViewportRuntimeStage(input, transport) {
     blockLoadDebounceMs: stage.normalizedPerformanceConfig.blockLoadDebounceMs,
     rowOverscan: stage.normalizedPerformanceConfig.rowOverscan,
     prefetchColumns: stage.normalizedPerformanceConfig.prefetchColumns,
-    cacheKey: `${stage.serverSideCacheKey || ''}:layout:${stage.pivotLayoutOrder.join('\u001f')}:revision:${stage.cachedColSchema?.layoutRevision || ''}:pins:${[...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])].join('\u001f')}`,
+    cacheKey: `${stage.serverSideCacheKey || ''}:layout:${stage.pivotLayoutOrder.join('\u001f')}:pins:${[...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])].filter((id) => id !== 'hierarchy' && id !== '__report_config__' && id !== '__row_number__').join('\u001f')}`,
     excludeGrandTotal: stage.serverSidePinsGrandTotal,
     immersiveMode: stage.immersiveMode,
     stateEpoch: stage.stateEpoch,
@@ -1048,6 +1093,8 @@ export function useViewportRuntimeStage(input, transport) {
     clientInstance: stage.clientInstanceRef.current,
     abortGeneration: stage.abortGeneration,
     structuralInFlight: stage.structuralInFlight,
+    stateEpochRef: stage.stateEpochRef,
+    structuralPendingVersionRef: stage.structuralPendingVersionRef,
     requestVersionRef: stage.requestVersionRef,
     tableName: stage.tableName,
     colStart: stage.colRequestStart,
@@ -1089,6 +1136,8 @@ export function useViewportRuntimeStage(input, transport) {
   stage.themeRef.current = stage.theme;
   stage.dataBarsColumnsRef = useRef(stage.dataBarsColumns);
   stage.dataBarsColumnsRef.current = stage.dataBarsColumns;
+  stage.pendingRowTransitionsRef = useRef(stage.pendingRowTransitions);
+  stage.pendingRowTransitionsRef.current = stage.pendingRowTransitions;
   stage.columns = useColumnDefs({
     sortOptions: stage.effectiveSortOptions,
     sorting: stage.sorting,
@@ -1136,6 +1185,7 @@ export function useViewportRuntimeStage(input, transport) {
     isColExpanded: stage.isColExpanded,
     toggleCol: stage.toggleCol,
     pendingRowTransitions: stage.pendingRowTransitions,
+    pendingRowTransitionsRef: stage.pendingRowTransitionsRef,
     decimalPlaces: stage.decimalPlaces,
     defaultValueFormat: stage.defaultValueFormat,
     numberGroupSeparator: stage.numberGroupSeparator,
@@ -1210,7 +1260,13 @@ export function useViewportRuntimeStage(input, transport) {
     }
   }, [stage.columnOrder, stage.pivotLayoutOrder, stage.cachedColSchema]);
 
-  const fitToWidthEnabled = Boolean(stage.fitToWidth || stage.autoSizeStrategy === 'fitGridWidth');
+  const fitToWidthEnabled = Boolean(
+    (stage.fitToWidth && (typeof stage.fitToWidth === 'object' ? stage.fitToWidth.enabled !== false : true))
+    || stage.autoSizeStrategy === 'fitGridWidth'
+  );
+
+  const autoSizedMeasureSignatureRef = useRef<string>('');
+  const autoSizedColIdsRef = useRef<Set<string>>(new Set());
 
   // Auto-size new columns to fit their header text on spawn
   useEffect(() => {
@@ -1218,14 +1274,48 @@ export function useViewportRuntimeStage(input, transport) {
     if (!stage.table || !stage.table.getVisibleLeafColumns) return;
     const visLeafCols = stage.table.getVisibleLeafColumns();
     if (visLeafCols.length === 0) return;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    ctx.font = `600 ${stage.fontSize || '14px'} ${stage.fontFamily || "'Inter', system-ui, sans-serif"}`;
+    const headerWrapActive = Boolean(
+      stage.theme && stage.theme.headerWrap !== undefined
+        ? stage.theme.headerWrap
+        : (stage.uiConfig && stage.uiConfig.wrapHeaders)
+    );
+    const measureSignature = JSON.stringify({
+      colFields: stage.colFields,
+      valConfigs: stage.valConfigs,
+      fontFamily: stage.fontFamily || null,
+      fontSize: stage.fontSize || null,
+      headerWrapActive,
+      maxWidth: stage.autoSizeBounds.maxWidth,
+    });
+    const sameMeasureSignature = autoSizedMeasureSignatureRef.current === measureSignature;
+    if (!sameMeasureSignature) {
+      autoSizedMeasureSignatureRef.current = measureSignature;
+      autoSizedColIdsRef.current.clear();
+    }
+    const measureHeaderText = createTextWidthMeasurer(
+      `600 ${stage.fontSize || '14px'} ${stage.fontFamily || "'Inter', system-ui, sans-serif"}`,
+      7.5
+    );
     const newSizes = {};
     visLeafCols.forEach(col => {
-      if (stage.columnSizing[col.id] !== undefined) return; // already user-set
+      if (stage.columnSizing[col.id] !== undefined) {
+        autoSizedColIdsRef.current.add(col.id);
+        return; // already user-set
+      }
       if (col.columnDef && col.columnDef.meta && col.columnDef.meta.isSchemaPlaceholder) return;
-      const measuredFromText = stage.getDisplayHeaderTextStackForColumn(col).reduce((maxWidth, headerText) => Math.max(maxWidth, ctx.measureText(headerText).width + stage.autoSizeBounds.headerPadding + stage.autoSizeBounds.headerOverscan), stage.autoSizeBounds.minWidth);
+      if (sameMeasureSignature && col.id !== 'hierarchy' && autoSizedColIdsRef.current.has(col.id)) {
+        return;
+      }
+      autoSizedColIdsRef.current.add(col.id);
+      const headerStack = stage.getDisplayHeaderTextStackForColumn(col);
+      const shortLabel = col.columnDef && col.columnDef.meta ? col.columnDef.meta.shortLabel : null;
+      const measuredFromText = headerStack.reduce((maxWidth, headerText) => {
+        const textWidth = headerWrapActive
+          ? measureLongestHeaderWord(headerText, measureHeaderText)
+          : measureHeaderText(headerText);
+        const effectiveTextWidth = shortLabel ? Math.min(textWidth, measureHeaderText(shortLabel)) : textWidth;
+        return Math.max(maxWidth, effectiveTextWidth + stage.autoSizeBounds.headerPadding + stage.autoSizeBounds.headerOverscan);
+      }, stage.autoSizeBounds.minWidth);
       const measuredFromDom = stage.getRenderedHeaderWidthForColumn(col.id);
       const measuredFromCells = col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__' ? stage.getRenderedCellWidthForColumn(col.id) : null;
       const measured = Number.isFinite(measuredFromDom) ? Math.max(measuredFromText, measuredFromDom) : measuredFromText;
@@ -1245,7 +1335,32 @@ export function useViewportRuntimeStage(input, transport) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitToWidthEnabled, stage.autoSizeBounds.maxWidth, stage.colFields, stage.fontFamily, stage.fontSize, stage.getDisplayHeaderTextStackForColumn, stage.getRenderedCellWidthForColumn, stage.getRenderedHeaderWidthForColumn, stage.queueHeaderFitValidation, stage.rowFields, stage.valConfigs]);
+  }, [fitToWidthEnabled, stage.autoSizeBounds.maxWidth, stage.colFields, stage.fontFamily, stage.fontSize, stage.getDisplayHeaderTextStackForColumn, stage.getRenderedCellWidthForColumn, stage.getRenderedHeaderWidthForColumn, stage.queueHeaderFitValidation, stage.rowFields, stage.theme?.headerWrap, stage.uiConfig?.wrapHeaders, stage.valConfigs]);
+  stage.pendingRowTransitionTimersRef = useRef(new Map());
+  const clearTimersForRowPath = useCallback((rowPath) => {
+    const entry = stage.pendingRowTransitionTimersRef.current.get(rowPath);
+    if (!entry) return;
+    if (entry.hairlineTimer) clearTimeout(entry.hairlineTimer);
+    if (entry.bandTimer) clearTimeout(entry.bandTimer);
+    stage.pendingRowTransitionTimersRef.current.delete(rowPath);
+  }, []);
+  const clearAllPendingRowTransitions = useCallback(() => {
+    stage.pendingRowTransitionTimersRef.current.forEach(entry => {
+      if (!entry) return;
+      if (entry.hairlineTimer) clearTimeout(entry.hairlineTimer);
+      if (entry.bandTimer) clearTimeout(entry.bandTimer);
+    });
+    stage.pendingRowTransitionTimersRef.current.clear();
+    stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+  }, [stage.setPendingRowTransitions]);
+  useEffect(() => () => {
+    stage.pendingRowTransitionTimersRef.current.forEach(entry => {
+      if (!entry) return;
+      if (entry.hairlineTimer) clearTimeout(entry.hairlineTimer);
+      if (entry.bandTimer) clearTimeout(entry.bandTimer);
+    });
+    stage.pendingRowTransitionTimersRef.current.clear();
+  }, []);
   useEffect(() => {
     if (!stage.serverSide || !stage.structuralInFlight) return;
     const pending = stage.structuralPendingVersionRef.current;
@@ -1254,27 +1369,27 @@ export function useViewportRuntimeStage(input, transport) {
     if (numericVersion > pending.startDataVersion && numericVersion >= pending.version) {
       stage.setStructuralInFlight(false);
       stage.structuralPendingVersionRef.current = null;
-      stage.setPendingRowTransitions(new Map());
+      clearAllPendingRowTransitions();
       stage.setPendingColumnSkeletonCount(0);
     }
-  }, [stage.dataVersion, stage.serverSide, stage.structuralInFlight]);
+  }, [stage.dataVersion, stage.serverSide, stage.structuralInFlight, clearAllPendingRowTransitions]);
   useEffect(() => {
     if (!stage.serverSide || !stage.structuralInFlight) return;
     const timeoutId = setTimeout(() => {
       stage.setStructuralInFlight(false);
       stage.structuralPendingVersionRef.current = null;
-      stage.setPendingRowTransitions(new Map());
+      clearAllPendingRowTransitions();
       stage.setPendingColumnSkeletonCount(0);
     }, 10000);
     return () => clearTimeout(timeoutId);
-  }, [stage.serverSide, stage.structuralInFlight, stage.stateEpoch]);
+  }, [stage.serverSide, stage.structuralInFlight, stage.stateEpoch, clearAllPendingRowTransitions]);
   useEffect(() => {
     if (!stage.serverSide || stage.pendingRowTransitions.size === 0) return;
     const timeoutId = setTimeout(() => {
-      stage.setPendingRowTransitions(new Map());
+      clearAllPendingRowTransitions();
     }, 10000);
     return () => clearTimeout(timeoutId);
-  }, [stage.pendingRowTransitions, stage.serverSide]);
+  }, [stage.pendingRowTransitions, stage.serverSide, clearAllPendingRowTransitions]);
   const viewportTableData = useRuntimeViewportTableData({
     comparisonCellCountsRef: stage.comparisonCellCountsRef,
     comparisonCellEpoch: stage.comparisonCellEpoch,
@@ -1506,7 +1621,11 @@ export function useViewportRuntimeStage(input, transport) {
   };
   stage.handleSortingChange = updater => {
     const rawNextSorting = typeof updater === 'function' ? updater(stage.sorting) : updater;
-    const newSorting = normalizeSortingState(rawNextSorting, stage.sorting);
+    const previousMetadata = new Map(stage.columnSortMetadataRef.current);
+    (Array.isArray(stage.sorting) ? stage.sorting : []).forEach(spec => {
+      if (spec && spec.id) previousMetadata.set(spec.id, { ...(previousMetadata.get(spec.id) || {}), ...spec });
+    });
+    const newSorting = normalizeSortingState(rawNextSorting, previousMetadata, stage.effectiveSortOptions);
     stage.setSorting(newSorting);
 
     // Fire sort event to backend
@@ -1532,7 +1651,11 @@ export function useViewportRuntimeStage(input, transport) {
       stage.handleSortingChange(updater);
     },
     onExpandedChange: updater => {
-      stage.captureExpansionScrollPosition();
+      if (stage.parentRef.current && stage.parentRef.current.scrollTop > 1) {
+        stage.captureExpansionScrollPosition();
+      } else {
+        stage.expansionScrollRestoreRef.current = null;
+      }
       const usesExpandAllDefault = stage.expanded === true || stage.expanded && typeof stage.expanded === 'object' && stage.expanded[EXPAND_ALL_STATE_KEY] === true;
       let updaterBase = stage.expanded;
       if (usesExpandAllDefault && typeof updater === 'function') {
@@ -1573,15 +1696,43 @@ export function useViewportRuntimeStage(input, transport) {
         const changedPath = toggledExpandedPath || [...allKeys].find(key => key !== EXPAND_ALL_STATE_KEY && (Object.prototype.hasOwnProperty.call(oldExp, key) !== Object.prototype.hasOwnProperty.call(newExp, key) || !!oldExp[key] !== !!newExp[key]));
         if (changedPath) {
           const isNowExpanded = usesExpandAllDefault ? !!(rawExpanded && rawExpanded[changedPath]) : !!(newExpanded && newExpanded[changedPath]);
-          stage.setPendingRowTransitions(prev => {
-            const next = new Map(prev);
-            next.set(changedPath, isNowExpanded ? 'expand' : 'collapse');
-            while (next.size > MAX_PENDING_ROW_TRANSITIONS) {
-              const oldestKey = next.keys().next().value;
-              next.delete(oldestKey);
-            }
-            return next;
-          });
+          clearTimersForRowPath(changedPath);
+          if (!isNowExpanded) {
+            stage.setPendingRowTransitions(prev => {
+              if (!prev || !prev.has(changedPath)) return prev;
+              const next = new Map(prev);
+              next.delete(changedPath);
+              return next;
+            });
+          } else {
+            // Hybrid 2-tier loader with 80ms grace window: fast local DuckDB-Wasm or
+            // cached expansions complete silently without a 1-frame shimmer flash, while
+            // queries exceeding 80ms show the hairline sweep and >=250ms escalate to the band.
+            const hairlineTimer = setTimeout(() => {
+              stage.setPendingRowTransitions(prev => {
+                const next = new Map(prev);
+                next.set(changedPath, 'hairline');
+                while (next.size > MAX_PENDING_ROW_TRANSITIONS) {
+                  const oldestKey = next.keys().next().value;
+                  next.delete(oldestKey);
+                }
+                return next;
+              });
+            }, 80);
+            const bandTimer = setTimeout(() => {
+              stage.pendingRowTransitionTimersRef.current.delete(changedPath);
+              stage.setPendingRowTransitions(prev => {
+                const next = new Map(prev);
+                next.set(changedPath, 'band');
+                while (next.size > MAX_PENDING_ROW_TRANSITIONS) {
+                  const oldestKey = next.keys().next().value;
+                  next.delete(oldestKey);
+                }
+                return next;
+              });
+            }, 250);
+            stage.pendingRowTransitionTimersRef.current.set(changedPath, { hairlineTimer, bandTimer });
+          }
         }
 
         // -1 signals "row not in viewport — do a full cache clear".
@@ -1605,10 +1756,18 @@ export function useViewportRuntimeStage(input, transport) {
         // that races with the expanded sync request and causes a stale rejection.
         // Record the anchor so the deferred effect invalidates subsequent blocks
         // once the expansion response has landed (dataVersion bump).
+        const prevPendingExpansion = stage.pendingExpansionRef.current;
+        const mergedAnchorBlock = prevPendingExpansion
+          ? (prevPendingExpansion.anchorBlock < 0 || anchorBlock < 0
+            ? -1
+            : Math.min(prevPendingExpansion.anchorBlock, anchorBlock))
+          : anchorBlock;
         stage.pendingExpansionRef.current = {
-          anchorBlock,
+          anchorBlock: mergedAnchorBlock,
           expandedRowVirtualIndex,
-          oldRowCount: stage.rowCount,
+          oldRowCount: prevPendingExpansion && typeof prevPendingExpansion.oldRowCount === 'number'
+            ? prevPendingExpansion.oldRowCount
+            : stage.rowCount,
           baselineDataVersion: Number(stage.dataVersion || 0)
         };
       }
@@ -1665,6 +1824,10 @@ export function useViewportRuntimeStage(input, transport) {
   // The horizontal virtualizer, header groups, and sticky styles all consume
   // the table plus the viewport's scroll container. Keep this render-domain
   // projection in the viewport stage; workspace consumes its named outputs.
+  const preserveWiderChartColRange = stage.chartPanelOpen || stage.chartCanvasPanes.length > 0;
+  stage.handlePreciseVisibleColRange = useCallback(nextRange => stage.syncPreciseVisibleColRange(nextRange, {
+    preserveWiderRange: preserveWiderChartColRange
+  }), [stage.syncPreciseVisibleColRange, preserveWiderChartColRange]);
   ({
     columnVirtualizer: stage.columnVirtualizer,
     virtualCenterCols: stage.virtualCenterCols,
@@ -1684,9 +1847,7 @@ export function useViewportRuntimeStage(input, transport) {
     stateEpoch: stage.stateEpoch,
     estimateColumnWidth: stage.defaultColumnWidths.schemaFallback,
     onHorizontalScrollMetrics: stage.handleHorizontalScrollMetrics,
-    onPreciseVisibleColRange: nextRange => stage.syncPreciseVisibleColRange(nextRange, {
-      preserveWiderRange: stage.chartPanelOpen || stage.chartCanvasPanes.length > 0
-    }),
+    onPreciseVisibleColRange: stage.handlePreciseVisibleColRange,
     columnVisibility: stage.columnVisibility,
     columnPinning: stage.columnPinning,
     columnOrder: stage.columnOrderKey,
@@ -1731,50 +1892,7 @@ export function useViewportRuntimeStage(input, transport) {
       return () => window.removeEventListener('resize', measure);
     }
     return undefined;
-  }, [fitToWidthEnabled, stage.parentRef]);
-  const fitBaseFontSize = (stage.theme && stage.theme.fontSize !== undefined && stage.theme.fontSize !== null)
-    ? stage.theme.fontSize
-    : (stage.effectiveFontSize || stage.fontSize || 13);
-  const lastFitSignatureRef = useRef('');
-  const fitLayoutSpec = useMemo(() => {
-    if (!fitToWidthEnabled || fitContainerWidth <= 0 || !stage.table) return null;
-    const leaves = typeof stage.table.getVisibleLeafColumns === 'function'
-      ? stage.table.getVisibleLeafColumns()
-      : [];
-    if (!leaves || leaves.length === 0) return null;
-    return computeFitToWidthLayout({
-      columns: leaves.map(col => ({
-        id: col.id,
-        baseSize: (col.columnDef && col.columnDef.size) || (typeof col.getSize === 'function' ? col.getSize() : 100) || 100,
-      })),
-      containerWidth: fitContainerWidth,
-      baseFontSize: fitBaseFontSize,
-    });
-  }, [fitToWidthEnabled, fitContainerWidth, stage.columns, stage.columnVisibility, fitBaseFontSize]);
-  useEffect(() => {
-    if (!fitLayoutSpec || !fitLayoutSpec.columnSizing) return;
-    const sig = `${fitContainerWidth}:${JSON.stringify(fitLayoutSpec.columnSizing)}`;
-    if (lastFitSignatureRef.current === sig) return;
-    lastFitSignatureRef.current = sig;
-    stage.setColumnSizing(prev => {
-      const next = { ...(prev || {}), ...fitLayoutSpec.columnSizing };
-      const keys = Object.keys(fitLayoutSpec.columnSizing);
-      const changed = keys.some(k => !prev || prev[k] !== fitLayoutSpec.columnSizing[k]);
-      return changed ? next : prev;
-    });
-  }, [fitLayoutSpec, fitContainerWidth]);
-  if (fitToWidthEnabled && fitLayoutSpec && Number.isFinite(fitLayoutSpec.fontSize)) {
-    const fittedCss = `${fitLayoutSpec.fontSize}px`;
-    if (fittedCss !== stage.effectiveFontSize) {
-      stage.effectiveFontSize = fittedCss;
-      if (stage.themeCssVars) {
-        stage.themeCssVars = {
-          ...stage.themeCssVars,
-          '--sp-font-size': fittedCss,
-        };
-      }
-    }
-  }
+  }, [fitToWidthEnabled, stage.parentRef, stage.parentRef ? stage.parentRef.current : null]);
   stage.leftHeaderGroups = useMemo(() => stage.table.getLeftHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
   stage.rightHeaderGroups = useMemo(() => stage.table.getRightHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
   stage.centerHeaderGroups = useMemo(() => stage.table.getCenterHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
@@ -1828,6 +1946,172 @@ export function useViewportRuntimeStage(input, transport) {
     table: stage.table,
   });
   for (const [key, value] of Object.entries(columnMeasurement)) stage[key] = value;
+
+  const fitBaseTheme = stage.theme;
+  const fitBaseFontSize = (fitBaseTheme && fitBaseTheme.fontSize !== undefined && fitBaseTheme.fontSize !== null)
+    ? fitBaseTheme.fontSize
+    : (stage.fontSize || 13);
+  const parsedFitBaseFontSize = toFiniteNumber(fitBaseFontSize, 13) ?? 13;
+  const fitMinFontSize = toFiniteNumber(
+    (typeof stage.fitToWidth === 'object' && stage.fitToWidth ? stage.fitToWidth.minFontSize : undefined)
+      ?? stage.props?.fitMinFontSize
+      ?? stage.props?.minFontSize
+      ?? fitBaseTheme?.minFontSize
+      ?? fitBaseTheme?.fitMinFontSize
+      ?? stage.normalizedPerformanceConfig?.fitMinFontSize
+      ?? stage.props?.performanceConfig?.minFontSize,
+    10
+  ) ?? 10;
+  const lastFitSignatureRef = useRef('');
+  const fitLayoutSpec = useMemo(() => {
+    if (!fitToWidthEnabled || fitContainerWidth <= 0 || !stage.table) return null;
+    const leaves = typeof stage.table.getVisibleLeafColumns === 'function'
+      ? stage.table.getVisibleLeafColumns()
+      : [];
+    if (!leaves || leaves.length === 0) return null;
+
+    const allBodyRows = typeof stage.table.getRowModel === 'function' ? stage.table.getRowModel().rows : [];
+    const pinnedTop = typeof stage.table.getTopRows === 'function' ? stage.table.getTopRows() : [];
+    const pinnedBottom = typeof stage.table.getBottomRows === 'function' ? stage.table.getBottomRows() : [];
+    const sampledBody = typeof stage.getAutoSizeSampleRows === 'function'
+      ? stage.getAutoSizeSampleRows(allBodyRows)
+      : allBodyRows.slice(0, MAX_AUTO_SIZE_SAMPLE_ROWS);
+    const seenIds = new Set();
+    const sampleRows = [];
+    [...pinnedTop, ...sampledBody, ...pinnedBottom].forEach(row => {
+      if (!row || (row.id !== undefined && seenIds.has(row.id))) return;
+      if (row.id !== undefined) seenIds.add(row.id);
+      sampleRows.push(row);
+    });
+
+    const baseFamily = stage.effectiveFontFamily || stage.fontFamily || "'Inter', system-ui, sans-serif";
+    const numericFamily = fitBaseTheme?.numericFontFamily || baseFamily;
+    const baseHeaderPx = toFiniteNumber(fitBaseTheme?.headerFontSize, parsedFitBaseFontSize) ?? parsedFitBaseFontSize;
+    const measureHierarchyText = createTextWidthMeasurer(`${parsedFitBaseFontSize}px ${baseFamily}`, parsedFitBaseFontSize * 0.6);
+    const measureNumericText = createTextWidthMeasurer(`${parsedFitBaseFontSize}px ${numericFamily}`, parsedFitBaseFontSize * 0.6);
+    const measureHeaderText = createTextWidthMeasurer(`600 ${baseHeaderPx}px ${baseFamily}`, baseHeaderPx * 0.62);
+    const cellPaddingX = toFiniteNumber(fitBaseTheme?.cellPaddingX, 12) ?? 12;
+    const headerPaddingX = toFiniteNumber(fitBaseTheme?.headerPaddingX, cellPaddingX) ?? cellPaddingX;
+    const numericPaddingRight = toFiniteNumber(fitBaseTheme?.numericPaddingRight, 8) ?? 8;
+    const headerWrapActive = Boolean(fitBaseTheme?.headerWrap !== undefined ? fitBaseTheme.headerWrap : stage.uiConfig?.wrapHeaders);
+    const headerControlsMode = fitBaseTheme?.headerControls || 'always';
+    const sortIndicatorMode = fitBaseTheme?.sortIndicator || 'arrow';
+
+    const measuredColumns = leaves.map(col => {
+      const colId = col.id;
+      const baseSize = (col.columnDef && col.columnDef.size) || (typeof col.getSize === 'function' ? col.getSize() : 100) || 100;
+      const matchingCfg = Array.isArray(stage.valConfigs) && typeof stage.matchesSelectedColumnToValueConfig === 'function'
+        ? stage.valConfigs.find(cfg => stage.matchesSelectedColumnToValueConfig(colId, cfg)) || null
+        : null;
+      const effectiveDec = stage.columnDecimalOverrides && stage.columnDecimalOverrides[colId] !== undefined
+        ? stage.columnDecimalOverrides[colId]
+        : stage.decimalPlaces;
+      const effectiveFmt = Object.prototype.hasOwnProperty.call(stage.columnFormatOverrides || {}, colId)
+        ? stage.columnFormatOverrides[colId]
+        : ((matchingCfg && matchingCfg.format) || stage.defaultValueFormat || null);
+      const effectiveSep = stage.columnGroupSeparatorOverrides && stage.columnGroupSeparatorOverrides[colId] !== undefined
+        ? stage.columnGroupSeparatorOverrides[colId]
+        : stage.numberGroupSeparator;
+      const effectiveScale = (matchingCfg && matchingCfg.valueScale !== undefined && matchingCfg.valueScale !== null)
+        ? matchingCfg.valueScale
+        : stage.valueScale;
+      const effectiveUnitSuffix = (matchingCfg && matchingCfg.unitSuffix !== undefined && matchingCfg.unitSuffix !== null)
+        ? matchingCfg.unitSuffix
+        : stage.unitSuffix;
+      const displayOpts = (effectiveScale !== undefined && effectiveScale !== null) || effectiveUnitSuffix
+        ? { valueScale: effectiveScale, unitSuffix: effectiveUnitSuffix }
+        : undefined;
+      const headerStack = typeof stage.getDisplayHeaderTextStackForColumn === 'function'
+        ? stage.getDisplayHeaderTextStackForColumn(col)
+        : (typeof col.columnDef?.header === 'string' ? [formatDisplayLabel(col.columnDef.header)] : []);
+
+      return measureColumnFitMetric({
+        columnId: colId,
+        baseSize,
+        rows: sampleRows,
+        getCellRawValue: (row, id) => row.getValue(id),
+        formatCellText: (val) => formatValue(val, effectiveFmt, effectiveDec, effectiveSep, displayOpts),
+        formatHierarchyLabel: formatDisplayLabel,
+        headerLines: headerStack,
+        shortLabel: col.columnDef?.meta?.shortLabel || null,
+        headerWrap: headerWrapActive,
+        headerControlsMode,
+        canSort: typeof col.getCanSort === 'function' ? col.getCanSort() : true,
+        sortIndicator: sortIndicatorMode,
+        measureBodyText: colId === 'hierarchy' ? measureHierarchyText : measureNumericText,
+        measureHeaderText,
+        cellPaddingX,
+        headerPaddingX,
+        numericPaddingRight,
+        hierarchyIndentPx: 24,
+        hierarchyExpandPx: 22,
+        cellOverscan: 4,
+        headerOverscan: 4,
+      });
+    });
+
+    return computeFitToWidthLayout({
+      columns: measuredColumns,
+      containerWidth: fitContainerWidth,
+      baseFontSize: parsedFitBaseFontSize,
+      minFontSize: fitMinFontSize,
+    });
+  }, [
+    fitToWidthEnabled,
+    fitContainerWidth,
+    fitMinFontSize,
+    parsedFitBaseFontSize,
+    stage.columns,
+    stage.columnVisibility,
+    stage.tableData,
+    stage.dataVersion,
+    stage.valConfigs,
+    stage.decimalPlaces,
+    stage.defaultValueFormat,
+    stage.numberGroupSeparator,
+    stage.valueScale,
+    stage.unitSuffix,
+    stage.columnDecimalOverrides,
+    stage.columnFormatOverrides,
+    stage.columnGroupSeparatorOverrides,
+    stage.effectiveFontFamily,
+    stage.fontFamily,
+    stage.uiConfig?.wrapHeaders,
+    fitBaseTheme,
+  ]);
+  useEffect(() => {
+    if (!fitLayoutSpec || !fitLayoutSpec.columnSizing) return;
+    const sig = `${fitContainerWidth}:${fitLayoutSpec.fontSize}:${JSON.stringify(fitLayoutSpec.columnSizing)}`;
+    if (lastFitSignatureRef.current === sig) return;
+    lastFitSignatureRef.current = sig;
+    stage.setColumnSizing(prev => {
+      const next = { ...(prev || {}), ...fitLayoutSpec.columnSizing };
+      const keys = Object.keys(fitLayoutSpec.columnSizing);
+      const changed = keys.some(k => !prev || prev[k] !== fitLayoutSpec.columnSizing[k]);
+      return changed ? next : prev;
+    });
+  }, [fitLayoutSpec, fitContainerWidth]);
+  if (fitToWidthEnabled && fitLayoutSpec && Number.isFinite(fitLayoutSpec.fontSize) && fitLayoutSpec.fontSize < parsedFitBaseFontSize) {
+    const fittedCss = `${fitLayoutSpec.fontSize}px`;
+    const fitScale = parsedFitBaseFontSize > 0 ? (fitLayoutSpec.fontSize / parsedFitBaseFontSize) : 1;
+    const compactOverrides = computeCompactFitThemeOverrides(fitBaseTheme, fitScale, fitLayoutSpec.fontSize, fitMinFontSize);
+    const fittedTheme = {
+      ...fitBaseTheme,
+      ...compactOverrides,
+    };
+    stage.effectiveFontSize = fittedCss;
+    stage.theme = fittedTheme;
+    if (stage.themeRef) {
+      stage.themeRef.current = fittedTheme;
+    }
+    stage.styles = getStyles(fittedTheme);
+    if (stage.themeCssVars) {
+      stage.themeCssVars = {
+        ...stage.themeCssVars,
+        ...buildThemeCssVars(fittedTheme),
+      };
+    }
+  }
   const columnAutoSizing = useRuntimeColumnAutoSizing({
     autoSizeBounds: stage.autoSizeBounds,
     columnDecimalOverrides: stage.columnDecimalOverrides,
@@ -1845,7 +2129,9 @@ export function useViewportRuntimeStage(input, transport) {
     numberGroupSeparator: stage.numberGroupSeparator,
     queueHeaderFitValidation: stage.queueHeaderFitValidation,
     table: stage.table,
+    unitSuffix: stage.unitSuffix,
     valConfigs: stage.valConfigs,
+    valueScale: stage.valueScale,
   });
   for (const [key, value] of Object.entries(columnAutoSizing)) stage[key] = value;
   const clipboardExportPresentation = useRuntimeClipboardExportPresentation({
@@ -2106,11 +2392,13 @@ export function useViewportRuntimeStage(input, transport) {
       if (!stage.parentRef.current || !stage.expansionScrollRestoreRef.current) return;
       const nextTarget = stage.expansionScrollRestoreRef.current;
       const targetScrollTop = nextTarget.scrollTop;
-      if (stage.rowVirtualizer.scrollToOffset) {
-        stage.rowVirtualizer.scrollToOffset(targetScrollTop);
-      }
       if (Math.abs(stage.parentRef.current.scrollTop - targetScrollTop) > 1) {
-        stage.parentRef.current.scrollTop = targetScrollTop;
+        if (stage.rowVirtualizer.scrollToOffset) {
+          stage.rowVirtualizer.scrollToOffset(targetScrollTop);
+        }
+        if (Math.abs(stage.parentRef.current.scrollTop - targetScrollTop) > 1) {
+          stage.parentRef.current.scrollTop = targetScrollTop;
+        }
       }
       if (nextTarget.restorePassesRemaining <= 1) {
         stage.expansionScrollRestoreRef.current = null;
@@ -2224,18 +2512,18 @@ export function useViewportRuntimeStage(input, transport) {
   useEffect(() => {
     if (!stage.structuralInFlight) return;
     stage.pendingExpansionRef.current = null;
-    stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
-  }, [stage.structuralInFlight]);
+    clearAllPendingRowTransitions();
+  }, [stage.structuralInFlight, clearAllPendingRowTransitions]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pendingExpansion = stage.pendingExpansionRef.current;
     if (!stage.serverSide) {
-      stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+      clearAllPendingRowTransitions();
       return;
     }
     if (!pendingExpansion) {
       if (!stage.structuralInFlight && !stage.isRequestPending) {
-        stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+        clearAllPendingRowTransitions();
       }
       return;
     }
@@ -2269,7 +2557,7 @@ export function useViewportRuntimeStage(input, transport) {
       if (stage.invalidateFromBlock) stage.invalidateFromBlock(firstStaleBlock);
     }
     // Clear the transition loader now that the expansion response has landed.
-    stage.setPendingRowTransitions(new Map());
+    clearAllPendingRowTransitions();
 
     // Viewport anchor preservation.
     // When rows are inserted or removed ABOVE the current scroll position, the
@@ -2294,7 +2582,7 @@ export function useViewportRuntimeStage(input, transport) {
         }
       }
     }
-  }, [stage.dataVersion, stage.serverSide, stage.rowCount, stage.rowHeight, stage.parentRef, stage.rowVirtualizer]); // fires when expansion response arrives
+  }, [stage.dataVersion, stage.serverSide, stage.rowCount, stage.rowHeight, stage.parentRef, stage.rowVirtualizer, stage.structuralInFlight, stage.isRequestPending, clearAllPendingRowTransitions]); // fires when expansion response arrives or request state settles
 
   // Debug effect removed (finding #10 — hot-path logging).
   const chartModels = useRuntimeChartModels({
@@ -2357,5 +2645,33 @@ export function useViewportRuntimeStage(input, transport) {
   stage.applyChartTargetFilters = chartModels.applyChartTargetFilters;
   stage.activateChartCategory = chartModels.activateChartCategory;
   stage.handleChartCategoryActivate = chartModels.handleChartCategoryActivate;
+
+  useEffect(() => {
+    if (!stage.previewChartPaneId && !stage.sparklineDataModal && !stage.partModal) return undefined;
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
+    const handleKeyDown = (event: any) => {
+      if (!event || event.key !== 'Escape' || event.defaultPrevented) return;
+      if (stage.previewChartPaneId && typeof stage.handleCancelPreviewChartPane === 'function') {
+        event.preventDefault();
+        stage.handleCancelPreviewChartPane();
+      } else if (stage.sparklineDataModal && typeof stage.setSparklineDataModal === 'function') {
+        event.preventDefault();
+        stage.setSparklineDataModal(null);
+      } else if (stage.partModal && typeof stage.cancelActiveExportRequest === 'function') {
+        event.preventDefault();
+        stage.cancelActiveExportRequest();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    stage.previewChartPaneId,
+    stage.sparklineDataModal,
+    stage.partModal,
+    stage.handleCancelPreviewChartPane,
+    stage.setSparklineDataModal,
+    stage.cancelActiveExportRequest,
+  ]);
+
   return Object.freeze(stage);
 }

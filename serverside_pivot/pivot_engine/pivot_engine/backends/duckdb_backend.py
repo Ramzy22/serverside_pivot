@@ -190,18 +190,23 @@ def _is_duckdb_memory_failure(exc: BaseException) -> bool:
 
 class ConnectionPool:
     """Simple connection/cursor pool for concurrent access"""
-    def __init__(self, connection_factory: callable, max_size: int = 10):
+    def __init__(self, connection_factory: callable, max_size: int = 10, health_check_interval: float = 30.0):
         self.pool = queue.Queue(maxsize=max_size)
         self.factory = connection_factory
         self.max_size = max_size
+        self.health_check_interval = max(0.0, float(health_check_interval))
         self.created_count = 0
         self.lock = threading.Lock()
         self._closed = False
+        self._last_healthy_ts: Dict[int, float] = {}
         
         # Pre-fill a few
         initial_fill = min(2, max_size)
+        now = time.monotonic()
         for _ in range(initial_fill):
-            self.pool.put(self.factory())
+            con = self.factory()
+            self._last_healthy_ts[id(con)] = now
+            self.pool.put(con)
             self.created_count += 1
 
     @staticmethod
@@ -215,6 +220,7 @@ class ConnectionPool:
     def _new_connection(self):
         con = self.factory()
         self.created_count += 1
+        self._last_healthy_ts[id(con)] = time.monotonic()
         return con
 
     def _discard_connection(self, con: Any) -> None:
@@ -225,6 +231,7 @@ class ConnectionPool:
             except Exception:  # nosec B110
                 pass
         with self.lock:
+            self._last_healthy_ts.pop(id(con), None)
             if self.created_count > 0:
                 self.created_count -= 1
 
@@ -253,13 +260,17 @@ class ConnectionPool:
                     con = None
                     continue  # Re-check created_count under the lock
 
+            now = time.monotonic()
             with self.lock:
                 closed = self._closed
+                last_ok = self._last_healthy_ts.get(id(con), 0.0)
             if closed:
                 self._discard_connection(con)
                 raise RuntimeError("Connection pool is closed")
 
-            if self._is_healthy(con):
+            if (now - last_ok) < self.health_check_interval or self._is_healthy(con):
+                with self.lock:
+                    self._last_healthy_ts[id(con)] = time.monotonic()
                 return con
 
             self._discard_connection(con)
@@ -275,11 +286,18 @@ class ConnectionPool:
 
     def checkin(self, con: Any, *, discard: bool = False) -> bool:
         """Return a healthy lease or retire it before another statement can use it."""
-        if discard or not self._is_healthy(con):
+        if discard:
+            self._discard_connection(con)
+            return False
+        now = time.monotonic()
+        with self.lock:
+            last_ok = self._last_healthy_ts.get(id(con), 0.0)
+        if (now - last_ok) >= self.health_check_interval and not self._is_healthy(con):
             self._discard_connection(con)
             return False
         with self.lock:
             if not self._closed:
+                self._last_healthy_ts[id(con)] = time.monotonic()
                 self.pool.put_nowait(con)
                 return True
         self._discard_connection(con)

@@ -37,6 +37,7 @@ def test_react_package_exports_themes_and_typescript_interfaces():
         "injectThemeCssVars",
         "PivotRuntimeProps",
         "PivotThemeName",
+        "PivotThemeOverrides",
         "ValConfig",
         "FilterConfig",
         "SortConfig",
@@ -45,6 +46,10 @@ def test_react_package_exports_themes_and_typescript_interfaces():
         assert symbol in source
 
     assert "export interface ValConfig" in domains_source
+    assert "export interface PivotThemeOverrides" in domains_source
+    assert "showGrandTotal?: boolean;" in domains_source
+    assert "shortLabel?: string;" in domains_source
+    assert "minFontSize?: number;" in domains_source
     assert "export interface FilterConfig" in domains_source
     assert "export interface SortConfig" in domains_source
     assert "export interface ChartDefinition" in domains_source
@@ -76,6 +81,7 @@ def test_react_package_exports_themes_and_typescript_interfaces():
             "injectThemeCssVars",
             "PivotRuntimeProps",
             "PivotThemeName",
+            "PivotThemeOverrides",
             "ValConfig",
             "FilterConfig",
             "SortConfig",
@@ -85,6 +91,10 @@ def test_react_package_exports_themes_and_typescript_interfaces():
 
         assert "export { themes, injectThemeCssVars }" in d_ts
         assert "export interface ValConfig" in domains_d_ts
+        assert "export interface PivotThemeOverrides" in domains_d_ts
+        assert "showGrandTotal?: boolean;" in domains_d_ts
+        assert "shortLabel?: string;" in domains_d_ts
+        assert "minFontSize?: number;" in domains_d_ts
         assert "export interface FilterConfig" in domains_d_ts
         assert "export interface SortConfig" in domains_d_ts
         assert "export interface ChartDefinition" in domains_d_ts

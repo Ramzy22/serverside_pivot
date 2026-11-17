@@ -67,6 +67,44 @@ class RuntimeRequestRouter:
         self.debug = debug
 
     @staticmethod
+    def _resolve_available_fields(adapter: Any, table_name: Optional[str]) -> Optional[List[str]]:
+        """Inspect source dataset schema column IDs independently of active pivot columns."""
+        if not table_name or adapter is None:
+            return None
+        controller = getattr(adapter, "controller", None)
+        if controller is None:
+            return None
+        raw_names: Optional[List[Any]] = None
+        planner = getattr(controller, "planner", None)
+        if planner is not None and callable(getattr(planner, "get_table_schema_and_columns", None)):
+            try:
+                schema_result = planner.get_table_schema_and_columns(table_name)
+                if isinstance(schema_result, (tuple, list)) and len(schema_result) >= 2:
+                    raw_names = list(schema_result[1] or [])
+            except Exception:
+                raw_names = None
+        if raw_names is None and callable(getattr(controller, "_get_table_schema", None)):
+            try:
+                schema = controller._get_table_schema(table_name)
+                if schema is not None and getattr(schema, "names", None) is not None:
+                    raw_names = list(schema.names)
+            except Exception:
+                raw_names = None
+        if not raw_names:
+            return None
+        fields: List[str] = []
+        seen = set()
+        for name in raw_names:
+            if name is None:
+                continue
+            field_id = str(name)
+            if not field_id.strip() or field_id == "__col_schema" or field_id in seen:
+                continue
+            seen.add(field_id)
+            fields.append(field_id)
+        return fields or None
+
+    @staticmethod
     def _safe_backend_error_code(exc: BaseException) -> str:
         """Return a stable client error without serializing backend exception text."""
         if isinstance(exc, DatabaseExecutionError):
@@ -849,12 +887,19 @@ class RuntimeRequestRouter:
             else None
         )
 
+        available_fields_payload = (
+            self._resolve_available_fields(adapter, context.table)
+            if should_emit_columns
+            else None
+        )
+
         postprocess_started_at = time.perf_counter()
         _svc_response = PivotServiceResponse(
             status="data",
             data=response_data,
             total_rows=response_total_rows,
             columns=cols_payload if should_emit_columns else None,
+            available_fields=available_fields_payload,
             col_schema=schema_payload,
             layout_revision=response.layout_revision,
             data_offset=context.start_row,

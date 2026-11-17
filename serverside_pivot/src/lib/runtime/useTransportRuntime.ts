@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useRuntimeProfiling } from '../hooks/useRuntimeProfiling';
 import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
 import { useRuntimeTransport } from '../hooks/useRuntimeTransport';
@@ -15,6 +15,15 @@ const asObject = (value: unknown): PivotObject => value && typeof value === 'obj
     : {};
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 
+function serializeClientPropValue(value: unknown): string | null {
+    if (value === undefined) return '__undefined__';
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return null;
+    }
+}
+
 type RuntimeCallback = (...args: unknown[]) => unknown;
 type RuntimeRef<T = unknown> = { current: T };
 type RuntimeResponseData = PivotObject;
@@ -28,6 +37,19 @@ interface CoreTransportState extends CoreRuntimeDomain {
     readonly tableName?: string;
     readonly viewMode?: string;
     readonly detailMode?: string;
+    readonly layoutMode?: string;
+    readonly customDimensions?: unknown;
+    readonly runtimeMeasureAxis?: unknown;
+    readonly measureAxis?: unknown;
+    readonly effectiveSortOptions?: unknown;
+    readonly immersiveMode?: unknown;
+    readonly showRowTotals?: unknown;
+    readonly showColTotals?: unknown;
+    readonly showSubtotals?: unknown;
+    readonly groupAllowUnbalanced?: unknown;
+    readonly unbalancedValues?: unknown;
+    readonly showGrandTotal?: unknown;
+    readonly reportDef?: PivotObject | null;
     readonly setProps?: (...args: unknown[]) => unknown;
     readonly pivotProfilerRef: RuntimeRef<object | null>;
     readonly profilerComponentIdRef: RuntimeRef<string | null>;
@@ -132,26 +154,69 @@ export function useTransportRuntime(
         }
     }, []);
 
-    const setProps = runtime.clientRuntimeActive && runtime.clientTransportRef
-        ? (nextProps: unknown) => {
+    const attachRuntimeRequestState = (rawRequest: unknown): RuntimeRequestV1 => {
+        const reqObj = asObject(rawRequest);
+        const {
+            layoutMode: stateLayoutMode,
+            layout_mode: stateLayoutModeSnake,
+            ...cleanStateObj
+        } = asObject(reqObj.state);
+        const fallbackState: PivotObject = {
+            rowFields: core.state.rowFields,
+            colFields: core.state.colFields,
+            valConfigs: core.state.valConfigs,
+            filters: core.state.filters,
+            sorting: core.state.sorting,
+            expanded: core.state.expanded,
+            viewMode,
+            detailMode,
+            ...(runtime.customDimensions !== undefined ? { customDimensions: runtime.customDimensions } : {}),
+            ...((runtime.runtimeMeasureAxis ?? runtime.measureAxis) !== undefined ? { measureAxis: runtime.runtimeMeasureAxis ?? runtime.measureAxis } : {}),
+            ...(runtime.effectiveSortOptions !== undefined ? { sortOptions: runtime.effectiveSortOptions } : {}),
+            ...(runtime.immersiveMode !== undefined ? { immersiveMode: runtime.immersiveMode } : {}),
+            ...(runtime.showRowTotals !== undefined ? { showRowTotals: runtime.showRowTotals } : {}),
+            ...(runtime.showColTotals !== undefined ? { showColTotals: runtime.showColTotals } : {}),
+            ...(runtime.showSubtotals !== undefined ? { showSubtotals: runtime.showSubtotals } : {}),
+            ...(runtime.groupAllowUnbalanced !== undefined ? { groupAllowUnbalanced: Boolean(runtime.groupAllowUnbalanced) } : {}),
+            ...(runtime.unbalancedValues !== undefined ? { unbalancedValues: runtime.unbalancedValues } : {}),
+            ...(runtime.showGrandTotal !== undefined ? { showGrandTotal: runtime.showGrandTotal } : {}),
+            ...(runtime.treeConfig !== undefined ? { treeConfig: runtime.treeConfig } : {}),
+            ...(runtime.detailConfig !== undefined ? { detailConfig: runtime.detailConfig } : {}),
+            ...(runtime.reportDef !== undefined ? { reportDef: runtime.reportDef } : {}),
+        };
+        const resolvedLayoutMode = stateLayoutMode ?? stateLayoutModeSnake ?? runtime.layoutMode;
+        const payloadObj = asObject(reqObj.payload);
+        const shouldAttachLayoutToPayload = resolvedLayoutMode !== undefined
+            && payloadObj.layoutMode === undefined
+            && payloadObj.layout_mode === undefined
+            && reqObj.kind !== 'export';
+        return {
+            ...reqObj,
+            ...(shouldAttachLayoutToPayload
+                ? { payload: { ...payloadObj, layoutMode: resolvedLayoutMode } }
+                : {}),
+            state: {
+                ...fallbackState,
+                ...cleanStateObj,
+            },
+        } as unknown as RuntimeRequestV1;
+    };
+
+    const attachRuntimeRequestStateRef = useRef(attachRuntimeRequestState);
+    attachRuntimeRequestStateRef.current = attachRuntimeRequestState;
+    const rawSetPropsRef = useRef(rawSetProps);
+    rawSetPropsRef.current = rawSetProps;
+    const setLocalRuntimeResponseRef = useRef(runtime.setLocalRuntimeResponse);
+    setLocalRuntimeResponseRef.current = runtime.setLocalRuntimeResponse;
+    const clientTransportObjRef = runtime.clientTransportRef;
+    const lastPublishedClientPropsRef = useRef<Record<string, string>>({});
+
+    const setProps = useCallback((nextProps: unknown) => {
+        const currentRawSetProps = rawSetPropsRef.current;
+        if (clientRuntimeActiveRef.current && clientTransportObjRef?.current) {
             const candidate = asObject(nextProps);
-            if (candidate.runtimeRequest && runtime.clientTransportRef?.current) {
-                const reqObj = asObject(candidate.runtimeRequest);
-                const stateObj = asObject(reqObj.state);
-                const mergedRequest = {
-                    ...reqObj,
-                    state: {
-                        rowFields: core.state.rowFields,
-                        colFields: core.state.colFields,
-                        valConfigs: core.state.valConfigs,
-                        filters: core.state.filters,
-                        sorting: core.state.sorting,
-                        expanded: core.state.expanded,
-                        viewMode,
-                        detailMode,
-                        ...stateObj,
-                    },
-                } as unknown as RuntimeRequestV1;
+            if (candidate.runtimeRequest && clientTransportObjRef.current) {
+                const mergedRequest = attachRuntimeRequestStateRef.current(candidate.runtimeRequest);
                 const isDataRequest = mergedRequest.kind === 'data' || mergedRequest.kind === 'update';
                 let controller: AbortController | null = null;
                 let requestSeq = clientDataRequestSeqRef.current;
@@ -163,23 +228,23 @@ export function useTransportRuntime(
                     clientDataControllerRef.current = controller;
                     requestSeq = ++clientDataRequestSeqRef.current;
                 }
-                void runtime.clientTransportRef.current.request(
+                void clientTransportObjRef.current.request(
                     mergedRequest,
                     controller ? { signal: controller.signal } : undefined
                 ).then(response => {
                     if (controller?.signal.aborted) return;
                     if (!clientRuntimeActiveRef.current) return;
                     if (isDataRequest && requestSeq !== clientDataRequestSeqRef.current) return;
-                    if (typeof runtime.setLocalRuntimeResponse === 'function') {
-                        runtime.setLocalRuntimeResponse(response);
+                    if (typeof setLocalRuntimeResponseRef.current === 'function') {
+                        setLocalRuntimeResponseRef.current(response);
                     }
                 }).catch(error => {
                     if (controller?.signal.aborted || (error && error.name === 'AbortError')) return;
                     console.error('Client pivot transport request failed:', error);
                     if (!clientRuntimeActiveRef.current) return;
                     if (isDataRequest && requestSeq !== clientDataRequestSeqRef.current) return;
-                    if (typeof runtime.setLocalRuntimeResponse === 'function') {
-                        runtime.setLocalRuntimeResponse({
+                    if (typeof setLocalRuntimeResponseRef.current === 'function') {
+                        setLocalRuntimeResponseRef.current({
                             schemaVersion: 1,
                             kind: mergedRequest.kind,
                             status: 'error',
@@ -194,16 +259,51 @@ export function useTransportRuntime(
                 });
                 const rest = { ...candidate };
                 delete rest.runtimeRequest;
-                if (Object.keys(rest).length > 0 && typeof rawSetProps === 'function') {
-                    rawSetProps(rest);
+                if (Object.keys(rest).length > 0 && typeof currentRawSetProps === 'function') {
+                    const changedRest: Record<string, unknown> = {};
+                    const publishedMap = lastPublishedClientPropsRef.current;
+                    for (const [key, value] of Object.entries(rest)) {
+                        const serialized = serializeClientPropValue(value);
+                        if (serialized === null || !Object.prototype.hasOwnProperty.call(publishedMap, key) || publishedMap[key] !== serialized) {
+                            changedRest[key] = value;
+                            if (serialized !== null) {
+                                publishedMap[key] = serialized;
+                            } else {
+                                delete publishedMap[key];
+                            }
+                        }
+                    }
+                    if (Object.keys(changedRest).length > 0) {
+                        currentRawSetProps(changedRest);
+                    }
                 }
-                return;
+                return undefined;
             }
-            if (typeof rawSetProps === 'function') {
-                (rawSetProps as (...args: unknown[]) => unknown)(nextProps);
+            if (typeof currentRawSetProps === 'function') {
+                const publishedMap = lastPublishedClientPropsRef.current;
+                for (const [key, value] of Object.entries(candidate)) {
+                    const serialized = serializeClientPropValue(value);
+                    if (serialized !== null) {
+                        publishedMap[key] = serialized;
+                    } else {
+                        delete publishedMap[key];
+                    }
+                }
+                return (currentRawSetProps as (...args: unknown[]) => unknown)(nextProps);
             }
+            return undefined;
         }
-        : rawSetProps;
+        lastPublishedClientPropsRef.current = {};
+        if (typeof currentRawSetProps !== 'function') return undefined;
+        const candidate = asObject(nextProps);
+        if (candidate.runtimeRequest) {
+            return (currentRawSetProps as (...args: unknown[]) => unknown)({
+                ...candidate,
+                runtimeRequest: attachRuntimeRequestStateRef.current(candidate.runtimeRequest),
+            });
+        }
+        return (currentRawSetProps as (...args: unknown[]) => unknown)(nextProps);
+    }, [clientTransportObjRef]);
     const profiling = useRuntimeProfiling({
         detailMode,
         pivotProfilerRef: runtime.pivotProfilerRef,

@@ -1598,6 +1598,14 @@ export const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
     const sourceStateEpoch = source.stateEpoch !== undefined ? source.stateEpoch : source.state_epoch;
     /** @type {any} */
     const fallbackStateEpoch = fallback.stateEpoch !== undefined ? fallback.stateEpoch : fallback.state_epoch;
+    /** @type {any} */
+    const rawAvailableFields = Array.isArray(source.availableFields)
+        ? source.availableFields
+        : (Array.isArray(source.available_fields) ? source.available_fields : null);
+    /** @type {any} */
+    const availableFields = rawAvailableFields !== null
+        ? rawAvailableFields.filter(Boolean).map(String)
+        : (Array.isArray(fallback.availableFields) ? fallback.availableFields : null);
     const colSchema = (
         source.colSchema
         || source.col_schema
@@ -1611,6 +1619,7 @@ export const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
         data: Array.isArray(source.data) ? source.data : (Array.isArray(fallback.data) ? fallback.data : []),
         rowCount: coerceTransportNumber(source.rowCount, coerceTransportNumber(fallback.rowCount, null)),
         columns: normalizeTransportColumns(source.columns, fallback.columns),
+        availableFields,
         colSchema,
         dataOffset: coerceTransportNumber(source.dataOffset, coerceTransportNumber(fallback.dataOffset, 0)),
         dataVersion: coerceTransportNumber(source.dataVersion, coerceTransportNumber(fallback.dataVersion, 0)),

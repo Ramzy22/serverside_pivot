@@ -204,3 +204,4 @@ class PivotServiceResponse:
     profile: Optional[Dict[str, Any]] = None
     formula_errors: Optional[Dict[str, str]] = None
     layout_revision: Optional[str] = None
+    available_fields: Optional[List[str]] = None

@@ -31,13 +31,14 @@ import { useRuntimeRowEditing } from '../runtime/useRuntimeRowEditing';
 import { useRuntimeLayoutHistory } from '../runtime/useRuntimeLayoutHistory';
 import { createRuntimeRowPinCommand } from '../runtime/createRuntimeRowPinCommand';
 import { normalizeSparklineValConfigsForView } from '../utils/sparklines';
+import ShimmerFallback from '../components/ShimmerFallback';
 const LazyPivotChartModal = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
   default: module.PivotChartModal
 })));
 const LazyPivotChartPanel = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
   default: module.PivotChartPanel
 })));
-const PivotChartFallback = () => null;
+const PivotChartFallback = () => <ShimmerFallback variant="chart" />;
 const PivotChartModal = props => <React.Suspense fallback={<PivotChartFallback />}>
         <LazyPivotChartModal {...props} />
     </React.Suspense>;
@@ -444,7 +445,8 @@ export function useCommandRuntimeStage(input, transportDomain) {
         stage.layoutAcknowledgedManifestRef.current = '__layout_pending__';
       }
     }
-    if (payload && !Object.prototype.hasOwnProperty.call(payload, 'state_override') && !Object.prototype.hasOwnProperty.call(payload, 'stateOverride')) {
+    const hasExplicitOverride = Boolean(payload && (payload.state_override || payload.stateOverride));
+    if (payload && !hasExplicitOverride) {
       dispatchSetProps({
         ...nextProps,
         runtimeRequest: {
@@ -498,7 +500,7 @@ export function useCommandRuntimeStage(input, transportDomain) {
       row_limit: resolvedRowLimit,
       column_limit: resolvedColumnLimit,
       series_column_ids: requestedSeriesColumnIds.length > 0 ? requestedSeriesColumnIds : undefined,
-      state_override: stateOverride || undefined
+      ...(stateOverride ? { state_override: stateOverride } : {})
     };
   }, [stage.serverSide, stage.needsColSchema, stage.totalCenterCols, stage.normalizedChartServerWindow, stage.colRequestStart, stage.colRequestEnd, stage.visibleColRange.start, stage.tableName, stage.showColTotals]);
   const chartCanvasCommands = useRuntimeChartCanvasCommands({

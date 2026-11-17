@@ -42,12 +42,18 @@ export const mergeSortSpecifierMetadata = (sortSpec, previousSortSpec = null) =>
     return merged;
 };
 
-/** @param {any} [sorting] @param {any} [previousSorting] @returns {any} */
-export const normalizeSortingState = (sorting, previousSorting = []) => {
+/** @param {any} [sorting] @param {any} [previousSorting] @param {any} [sortOptions] @returns {any} */
+export const normalizeSortingState = (sorting, previousSorting = [], sortOptions = null) => {
     if (!Array.isArray(sorting)) return [];
     /** @type {any} */
     const previousById = new Map();
-    if (Array.isArray(previousSorting)) {
+    if (previousSorting instanceof Map) {
+        previousSorting.forEach((sortSpec, key) => {
+            if (key && sortSpec && typeof sortSpec === 'object' && !previousById.has(key)) {
+                previousById.set(key, sortSpec);
+            }
+        });
+    } else if (Array.isArray(previousSorting)) {
         previousSorting.forEach((sortSpec) => {
             if (sortSpec && sortSpec.id && !previousById.has(sortSpec.id)) {
                 previousById.set(sortSpec.id, sortSpec);
@@ -62,12 +68,15 @@ export const normalizeSortingState = (sorting, previousSorting = []) => {
             if (!sortSpec || !sortSpec.id || seenIds.has(sortSpec.id)) return null;
             seenIds.add(sortSpec.id);
             return mergeSortSpecifierMetadata(
-                {
-                    ...sortSpec,
-                    id: sortSpec.id,
-                    desc: Boolean(sortSpec.desc),
-                },
-                previousById.get(sortSpec.id)
+                mergeSortSpecifierMetadata(
+                    {
+                        ...sortSpec,
+                        id: sortSpec.id,
+                        desc: Boolean(sortSpec.desc),
+                    },
+                    previousById.get(sortSpec.id)
+                ),
+                resolveColumnSortOptions(sortOptions, sortSpec.id)
             );
         })
         .filter(Boolean);
@@ -117,11 +126,21 @@ export const updateSortingForColumn = ({
 export const resolveColumnSortOptions = (sortOptions, columnId) => {
     if (!sortOptions || typeof sortOptions !== 'object' || !columnId) return {};
     /** @type {any} */
+    const fieldOptions = sortOptions.fieldOptions && typeof sortOptions.fieldOptions === 'object'
+        ? sortOptions.fieldOptions
+        : {};
+    /** @type {any} */
     const columnOptions = sortOptions.columnOptions && typeof sortOptions.columnOptions === 'object'
         ? sortOptions.columnOptions
         : {};
-    const options = columnOptions[columnId];
-    return options && typeof options === 'object' ? options : {};
+    /** @type {any} */
+    const fromField = fieldOptions[columnId] && typeof fieldOptions[columnId] === 'object' ? fieldOptions[columnId] : {};
+    /** @type {any} */
+    const fromCol = columnOptions[columnId] && typeof columnOptions[columnId] === 'object' ? columnOptions[columnId] : {};
+    return {
+        ...fromField,
+        ...fromCol,
+    };
 };
 
 /** @param {any} [sorting] @param {any} [sortOptions] @param {any} [columnId] @returns {any} */

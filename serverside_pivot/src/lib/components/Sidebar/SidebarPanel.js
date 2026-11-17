@@ -4,6 +4,7 @@ import SidebarFilterItem from './SidebarFilterItem';
 import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
 import Icons from '../../utils/Icons';
+import ThemedSelect from '../ThemedSelect';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 import { usePivotTheme } from '../../contexts/PivotThemeContext';
 import { usePivotConfig } from '../../contexts/PivotConfigContext';
@@ -283,7 +284,7 @@ import {
                 <button
                     type="button"
                     onClick={() => setDraft(createCustomCategoryDraft(conditionFieldOptions))}
-                    style={smallButtonStyle('primary')}
+                    style={{ ...smallButtonStyle('primary'), whiteSpace: 'nowrap', flexShrink: 0 }}
                 >
                     + Category
                 </button>
@@ -447,17 +448,19 @@ import {
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                             Member Order
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Member Order"
                                 value={draft.order || 'creation'}
-                                onChange={(event) => setDraft({ ...draft, order: event.target.value })}
-                                style={inputStyle}
+                                onChange={(/** @type {any} */ event) => setDraft({ ...draft, order: event.target.value })}
+                                style={{ ...inputStyle, width: '100%' }}
                             >
                                 <option value="creation">Creation Order</option>
                                 <option value="alpha">Alphabetical (A→Z)</option>
                                 <option value="alpha_desc">Alphabetical (Z→A)</option>
                                 <option value="numeric">Numeric (0→9)</option>
                                 <option value="numeric_desc">Numeric (9→0)</option>
-                            </select>
+                            </ThemedSelect>
                         </label>
                     </div>
 
@@ -473,43 +476,49 @@ import {
                         }}>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                                 Date Field
-                                <select
+                                <ThemedSelect
+                                    size="sm"
+                                    aria-label="Date Field"
                                     value={draft.sourceField || ''}
-                                    onChange={(event) => setDraft({
+                                    onChange={(/** @type {any} */ event) => setDraft({
                                         ...draft,
                                         sourceField: event.target.value,
                                         name: draft.__isNew ? `${getFieldLabel(event.target.value)} ${formatDisplayLabel(draft.granularity || 'month')}` : draft.name,
                                     })}
-                                    style={inputStyle}
+                                    style={{ ...inputStyle, width: '100%' }}
                                 >
                                     {dateFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
                                         <option key={field} value={field}>{getFieldLabel(field)}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                                 Date Part
-                                <select
+                                <ThemedSelect
+                                    size="sm"
+                                    aria-label="Date Part"
                                     value={draft.granularity || 'month'}
-                                    onChange={(event) => setDraft({ ...draft, granularity: event.target.value })}
-                                    style={inputStyle}
+                                    onChange={(/** @type {any} */ event) => setDraft({ ...draft, granularity: event.target.value })}
+                                    style={{ ...inputStyle, width: '100%' }}
                                 >
                                     {Array.from(DATE_GROUP_GRANULARITIES).map((granularity) => (
                                         <option key={granularity} value={granularity}>{formatDisplayLabel(granularity)}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                                 Fiscal Start
-                                <select
+                                <ThemedSelect
+                                    size="sm"
+                                    aria-label="Fiscal Start"
                                     value={draft.fiscalYearStartMonth || 1}
-                                    onChange={(event) => setDraft({ ...draft, fiscalYearStartMonth: Number(event.target.value) })}
-                                    style={inputStyle}
+                                    onChange={(/** @type {any} */ event) => setDraft({ ...draft, fiscalYearStartMonth: Number(event.target.value) })}
+                                    style={{ ...inputStyle, width: '100%' }}
                                 >
                                     {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, index) => (
                                         <option key={label} value={index + 1}>{label}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                             </label>
                         </div>
                     )}
@@ -526,19 +535,21 @@ import {
                         }}>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                                 Number Field
-                                <select
+                                <ThemedSelect
+                                    size="sm"
+                                    aria-label="Number Field"
                                     value={draft.sourceField || ''}
-                                    onChange={(event) => setDraft({
+                                    onChange={(/** @type {any} */ event) => setDraft({
                                         ...draft,
                                         sourceField: event.target.value,
                                         name: draft.__isNew ? `${getFieldLabel(event.target.value)} Bins` : draft.name,
                                     })}
-                                    style={inputStyle}
+                                    style={{ ...inputStyle, width: '100%' }}
                                 >
                                     {numberFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
                                         <option key={field} value={field}>{getFieldLabel(field)}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                                 Bin Size
@@ -601,14 +612,16 @@ import {
                                         style={inputStyle}
                                         placeholder="Category value"
                                     />
-                                    <select
+                                    <ThemedSelect
+                                        size="sm"
+                                        aria-label="Rule condition combiner"
                                         value={condition.op || 'AND'}
-                                        onChange={(event) => updateRule(ruleIndex, { ...rule, condition: { ...condition, op: event.target.value } })}
+                                        onChange={(/** @type {any} */ event) => updateRule(ruleIndex, { ...rule, condition: { ...condition, op: event.target.value } })}
                                         style={inputStyle}
                                     >
                                         <option value="AND">AND</option>
                                         <option value="OR">OR</option>
-                                    </select>
+                                    </ThemedSelect>
                                     <button
                                         type="button"
                                         onClick={() => setDraft({ ...draft, rules: (draft.rules || []).filter(/** @param {any} [_] @param {any} [index] @returns {any} */ (_, index) => index !== ruleIndex) })}
@@ -624,18 +637,22 @@ import {
                                     /** @type {any} */ const listOperator = CUSTOM_CATEGORY_LIST_OPERATORS.has(clause.operator);
                                     return (
                                         <div key={`${rule.id || ruleIndex}:${clauseIndex}`} style={{ display: 'grid', gridTemplateColumns: valueless ? '1fr 130px 28px' : '1fr 130px 1fr 28px', gap: '6px', alignItems: 'center' }}>
-                                            <select
+                                            <ThemedSelect
+                                                size="sm"
+                                                aria-label="Clause field"
                                                 value={clause.field || ''}
-                                                onChange={(event) => updateClause(ruleIndex, clauseIndex, { field: event.target.value })}
-                                                style={inputStyle}
+                                                onChange={(/** @type {any} */ event) => updateClause(ruleIndex, clauseIndex, { field: event.target.value })}
+                                                style={{ ...inputStyle, width: '100%' }}
                                             >
                                                 {conditionFieldOptions.map(/** @param {any} [field] @returns {any} */ (field) => (
                                                     <option key={field} value={field}>{getFieldLabel(field)}</option>
                                                 ))}
-                                            </select>
-                                            <select
+                                            </ThemedSelect>
+                                            <ThemedSelect
+                                                size="sm"
+                                                aria-label="Clause operator"
                                                 value={clause.operator || 'eq'}
-                                                onChange={(event) => {
+                                                onChange={(/** @type {any} */ event) => {
                                                     const operator = event.target.value;
                                                     updateClause(ruleIndex, clauseIndex, {
                                                         operator,
@@ -644,12 +661,12 @@ import {
                                                             : clause.values,
                                                     });
                                                 }}
-                                                style={inputStyle}
+                                                style={{ ...inputStyle, width: '100%' }}
                                             >
                                                 {CUSTOM_CATEGORY_OPERATORS.map((operator) => (
                                                     <option key={operator.value} value={operator.value}>{operator.label}</option>
                                                 ))}
-                                            </select>
+                                            </ThemedSelect>
                                             {!valueless && (
                                                 <input
                                                     value={listOperator ? (clause.values || []).join(', ') : (clause.value || '')}
@@ -1220,7 +1237,7 @@ import {
             position: 'relative',
             boxShadow: theme.isDark ? 'none' : '0 6px 18px rgba(15, 23, 42, 0.06)',
         }}>
-            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div style={{ ...styles.dropLine, top: -2 }} />}
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div className="sp-drop-line" style={{ ...styles.dropLine, top: -2 }} />}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 <span style={{ fontSize: '10px', fontWeight: 700, color: theme.primary, background: `${theme.primary}18`, borderRadius: '999px', padding: '3px 7px', letterSpacing: '0.5px', flexShrink: 0 }}>fx</span>
                 <input
@@ -1305,7 +1322,7 @@ import {
             <div style={{ marginTop: '8px', padding: '6px 8px', borderRadius: '8px', border: `1px solid ${statusStyle.border}`, background: statusStyle.background, color: statusStyle.text, fontSize: '10px', lineHeight: 1.4 }}>
                 {formulaStatus.text}
             </div>
-            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div className="sp-drop-line" style={{ ...styles.dropLine, bottom: -2 }} />}
         </div>
     );
 }
@@ -1570,10 +1587,12 @@ import {
                 {/* Summary metric */}
                 <div style={sectionStyle}>
                     <span style={labelStyle}>Summary metric</span>
-                    <select
+                    <ThemedSelect
+                        size="sm"
+                        aria-label="Summary metric"
                         value={config.metric}
-                        onChange={(e) => update({ metric: e.target.value })}
-                        style={{ ...inputStyle, cursor: 'pointer' }}
+                        onChange={(/** @type {any} */ e) => update({ metric: e.target.value })}
+                        style={{ ...inputStyle, cursor: 'pointer', width: '100%' }}
                     >
                         <option value="last">Last value</option>
                         <option value="first">First value</option>
@@ -1582,7 +1601,7 @@ import {
                         <option value="avg">Average</option>
                         <option value="sum">Sum</option>
                         <option value="delta">Delta (last − first)</option>
-                    </select>
+                    </ThemedSelect>
                 </div>
 
                 {/* Display options */}
@@ -1869,7 +1888,7 @@ import {
             }}
             title="Select formula"
         >
-            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div style={{ ...styles.dropLine, top: -2 }} />}
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div className="sp-drop-line" style={{ ...styles.dropLine, top: -2 }} />}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
                 <Icons.DragIndicator />
                 <span style={{
@@ -1946,7 +1965,7 @@ import {
                 fixedSparklineValueKeySet={fixedSparklineValueKeySet}
                 showNotification={showNotification}
             />
-            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div className="sp-drop-line" style={{ ...styles.dropLine, bottom: -2 }} />}
         </div>
     );
 }
@@ -2332,7 +2351,8 @@ import {
                 )}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
                     {templateButtons.length > 0 && (
-                        <select
+                        <ThemedSelect
+                            size="sm"
                             value={templateValue}
                             onChange={handleTemplateChange}
                             style={{
@@ -2351,7 +2371,7 @@ import {
                             {templateButtons.map(/** @param {any} [template] @returns {any} */ (template) => (
                                 <option key={template.label} value={template.value}>{template.label}</option>
                             ))}
-                        </select>
+                        </ThemedSelect>
                     )}
                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                         {['+', '-', '*', '/', '(', ')', '* 100'].map((op) => (
@@ -2688,9 +2708,11 @@ import {
                     </label>
                     <label style={{ minWidth: '180px', flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Formula type</span>
-                        <select
+                        <ThemedSelect
+                            size="sm"
+                            aria-label="Formula type"
                             value={draft.formulaScope}
-                            onChange={(event) => {
+                            onChange={(/** @type {any} */ event) => {
                                 /** @type {any} */ const nextScope = normalizeFormulaScope(event.target.value);
                                 setDraft(/** @param {any} [prev] @returns {any} */ (prev) => ({
                                     ...prev,
@@ -2710,11 +2732,12 @@ import {
                                 padding: '8px 10px',
                                 fontSize: '12px',
                                 outline: 'none',
+                                width: '100%',
                             }}
                         >
                             <option value="measures">Value formula</option>
                             <option value="columns">Displayed columns</option>
-                        </select>
+                        </ThemedSelect>
                     </label>
                 </div>
 
@@ -2934,6 +2957,8 @@ import {
     panelLabel,
     size,
     onSizeChange,
+    getSidebarWidth = null,
+    onSidebarWidthChange = null,
     theme,
     outerStyle = {},
     contentStyle = {},
@@ -2941,40 +2966,83 @@ import {
 }) {
     /** @type {any} */ const panelRef = React.useRef(null);
     /** @type {any} */ const cleanupRef = React.useRef(null);
+    /** @type {any} */ const rafIdRef = React.useRef(null);
+    /** @type {any} */ const latestDragRef = React.useRef(null);
+    /** @type {any} */ const pendingSidebarWidthRef = React.useRef(null);
+    /** @type {any} */ const baselineSidebarWidthRef = React.useRef(null);
+    /** @type {any} */ const baselineChromeWidthRef = React.useRef(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [dragSize, setDragSize] = React.useState(null);
+    /** @type {[any, (...args: any[]) => any]} */ const [activeDirection, setActiveDirection] = React.useState(null);
     /** @type {any} */ const limits = React.useMemo(() => getFieldPanelLimits(panelId), [panelId]);
     /** @type {any} */ const resolvedSize = React.useMemo(
         () => sanitizeFieldPanelSizeEntry(panelId, size),
         [panelId, size]
     );
+    /** @type {any} */ const resolvedSizeRef = React.useRef(resolvedSize);
+    resolvedSizeRef.current = resolvedSize;
+    /** @type {any} */ const displayedSize = React.useMemo(() => {
+        if (!dragSize) return resolvedSize;
+        return sanitizeFieldPanelSizeEntry(panelId, {
+            width: dragSize.width !== undefined ? dragSize.width : resolvedSize.width,
+            height: dragSize.height !== undefined ? dragSize.height : resolvedSize.height,
+        });
+    }, [dragSize, panelId, resolvedSize]);
 
-    /** @type {(...args: any[]) => any} */ const stopActiveResize = React.useCallback(() => {
+    /** @type {(...args: any[]) => any} */ const stopActiveResize = React.useCallback((commit = true) => {
         if (cleanupRef.current) {
             const cleanup = cleanupRef.current;
             cleanupRef.current = null;
-            cleanup();
+            cleanup(commit);
         }
     }, []);
 
     React.useEffect(() => (
-        () => stopActiveResize()
+        () => stopActiveResize(false)
     ), [stopActiveResize]);
 
     /** @type {(...args: any[]) => any} */ const startResize = React.useCallback((event, direction) => {
         if (!panelRef.current || typeof onSizeChange !== 'function') return;
         event.preventDefault();
         event.stopPropagation();
-        stopActiveResize();
+        stopActiveResize(false);
 
         /** @type {any} */ const rect = panelRef.current.getBoundingClientRect();
         /** @type {any} */ const parentRect = panelRef.current.parentElement
             ? panelRef.current.parentElement.getBoundingClientRect()
             : rect;
+        /** @type {any} */ const measuredSidebarWidth = typeof getSidebarWidth === 'function' ? Number(getSidebarWidth()) : NaN;
+        /** @type {any} */ const startSidebarWidth = Number.isFinite(measuredSidebarWidth)
+            ? Math.max(200, Math.min(600, Math.round(measuredSidebarWidth)))
+            : null;
+        /** @type {any} */ const chromeWidth = startSidebarWidth !== null
+            ? Math.max(0, Math.round(startSidebarWidth - parentRect.width))
+            : 0;
+        /** @type {any} */ const canExpandSidebar = typeof onSidebarWidthChange === 'function' && startSidebarWidth !== null;
+        if (startSidebarWidth !== null && (resolvedSizeRef.current.width === null || baselineSidebarWidthRef.current === null)) {
+            baselineSidebarWidthRef.current = startSidebarWidth;
+            baselineChromeWidthRef.current = chromeWidth;
+        }
+        /** @type {any} */ const baseSidebarWidth = startSidebarWidth !== null
+            ? (baselineSidebarWidthRef.current !== null ? Math.min(startSidebarWidth, baselineSidebarWidthRef.current) : startSidebarWidth)
+            : null;
+        /** @type {any} */ const effectiveChromeWidth = baselineChromeWidthRef.current !== null
+            ? baselineChromeWidthRef.current
+            : chromeWidth;
+        /** @type {any} */ const maxAllowedWidth = canExpandSidebar
+            ? Math.max(limits.minWidth, Math.min(limits.maxWidth, 600 - effectiveChromeWidth))
+            : Math.max(limits.minWidth, Math.min(limits.maxWidth, Math.floor(parentRect.width)));
         /** @type {Record<string, any>} */ const startState = {
             startX: event.clientX,
             startY: event.clientY,
             startWidth: rect.width,
             startHeight: rect.height,
-            maxWidth: Math.max(limits.minWidth, Math.min(limits.maxWidth, Math.floor(parentRect.width))),
+            startParentWidth: Math.floor(parentRect.width),
+            startSidebarWidth,
+            baseSidebarWidth,
+            chromeWidth: effectiveChromeWidth,
+            canExpandSidebar,
+            maxWidth: maxAllowedWidth,
+            initialWidthProp: resolvedSizeRef.current.width,
         };
         const previousCursor = document.body.style.cursor;
         const previousUserSelect = document.body.style.userSelect;
@@ -2982,41 +3050,133 @@ import {
             ? 'nwse-resize'
             : (direction === 'width' ? 'ew-resize' : 'ns-resize');
         document.body.style.userSelect = 'none';
+        latestDragRef.current = null;
+        pendingSidebarWidthRef.current = null;
+        setActiveDirection(direction);
+
+        const flushFrame = () => {
+            rafIdRef.current = null;
+            if (latestDragRef.current) {
+                setDragSize(latestDragRef.current);
+            }
+            if (pendingSidebarWidthRef.current !== null && typeof onSidebarWidthChange === 'function') {
+                onSidebarWidthChange(pendingSidebarWidthRef.current);
+                pendingSidebarWidthRef.current = null;
+            }
+        };
 
         /** @param {any} [moveEvent] @returns {any} */ const onMouseMove = (moveEvent) => {
             /** @type {any} */ const deltaX = moveEvent.clientX - startState.startX;
             /** @type {any} */ const deltaY = moveEvent.clientY - startState.startY;
-            /** @type {any} */ const nextWidth = direction === 'height'
-                ? resolvedSize.width
-                : Math.max(limits.minWidth, Math.min(startState.maxWidth, Math.round(startState.startWidth + deltaX)));
-            /** @type {any} */ const nextHeight = direction === 'width'
-                ? resolvedSize.height
-                : Math.max(limits.minHeight, Math.min(limits.maxHeight, Math.round(startState.startHeight + deltaY)));
-            onSizeChange(panelId, { width: nextWidth, height: nextHeight });
+            /** @type {Record<string, any>} */ const nextPartial = {};
+            if (direction === 'width' || (direction === 'both' && (startState.initialWidthProp !== null || Math.abs(deltaX) >= 3))) {
+                const nextWidth = Math.max(limits.minWidth, Math.min(startState.maxWidth, Math.round(startState.startWidth + deltaX)));
+                nextPartial.width = nextWidth;
+                if (panelRef.current) {
+                    panelRef.current.style.width = `${nextWidth}px`;
+                }
+                if (startState.canExpandSidebar) {
+                    const targetFloorWidth = startState.baseSidebarWidth !== null
+                        ? startState.baseSidebarWidth
+                        : startState.startSidebarWidth;
+                    const desiredSidebarWidth = Math.max(
+                        targetFloorWidth,
+                        Math.min(600, nextWidth + startState.chromeWidth)
+                    );
+                    pendingSidebarWidthRef.current = desiredSidebarWidth;
+                }
+            }
+            if (direction === 'height' || direction === 'both') {
+                const nextHeight = Math.max(limits.minHeight, Math.min(limits.maxHeight, Math.round(startState.startHeight + deltaY)));
+                nextPartial.height = nextHeight;
+                if (panelRef.current) {
+                    panelRef.current.style.height = `${nextHeight}px`;
+                }
+            }
+            if (Object.keys(nextPartial).length === 0) return;
+            latestDragRef.current = nextPartial;
+            if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                if (rafIdRef.current === null) {
+                    rafIdRef.current = window.requestAnimationFrame(flushFrame);
+                }
+            } else {
+                flushFrame();
+            }
         };
 
-        /** @returns {any} */ const cleanup = () => {
+        /** @param {boolean} [commit] @returns {any} */ const cleanup = (commit = true) => {
+            if (rafIdRef.current !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+                window.cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+            }
             document.body.style.cursor = previousCursor;
             document.body.style.userSelect = previousUserSelect;
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('blur', onMouseUp);
+            const committedSize = latestDragRef.current;
+            const committedSidebarWidth = pendingSidebarWidthRef.current;
+            latestDragRef.current = null;
+            pendingSidebarWidthRef.current = null;
+            setActiveDirection(null);
+            setDragSize(null);
+            if (commit) {
+                if (committedSidebarWidth !== null && typeof onSidebarWidthChange === 'function') {
+                    onSidebarWidthChange(committedSidebarWidth);
+                }
+                if (committedSize) {
+                    onSizeChange(panelId, committedSize);
+                }
+            } else if (panelRef.current) {
+                panelRef.current.style.width = resolvedSizeRef.current.width === null
+                    ? '100%'
+                    : `${resolvedSizeRef.current.width}px`;
+                panelRef.current.style.height = `${resolvedSizeRef.current.height}px`;
+            }
         };
 
-        /** @returns {any} */ const onMouseUp = () => stopActiveResize();
+        /** @returns {any} */ const onMouseUp = () => stopActiveResize(true);
         cleanupRef.current = cleanup;
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
+        window.addEventListener('blur', onMouseUp);
     }, [
+        getSidebarWidth,
         limits.maxHeight,
         limits.maxWidth,
         limits.minHeight,
         limits.minWidth,
+        onSidebarWidthChange,
         onSizeChange,
         panelId,
-        resolvedSize.height,
-        resolvedSize.width,
         stopActiveResize,
     ]);
+
+    /** @type {(...args: any[]) => any} */ const handleResetSize = React.useCallback((direction, event) => {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        stopActiveResize(false);
+        if (typeof onSizeChange !== 'function') return;
+        if (direction === 'width') {
+            onSizeChange(panelId, { width: null });
+            if (baselineSidebarWidthRef.current !== null && typeof onSidebarWidthChange === 'function') {
+                onSidebarWidthChange(baselineSidebarWidthRef.current);
+                baselineSidebarWidthRef.current = null;
+                baselineChromeWidthRef.current = null;
+            }
+        } else if (direction === 'height') {
+            onSizeChange(panelId, { height: null });
+        } else {
+            onSizeChange(panelId, { width: null, height: null });
+            if (baselineSidebarWidthRef.current !== null && typeof onSidebarWidthChange === 'function') {
+                onSidebarWidthChange(baselineSidebarWidthRef.current);
+                baselineSidebarWidthRef.current = null;
+                baselineChromeWidthRef.current = null;
+            }
+        }
+    }, [onSidebarWidthChange, onSizeChange, panelId, stopActiveResize]);
 
     const handleColor = `${theme.primary}55`;
 
@@ -3025,9 +3185,10 @@ import {
             ref={panelRef}
             style={{
                 position: 'relative',
-                width: resolvedSize.width === null ? '100%' : `${resolvedSize.width}px`,
+                flexShrink: 0,
+                width: displayedSize.width === null ? '100%' : `${displayedSize.width}px`,
                 maxWidth: '100%',
-                height: `${resolvedSize.height}px`,
+                height: `${displayedSize.height}px`,
                 minHeight: `${limits.minHeight}px`,
                 maxHeight: `${limits.maxHeight}px`,
                 boxSizing: 'border-box',
@@ -3047,37 +3208,56 @@ import {
                 {children}
             </div>
             <div
+                className="sp-resize-handle"
+                data-resizing={activeDirection === 'width' ? 'true' : undefined}
                 onMouseDown={(event) => startResize(event, 'width')}
+                onDoubleClick={(event) => handleResetSize('width', event)}
                 style={{
                     position: 'absolute',
                     top: 0,
                     right: 0,
                     bottom: '12px',
-                    width: '12px',
+                    width: '10px',
                     cursor: 'ew-resize',
                     zIndex: 4,
                     touchAction: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    paddingRight: '2px',
                 }}
                 title={`Resize ${panelLabel} width`}
             >
+                <span className="sp-resize-pill" aria-hidden="true" style={{ width: '2px', height: '24px', borderRadius: '999px', background: handleColor, opacity: 0.45, pointerEvents: 'none' }} />
             </div>
             <div
+                className="sp-resize-handle"
+                data-resizing={activeDirection === 'height' ? 'true' : undefined}
                 onMouseDown={(event) => startResize(event, 'height')}
+                onDoubleClick={(event) => handleResetSize('height', event)}
                 style={{
                     position: 'absolute',
                     left: 0,
                     right: '12px',
                     bottom: 0,
-                    height: '12px',
+                    height: '10px',
                     cursor: 'ns-resize',
                     zIndex: 4,
                     touchAction: 'none',
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                    paddingBottom: '2px',
                 }}
                 title={`Resize ${panelLabel} height`}
             >
+                <span className="sp-resize-pill" aria-hidden="true" style={{ width: '28px', height: '2px', borderRadius: '999px', background: handleColor, opacity: 0.45, pointerEvents: 'none' }} />
             </div>
             <div
+                className="sp-resize-handle"
+                data-resizing={activeDirection === 'both' ? 'true' : undefined}
                 onMouseDown={(event) => startResize(event, 'both')}
+                onDoubleClick={(event) => handleResetSize('both', event)}
                 style={{
                     position: 'absolute',
                     right: 0,
@@ -3091,6 +3271,8 @@ import {
                 title={`Resize ${panelLabel}`}
             >
                 <div
+                    className="sp-resize-pill"
+                    aria-hidden="true"
                     style={{
                         position: 'absolute',
                         right: '4px',
@@ -3099,7 +3281,9 @@ import {
                         height: '3px',
                         borderRadius: '999px',
                         background: handleColor,
+                        opacity: 0.55,
                         boxShadow: `-4px 0 0 ${handleColor}, 0 -4px 0 ${handleColor}, -4px -4px 0 ${handleColor}`,
+                        pointerEvents: 'none',
                     }}
                 />
             </div>
@@ -3136,16 +3320,17 @@ import {
             background: theme.surfaceInset || theme.headerSubtleBg || theme.background,
         }}>
             <span style={{fontSize:'10px', color: theme.textSec, fontWeight: 700, textTransform:'uppercase'}}>Values as</span>
-            <select
+            <ThemedSelect
+                size="sm"
                 value={normalized.placement}
-                onChange={(event) => updateMeasureAxis({ placement: event.target.value })}
-                style={{...valueSelectStyle, width:'98px'}}
+                onChange={(/** @type {any} */ event) => updateMeasureAxis({ placement: event.target.value })}
+                style={{...valueSelectStyle, width:'104px'}}
                 title="Values placement"
             >
                 <option value="none">Columns</option>
                 <option value="rows">Rows</option>
                 <option value="columns">Column Axis</option>
-            </select>
+            </ThemedSelect>
             {normalized.placement !== 'none' && (
                 <>
                     <input
@@ -3436,19 +3621,36 @@ import {
         const startX = e.clientX;
         /** @type {any} */ const startWidth = sidebarWidth || 288;
         resizeDragRef.current = { startX, startWidth };
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
         /** @param {any} [ev] @returns {any} */ const onMouseMove = (ev) => {
+            if (!resizeDragRef.current) return;
             /** @type {any} */ const delta = ev.clientX - resizeDragRef.current.startX;
-            /** @type {any} */ const next = Math.max(200, Math.min(520, resizeDragRef.current.startWidth + delta));
+            /** @type {any} */ const next = Math.max(200, Math.min(600, resizeDragRef.current.startWidth + delta));
             setSidebarWidth(next);
         };
         /** @returns {any} */ const onMouseUp = () => {
             resizeDragRef.current = null;
+            document.body.style.cursor = previousCursor;
+            document.body.style.userSelect = previousUserSelect;
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('blur', onMouseUp);
         };
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
+        window.addEventListener('blur', onMouseUp);
     }, [sidebarWidth, setSidebarWidth]);
+    /** @type {(...args: any[]) => any} */ const getSidebarContainerWidth = React.useCallback(() => (
+        sidebarRef.current ? sidebarRef.current.getBoundingClientRect().width : (sidebarWidth || 288)
+    ), [sidebarWidth]);
+    /** @type {(...args: any[]) => any} */ const handleSidebarWidthFromPanel = React.useCallback((nextWidth) => {
+        if (typeof setSidebarWidth !== 'function') return;
+        const normalized = Math.max(200, Math.min(600, Math.round(nextWidth)));
+        setSidebarWidth(/** @param {any} [prev] @returns {any} */ (prev) => (prev === normalized ? prev : normalized));
+    }, [setSidebarWidth]);
     /** @type {(...args: any[]) => any} */ const handleFieldPanelSizeChange = React.useCallback((panelId, nextSize) => {
         if (typeof setFieldPanelSizes !== 'function') return;
         setFieldPanelSizes(/** @param {any} [prev] @returns {any} */ (prev) => {
@@ -3723,18 +3925,33 @@ import {
                         Press Enter or Space on a field to pick it up. Focus a target field or zone and press Enter or Space to drop it. Press Escape to cancel.
                     </div>
                     {isReportMode ? (
-                        <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
+                        <div role="tablist" aria-label="Report Panel Tabs" style={{position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                             {[
                                 { id: 'report', label: 'Builder', icon: <Icons.Report /> },
                                 { id: 'fields', label: 'Fields', icon: <Icons.Sigma /> },
                                 { id: 'columns', label: 'Columns', icon: <Icons.Columns /> },
-                            ].map((t) => (
+                            ].map((t, idx, arr) => (
                                 <div
                                     key={t.id}
+                                    role="tab"
+                                    tabIndex={0}
+                                    aria-selected={reportTab === t.id}
+                                    className="sp-tab"
                                     onClick={() => setReportTab(t.id)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            setReportTab(t.id);
+                                        } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                                            e.preventDefault();
+                                            const delta = e.key === 'ArrowRight' ? 1 : -1;
+                                            const nextTab = arr[(idx + delta + arr.length) % arr.length];
+                                            if (nextTab) setReportTab(nextTab.id);
+                                        }
+                                    }}
                                     style={{
-                                        padding: '8px 14px', cursor: 'pointer',
-                                        borderBottom: reportTab === t.id ? `2px solid ${theme.primary}` : '2px solid transparent',
+                                        padding: '8px 10px', cursor: 'pointer',
+                                        justifyContent: 'center',
                                         fontWeight: reportTab === t.id ? 600 : 400,
                                         color: reportTab === t.id ? theme.primary : theme.textSec,
                                         display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px',
@@ -3743,26 +3960,72 @@ import {
                                     {t.icon}{t.label}
                                 </div>
                             ))}
+                            <div
+                                aria-hidden="true"
+                                style={{
+                                    position: 'absolute',
+                                    bottom: '-1px',
+                                    left: 0,
+                                    width: '33.3333%',
+                                    height: '2px',
+                                    borderRadius: '2px 2px 0 0',
+                                    background: theme.primary,
+                                    transform: `translateX(${Math.max(0, ['report', 'fields', 'columns'].indexOf(reportTab)) * 100}%)`,
+                                    transition: 'transform 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                    pointerEvents: 'none',
+                                }}
+                            />
                         </div>
                     ) : (
-                    <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
+                    <div role="tablist" aria-label="Tool Panel Tabs" style={{position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                         <div
+                            role="tab"
+                            tabIndex={0}
+                            aria-selected={sidebarTab === 'fields'}
+                            className="sp-tab"
                             onClick={() => setSidebarTab('fields')}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setSidebarTab('fields');
+                                } else if (e.key === 'ArrowRight') {
+                                    e.preventDefault();
+                                    setSidebarTab('filters');
+                                } else if (e.key === 'ArrowLeft') {
+                                    e.preventDefault();
+                                    setSidebarTab('columns');
+                                }
+                            }}
                             style={{
-                                padding: '8px 16px', cursor: 'pointer',
-                                borderBottom: sidebarTab === 'fields' ? `2px solid ${theme.primary}` : 'none',
+                                padding: '8px 10px', cursor: 'pointer',
+                                textAlign: 'center',
                                 fontWeight: sidebarTab === 'fields' ? 600 : 400,
                                 color: sidebarTab === 'fields' ? theme.primary : theme.textSec
                             }}
                         >Fields</div>
                         <div
+                            role="tab"
+                            tabIndex={0}
+                            aria-selected={sidebarTab === 'filters'}
+                            className="sp-tab"
                             onClick={() => setSidebarTab('filters')}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setSidebarTab('filters');
+                                } else if (e.key === 'ArrowRight') {
+                                    e.preventDefault();
+                                    setSidebarTab('columns');
+                                } else if (e.key === 'ArrowLeft') {
+                                    e.preventDefault();
+                                    setSidebarTab('fields');
+                                }
+                            }}
                             style={{
-                                padding: '8px 16px', cursor: 'pointer',
-                                borderBottom: sidebarTab === 'filters' ? `2px solid ${theme.primary}` : 'none',
+                                padding: '8px 10px', cursor: 'pointer',
                                 fontWeight: sidebarTab === 'filters' ? 600 : 400,
                                 color: sidebarTab === 'filters' ? theme.primary : theme.textSec,
-                                display: 'flex', alignItems: 'center', gap: '6px'
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
                             }}
                         >
                             Filters
@@ -3771,14 +4034,45 @@ import {
                             )}
                         </div>
                         <div
+                            role="tab"
+                            tabIndex={0}
+                            aria-selected={sidebarTab === 'columns'}
+                            className="sp-tab"
                             onClick={() => setSidebarTab('columns')}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setSidebarTab('columns');
+                                } else if (e.key === 'ArrowRight') {
+                                    e.preventDefault();
+                                    setSidebarTab('fields');
+                                } else if (e.key === 'ArrowLeft') {
+                                    e.preventDefault();
+                                    setSidebarTab('filters');
+                                }
+                            }}
                             style={{
-                                padding: '8px 16px', cursor: 'pointer',
-                                borderBottom: sidebarTab === 'columns' ? `2px solid ${theme.primary}` : 'none',
+                                padding: '8px 10px', cursor: 'pointer',
+                                textAlign: 'center',
                                 fontWeight: sidebarTab === 'columns' ? 600 : 400,
                                 color: sidebarTab === 'columns' ? theme.primary : theme.textSec
                             }}
                         >Columns</div>
+                        <div
+                            aria-hidden="true"
+                            style={{
+                                position: 'absolute',
+                                bottom: '-1px',
+                                left: 0,
+                                width: '33.3333%',
+                                height: '2px',
+                                borderRadius: '2px 2px 0 0',
+                                background: theme.primary,
+                                transform: `translateX(${Math.max(0, ['fields', 'filters', 'columns'].indexOf(sidebarTab)) * 100}%)`,
+                                transition: 'transform 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                pointerEvents: 'none',
+                            }}
+                        />
                     </div>
                     )}
 
@@ -3901,9 +4195,9 @@ import {
                                                     <b style={{fontWeight:500,minWidth:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{getFieldLabel(item.field)}</b>
                                                 </div>
                                                 <div style={{display:'flex',alignItems:'center',gap:'4px',marginLeft:'8px',flexWrap:'nowrap',flexShrink:0}}>
-                                                    <select value={item.agg} onChange={e=>handleValueAggChange(idx,e.target.value)} style={{...valueSelectStyle,width:'74px'}}>
+                                                    <ThemedSelect size="sm" aria-label="Aggregation" value={item.agg} onClick={(/** @type {any} */ e) => e.stopPropagation()} onChange={(/** @type {any} */ e) => handleValueAggChange(idx,e.target.value)} style={{...valueSelectStyle,width:'78px'}}>
                                                         <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
-                                                    </select>
+                                                    </ThemedSelect>
                                                     <span onClick={()=>removeValueAtIndex(idx)} style={{cursor:'pointer',color:'#9CA3AF',display:'flex',alignItems:'center'}}><Icons.Close/></span>
                                                 </div>
                                             </div>
@@ -3959,7 +4253,7 @@ import {
                     ) : (isReportMode ? reportTab !== 'columns' : sidebarTab !== 'columns') ? (
                         <>
                             {sidebarTab === 'fields' && (
-                                <div>
+                                <div style={{flexShrink: 0}}>
                                     <CustomCategoriesEditor
                                         availableFields={availableFields}
                                         customDimensions={customDimensions}
@@ -3977,6 +4271,8 @@ import {
                                         panelLabel="Available Fields"
                                         size={fieldPanelSizes && fieldPanelSizes.availableFields}
                                         onSizeChange={handleFieldPanelSizeChange}
+                                        getSidebarWidth={getSidebarContainerWidth}
+                                        onSidebarWidthChange={handleSidebarWidthFromPanel}
                                         theme={theme}
                                         outerStyle={dropZoneBaseStyle}
                                         contentStyle={{
@@ -4039,7 +4335,7 @@ import {
                             {zoneDescriptors.map(/** @param {any} [zone] @returns {any} */ zone => {
                                 /** @type {any} */ const zoneItems = zoneItemsById[zone.id] || [];
                                 return (
-                                <div key={zone.id} style={{marginBottom: '20px'}}>
+                                <div key={zone.id} style={{marginBottom: '20px', flexShrink: 0}}>
                                     <div style={styles.sectionTitle}>{zone.icon}{zone.label}</div>
                                     {zone.id === 'vals' && (
                                         <div style={{display:'flex', alignItems:'center', gap:'8px', padding:'0 4px 8px 4px', flexWrap:'wrap'}}>
@@ -4095,6 +4391,8 @@ import {
                                         panelLabel={zone.label}
                                         size={fieldPanelSizes && fieldPanelSizes[zone.id]}
                                         onSizeChange={handleFieldPanelSizeChange}
+                                        getSidebarWidth={getSidebarContainerWidth}
+                                        onSidebarWidthChange={handleSidebarWidthFromPanel}
                                         theme={theme}
                                         outerStyle={dropZoneBaseStyle}
                                         contentStyle={{padding: `${dropZonePadding} 12px 12px ${dropZonePadding}`}}
@@ -4163,27 +4461,27 @@ import {
                                                                 ...styles.chip,
                                                                 ...(zone.id === 'vals' ? { flexWrap: 'wrap', alignItems: 'flex-start' } : {}),
                                                             }}>
-                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
+                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div className="sp-drop-line" style={{...styles.dropLine,top:-2}}/>}
                                                                 <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
                                                                     <Icons.DragIndicator/>
                                                                     <b style={{fontWeight:500, display:'block', minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
                                                                 </div>
                                                                 {zone.id === 'vals' && (
                                                                     <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
-                                                                        <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
+                                                                        <ThemedSelect size="sm" value={item.agg} onClick={(/** @type {any} */ e) => e.stopPropagation()} onChange={(/** @type {any} */ e) => handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'78px'}} title="Aggregation">
                                                                             <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option><option value="array_agg">Series</option>
-                                                                        </select>
+                                                                        </ThemedSelect>
                                                                         {isWeightedAverageAgg(item.agg) && (
-                                                                            <select value={item.weightField || ''} onChange={e => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'92px'}} title="Weight field">
+                                                                            <ThemedSelect size="sm" value={item.weightField || ''} onClick={(/** @type {any} */ e) => e.stopPropagation()} onChange={(/** @type {any} */ e) => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'96px'}} title="Weight field">
                                                                                 <option value="" disabled>Weight</option>
                                                                                 {baseAvailableFields.map(/** @param {any} [fieldName] @returns {any} */ (fieldName) => (
                                                                                     <option key={fieldName} value={fieldName}>{getFieldLabel(fieldName)}</option>
                                                                                 ))}
-                                                                            </select>
+                                                                            </ThemedSelect>
                                                                         )}
-                                                                        <select value={item.windowFn || 'none'} onChange={e=>handleValueWindowFnChange(idx, e.target.value)} style={{...valueSelectStyle, width:'56px'}}>
+                                                                        <ThemedSelect size="sm" aria-label="Window calculation" value={item.windowFn || 'none'} onClick={(/** @type {any} */ e) => e.stopPropagation()} onChange={(/** @type {any} */ e) => handleValueWindowFnChange(idx, e.target.value)} style={{...valueSelectStyle, width:'68px'}}>
                                                                             <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
-                                                                        </select>
+                                                                        </ThemedSelect>
                                                                     </div>
                                                                 )}
                                                                 <div style={{display:'flex', gap:'4px', marginLeft:'auto', alignItems: 'center'}}>
@@ -4196,13 +4494,15 @@ import {
                                                                                 ...normalizeMeasureAxisPanelValue(previous),
                                                                                 placement: 'none',
                                                                             }));
+                                                                            if (zone.id==='rows') setRowFields(/** @param {any} [p] @returns {any} */ p=>Array.isArray(p)?p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label):p);
+                                                                            if (zone.id==='cols') setColFields(/** @param {any} [p] @returns {any} */ p=>Array.isArray(p)?p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label):p);
                                                                             return;
                                                                         }
                                                                         if (zone.id==='filter'){/** @type {Record<string, any>} */ const n={...filters};delete n[label];setFilters(n)}
                                                                         if (zone.id==='rows') setRowFields(/** @param {any} [p] @returns {any} */ p=>p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label));
                                                                         if (zone.id==='cols') setColFields(/** @param {any} [p] @returns {any} */ p=>p.filter(/** @param {any} [x] @returns {any} */ x=>x!==label));
                                                                         if (zone.id==='vals') removeValueAtIndex(idx);
-                                                                    }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
+                                                                    }} className="sp-chip-remove" style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
                                                                 </div>
                                                                 {zone.id === 'filter' && sidebarFilterState.columnId === label && (
                                                                     <FilterPopover
@@ -4230,7 +4530,7 @@ import {
                                                                         showNotification={showNotification}
                                                                     />
                                                                 )}
-                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div style={{...styles.dropLine,bottom:-2}}/>}
+                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div className="sp-drop-line" style={{...styles.dropLine,bottom:-2}}/>}
                                                             </div>
                                                         )}
                                                         {zone.id ==='filter' && filters[label] && filters[label].conditions && (
@@ -4254,8 +4554,8 @@ import {
                     ) : (
                         <div style={{display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', overflow: 'hidden'}}>
                             {/* Enhanced Search Header */}
-                            <div style={{display: 'flex', flexDirection: 'column', gap: '10px', padding: '8px', background: theme.headerBg, borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)'}}>
-                                <div style={{display: 'flex', alignItems: 'center', background: theme.background, borderRadius: '6px', padding: '8px 12px', border: `2px solid ${theme.border}`, transition: 'border-color 0.2s'}}>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: '10px', padding: '10px', background: theme.headerSubtleBg || theme.headerBg, border: `1px solid ${theme.border}`, borderRadius: '10px'}}>
+                                <div className="sp-search-shell" style={{display: 'flex', alignItems: 'center', background: theme.surfaceBg || theme.background, borderRadius: '8px', padding: '7px 10px', border: `1px solid ${theme.border}`}}>
                                     <Icons.Search />
                                     <input 
                                         placeholder="Search columns..."
@@ -4264,7 +4564,7 @@ import {
                                         style={{
                                             border:'none', 
                                             background:'transparent', 
-                                            marginLeft:'10px', 
+                                            marginLeft:'8px', 
                                             outline:'none', 
                                             width:'100%', 
                                             color: theme.text, 
@@ -4273,64 +4573,63 @@ import {
                                         }} 
                                     />
                                     {colSearch && (
-                                        <span 
+                                        <button
+                                            type="button"
+                                            className="sp-btn sp-btn-ghost"
+                                            aria-label="Clear column search"
                                             onClick={() => setColSearch('')} 
                                             style={{
                                                 cursor: 'pointer', 
-                                                display: 'flex', 
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                border: 'none',
+                                                color: theme.textSec,
                                                 padding: '4px',
-                                                borderRadius: '4px',
+                                                borderRadius: '6px',
                                                 background: theme.hover,
-                                                transition: 'background 0.2s'
                                             }}
-                                            onMouseEnter={e => e.currentTarget.style.background = theme.select}
-                                            onMouseLeave={e => e.currentTarget.style.background = theme.hover}
                                         >
                                             <Icons.Close />
-                                        </span>
+                                        </button>
                                     )}
                                 </div>
                                 
                                 {/* Type Filter Pills */}
                                 <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
-                                    {[{"value": "all", "label": "All", "icon": "📊"},
-                                        {"value": "number", "label": "Numbers", "icon": "🔢"},
-                                        {"value": "string", "label": "Text", "icon": "📝"},
-                                        {"value": "date", "label": "Dates", "icon": "📅"}
-                                    ].map(type => (
+                                    {[{"value": "all", "label": "All", "Icon": Icons.TypeAll},
+                                        {"value": "number", "label": "Numbers", "Icon": Icons.TypeNumber},
+                                        {"value": "string", "label": "Text", "Icon": Icons.TypeText},
+                                        {"value": "date", "label": "Dates", "Icon": Icons.TypeDate}
+                                    ].map(type => {
+                                        const isActiveType = colTypeFilter === type.value;
+                                        const TypeIcon = type.Icon;
+                                        return (
                                         <button
                                             key={type.value}
+                                            type="button"
+                                            className={`sp-btn ${isActiveType ? 'sp-btn-primary' : 'sp-btn-subtle'}`}
                                             onClick={() => setColTypeFilter(type.value)}
                                             style={{
-                                                padding: '6px 12px',
-                                                borderRadius: '6px',
-                                                border: 'none',
-                                                background: colTypeFilter === type.value ? theme.primary : theme.background,
-                                                color: colTypeFilter === type.value ? '#fff' : theme.text,
+                                                padding: '6px 10px',
+                                                borderRadius: '8px',
+                                                border: `1px solid ${isActiveType ? theme.primary : theme.border}`,
+                                                background: isActiveType ? theme.primary : (theme.surfaceBg || theme.background),
+                                                color: isActiveType ? '#fff' : theme.text,
                                                 cursor: 'pointer',
                                                 fontSize: '11px',
                                                 fontWeight: 600,
-                                                display: 'flex',
+                                                display: 'inline-flex',
                                                 alignItems: 'center',
-                                                gap: '4px',
-                                                transition: 'all 0.2s',
-                                                boxShadow: colTypeFilter === type.value ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
-                                            }}
-                                            onMouseEnter={e => {
-                                                if (colTypeFilter !== type.value) {
-                                                    e.currentTarget.style.background = theme.hover;
-                                                }
-                                            }}
-                                            onMouseLeave={e => {
-                                                if (colTypeFilter !== type.value) {
-                                                    e.currentTarget.style.background = theme.background;
-                                                }
+                                                gap: '5px',
+                                                boxShadow: isActiveType ? '0 2px 6px rgba(0,0,0,0.12)' : 'none'
                                             }}
                                         >
-                                            <span>{type.icon}</span>
+                                            <TypeIcon />
                                             <span>{type.label}</span>
                                         </button>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
 
@@ -4671,34 +4970,13 @@ import {
                     )}
                 </div>
             {formulaModalConfig && (
-                <FormulaEditorModal
-                    item={formulaModalConfig}
-                    idx={formulaModalIndex}
-                    valConfigs={valConfigs}
-                    setValConfigs={setValConfigs}
-                    theme={theme}
-                    onClose={() => setFormulaModalField(null)}
-                    onRemove={removeValueAtIndex}
-                    displayedColumnOptions={displayedColumnOptions}
-                    availableRawFields={baseAvailableFields}
-                    serverError={(formulaErrors && formulaErrors[formulaModalConfig.field]) || null}
-                />
+                <FormulaEditorModal item={formulaModalConfig} idx={formulaModalIndex} valConfigs={valConfigs} setValConfigs={setValConfigs} theme={theme}
+                    onClose={() => setFormulaModalField(null)} onRemove={removeValueAtIndex} displayedColumnOptions={displayedColumnOptions}
+                    availableRawFields={baseAvailableFields} serverError={(formulaErrors && formulaErrors[formulaModalConfig.field]) || null} />
             )}
-            {/* Resize handle */}
-            <div
-                onMouseDown={onResizeMouseDown}
-                style={{
-                    position:'absolute', right:0, top:0, bottom:0, width:'5px',
-                    cursor:'col-resize', zIndex:10,
-                    background:'transparent',
-                }}
-                title="Drag to resize panel"
-            >
-                <div style={{
-                    position:'absolute', right:0, top:0, bottom:0, width:'2px',
-                    background: theme.border,
-                    transition: 'background 0.15s',
-                }} />
+            <div className="sp-resize-handle" onMouseDown={onResizeMouseDown} title="Drag to resize panel"
+                style={{ position:'absolute', right: -2, top:0, bottom:0, width:'9px', cursor:'col-resize', zIndex:10, background:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <span className="sp-resize-pill" aria-hidden="true" style={{ width:'2px', height:'100%', borderRadius:'999px', background: theme.border, opacity: 0.55, pointerEvents:'none' }} />
             </div>
         </div>
     );

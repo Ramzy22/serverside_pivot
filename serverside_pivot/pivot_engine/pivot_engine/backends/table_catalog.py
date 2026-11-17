@@ -56,6 +56,7 @@ class IbisTableCatalog:
         self._registered_tables: Dict[str, Any] = {}
         self._registered_backends: Dict[str, Any] = {}
         self._schema_cache: Dict[str, Tuple[Any, List[str], float]] = {}
+        self._table_expr_cache: Dict[str, Tuple[Any, Any, float]] = {}
 
     def set_backend(self, con: Optional[Any]) -> None:
         """Update the underlying Ibis backend connection if changed."""
@@ -63,6 +64,7 @@ class IbisTableCatalog:
             if con is not None and con is not self._con:
                 self._con = con
                 self._schema_cache.clear()
+                self._table_expr_cache.clear()
 
     @property
     def con(self) -> Optional[Any]:
@@ -73,6 +75,7 @@ class IbisTableCatalog:
         with self._lock:
             self._con = value
             self._schema_cache.clear()
+            self._table_expr_cache.clear()
 
     def register_table(
         self,
@@ -90,6 +93,7 @@ class IbisTableCatalog:
             if backend is not None:
                 self._registered_backends[key] = backend
             self._schema_cache.pop(key, None)
+            self._table_expr_cache.pop(key, None)
 
     def unregister_table(self, table_name: str) -> None:
         """Remove a registered lazy table expression and its cached schema."""
@@ -98,6 +102,7 @@ class IbisTableCatalog:
             self._registered_tables.pop(key, None)
             backend = self._registered_backends.pop(key, None)
             self._schema_cache.pop(key, None)
+            self._table_expr_cache.pop(key, None)
         if backend is not None and hasattr(backend, "close"):
             try:
                 backend.close()
@@ -114,8 +119,11 @@ class IbisTableCatalog:
         with self._lock:
             if table_name is None:
                 self._schema_cache.clear()
+                self._table_expr_cache.clear()
             else:
-                self._schema_cache.pop(str(table_name).strip(), None)
+                key = str(table_name).strip()
+                self._schema_cache.pop(key, None)
+                self._table_expr_cache.pop(key, None)
 
     def resolve_table(
         self,
@@ -137,6 +145,20 @@ class IbisTableCatalog:
         if con is None or not hasattr(con, "table"):
             raise ValueError(f"Cannot resolve table '{key}': no Ibis connection is configured")
 
+        now = time.monotonic()
+        if self.schema_cache_ttl > 0:
+            with self._lock:
+                cached_expr = self._table_expr_cache.get(key)
+                if cached_expr is not None and cached_expr[0] is con and cached_expr[2] > now:
+                    return cached_expr[1]
+
+        resolved_expr = self._resolve_unregistered_table(key, con)
+        if self.schema_cache_ttl > 0 and resolved_expr is not None:
+            with self._lock:
+                self._table_expr_cache[key] = (con, resolved_expr, now + self.schema_cache_ttl)
+        return resolved_expr
+
+    def _resolve_unregistered_table(self, key: str, con: Any) -> Any:
         # Handle qualified names: schema.table or database.schema.table
         if "." in key:
             parts = [part.strip() for part in key.split(".") if part.strip()]

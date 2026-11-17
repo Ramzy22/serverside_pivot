@@ -85,6 +85,9 @@ export const useServerSideViewportController = ({
     const lastFastHorizontalRangeRef = useRef({ start: -1, end: -1, dispatchedAt: 0 });
     /** @type {any} */
     const deferredHorizontalMetricsRef = useRef(null);
+    /** @type {any} */
+    const structuralInFlightRef = useRef(Boolean(structuralInFlight));
+    structuralInFlightRef.current = Boolean(structuralInFlight);
 
     /** @type {(...args: any[]) => any} */
     const updateVisibleColRange = useCallback((updater) => {
@@ -309,29 +312,54 @@ export const useServerSideViewportController = ({
 
     useEffect(() => {
         if (!serverSide) return;
-        pendingRequestVersionsRef.current.clear();
-        pendingHorizontalRequestVersionsRef.current.clear();
-        visiblePendingRequestVersionsRef.current.clear();
-        if (loadingDelayTimerRef.current !== null) {
-            clearTimeout(loadingDelayTimerRef.current);
-            loadingDelayTimerRef.current = null;
+        const activeStructuralVersion = structuralInFlightRef.current
+            ? Number(structuralPendingVersionRef.current?.version)
+            : NaN;
+        const hasActiveStructural = Number.isFinite(activeStructuralVersion);
+
+        if (hasActiveStructural) {
+            for (const version of Array.from(pendingRequestVersionsRef.current)) {
+                if (Number(version) < activeStructuralVersion) {
+                    pendingRequestVersionsRef.current.delete(version);
+                }
+            }
+            for (const version of Array.from(pendingHorizontalRequestVersionsRef.current)) {
+                if (Number(version) < activeStructuralVersion) {
+                    pendingHorizontalRequestVersionsRef.current.delete(version);
+                }
+            }
+            for (const version of Array.from(visiblePendingRequestVersionsRef.current)) {
+                if (Number(version) < activeStructuralVersion) {
+                    visiblePendingRequestVersionsRef.current.delete(version);
+                }
+            }
+        } else {
+            pendingRequestVersionsRef.current.clear();
+            pendingHorizontalRequestVersionsRef.current.clear();
+            visiblePendingRequestVersionsRef.current.clear();
         }
-        setIsRequestPending(false);
-        setIsHorizontalColumnRequestPending(false);
-        setPendingHorizontalColumnCount(0);
-        latestRequestedViewportRef.current = null;
-        latestRequestedColumnWindowRef.current = { start: null, end: null };
+
+        if (visiblePendingRequestVersionsRef.current.size === 0) {
+            if (loadingDelayTimerRef.current !== null) {
+                clearTimeout(loadingDelayTimerRef.current);
+                loadingDelayTimerRef.current = null;
+            }
+            setIsRequestPending(false);
+        }
+        if (pendingHorizontalRequestVersionsRef.current.size === 0) {
+            setIsHorizontalColumnRequestPending(false);
+            setPendingHorizontalColumnCount(0);
+        }
+        if (!hasActiveStructural) {
+            latestRequestedViewportRef.current = null;
+            latestRequestedColumnWindowRef.current = { start: null, end: null };
+        }
         lastObservedHorizontalScrollLeftRef.current = 0;
         lastFastHorizontalRangeRef.current = { start: -1, end: -1, dispatchedAt: 0 };
         visibleColRangeRef.current = DEFAULT_VISIBLE_RANGE;
         setVisibleColRange(DEFAULT_VISIBLE_RANGE);
         setColumnRangeUrgencyToken(/** @param {any} [previousToken] @returns {any} */ (previousToken) => previousToken + 1);
-    }, [serverSide, stateEpoch]);
-
-    useEffect(() => {
-        if (!serverSide) return;
-        setCachedColSchema(null);
-    }, [serverSide, stateEpoch]);
+    }, [serverSide, stateEpoch, structuralPendingVersionRef]);
 
     useEffect(() => {
         if (!serverSide || !responseSchema) return;
@@ -346,8 +374,9 @@ export const useServerSideViewportController = ({
 
         if (!schemaIsFreshForCurrentEpoch) return;
 
+        const sameEpoch = colSchemaEpochRef.current === stateEpoch;
         setCachedColSchema(/** @param {any} [previousSchema] @returns {any} */ (previousSchema) => (
-            mergeSparseColSchema(previousSchema, responseSchema, schemaFallbackWidth)
+            mergeSparseColSchema(sameEpoch ? previousSchema : null, responseSchema, schemaFallbackWidth)
         ));
         colSchemaEpochRef.current = stateEpoch;
     }, [

@@ -13,6 +13,37 @@ const DEFAULT_DUCKDB_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-was
 const DEFAULT_WASM_INIT_TIMEOUT_MS = 4500;
 const WASM_RETRY_BACKOFF_MS = 30000;
 
+function normalizeDatasetFieldNames(names: Iterable<unknown>): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of names) {
+        if (raw === undefined || raw === null) continue;
+        const fieldId = String(raw);
+        if (!fieldId.trim() || fieldId === '__col_schema' || seen.has(fieldId)) continue;
+        seen.add(fieldId);
+        out.push(fieldId);
+    }
+    return out;
+}
+
+function extractDatasetFieldIds(rows: Array<{ [key: string]: unknown }>): string[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const seen = new Set<string>();
+    const fields: string[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        if (!row || typeof row !== 'object') continue;
+        const keys = Object.keys(row);
+        for (let j = 0; j < keys.length; j += 1) {
+            const key = keys[j];
+            if (!key.trim() || key === '__col_schema' || seen.has(key)) continue;
+            seen.add(key);
+            fields.push(key);
+        }
+    }
+    return fields;
+}
+
 function evaluateCustomDimensionRow(
     row: { [key: string]: unknown },
     dim: NormalizedCustomDimension
@@ -216,6 +247,16 @@ interface DuckDbInstanceLike {
     registerFileText?: (name: string, text: string) => Promise<void>;
 }
 
+interface PreparedDatasetCache {
+    rowsRef: Array<{ [key: string]: unknown }>;
+    customDimsKey: string;
+    filtersKey: string;
+    colFieldsKey: string;
+    allRows: Array<{ [key: string]: unknown }>;
+    filteredRows: Array<{ [key: string]: unknown }>;
+    colCombinations: string[];
+}
+
 export class DuckDbWasmExecutor {
     private rows: Array<{ [key: string]: unknown }>;
     private config: ClientRuntimeConfig;
@@ -225,6 +266,8 @@ export class DuckDbWasmExecutor {
     private dbInstance: DuckDbInstanceLike | null = null;
     private dbConn: DuckDbConnectionLike | null = null;
     private registeredTableSignature = '';
+    private preparedCache: PreparedDatasetCache | null = null;
+    private cachedAvailableFields: string[] | null = null;
     private telemetry: ClientEngineTelemetry;
 
     public constructor(
@@ -248,6 +291,8 @@ export class DuckDbWasmExecutor {
     public setData(rows: Array<{ [key: string]: unknown }>): void {
         this.rows = Array.isArray(rows) ? rows : [];
         this.registeredTableSignature = '';
+        this.preparedCache = null;
+        this.cachedAvailableFields = null;
         this.telemetry.rowCount = this.rows.length;
         this.telemetry.activeEngine = resolveClientEngineKind(this.config, this.rows.length, this.wasmReady);
         this.telemetry.lastUpdatedAt = Date.now();
@@ -255,6 +300,17 @@ export class DuckDbWasmExecutor {
 
     public getData(): Array<{ [key: string]: unknown }> {
         return this.rows;
+    }
+
+    public getAvailableFields(): string[] {
+        if (this.cachedAvailableFields !== null) {
+            return [...this.cachedAvailableFields];
+        }
+        const fields = extractDatasetFieldIds(this.rows);
+        if (fields.length > 0 || this.rows.length > 0) {
+            this.cachedAvailableFields = fields;
+        }
+        return [...fields];
     }
 
     public updateConfig(config: Partial<ClientRuntimeConfig>): void {
@@ -315,7 +371,10 @@ export class DuckDbWasmExecutor {
                     };
                 }>;
 
-                const duckdbModule = (globalScope.duckdb as Awaited<ReturnType<typeof dynamicImporter>>) || (await dynamicImporter(cdnUrl));
+                const customLoader = typeof this.config.duckdbLoader === 'function' ? this.config.duckdbLoader : null;
+                const duckdbModule = customLoader
+                    ? (await customLoader()) as Awaited<ReturnType<typeof dynamicImporter>>
+                    : ((globalScope.duckdb as Awaited<ReturnType<typeof dynamicImporter>>) || (await dynamicImporter(cdnUrl)));
                 if (
                     timedOut ||
                     !duckdbModule ||
@@ -424,8 +483,18 @@ export class DuckDbWasmExecutor {
                     : `read_csv_auto('${escapedUrl}')`;
                 await this.dbConn.query(`CREATE OR REPLACE TABLE ${safeTable} AS SELECT * FROM ${readerExpr}`);
                 const loadedResult = await this.dbConn.query(`SELECT * FROM ${safeTable}`);
+                const schemaFields = (loadedResult as { schema?: { fields?: Array<{ name?: unknown }> } } | null)?.schema?.fields;
+                if (Array.isArray(schemaFields) && schemaFields.length > 0) {
+                    const normalizedSchema = normalizeDatasetFieldNames(schemaFields.map((field) => field && field.name));
+                    if (normalizedSchema.length > 0) {
+                        this.cachedAvailableFields = normalizedSchema;
+                    }
+                }
                 if (loadedResult && typeof loadedResult.toArray === 'function') {
                     this.rows = loadedResult.toArray().map((row) => ({ ...(row as { [key: string]: unknown }) }));
+                    if (this.cachedAvailableFields === null && this.rows.length > 0) {
+                        this.cachedAvailableFields = extractDatasetFieldIds(this.rows);
+                    }
                 }
                 this.registeredTableSignature = signature;
                 return true;
@@ -453,8 +522,22 @@ export class DuckDbWasmExecutor {
 
         const targetEngine = resolveClientEngineKind(this.config, this.rows.length, this.wasmReady);
         let engineUsed: 'duckdb-wasm' | 'memory' = 'memory';
+        const dataUrl = typeof this.config.dataUrl === 'string' ? this.config.dataUrl.trim() : '';
+        const hasInjectedWasm = Boolean(this.config.duckdbWasmInstance || this.config.duckdbLoader);
+        const requiresWasmExecution = Boolean(
+            dataUrl
+            || hasInjectedWasm
+            || this.config.clientEngine === 'duckdb-wasm'
+        );
 
-        if (targetEngine === 'duckdb-wasm' || normalizeWasmWarmupRequested(this.config, this.rows.length)) {
+        // Only initialize or roundtrip through DuckDB-Wasm when explicitly configured,
+        // loading from dataUrl, or testing an injected Wasm instance. When `clientEngine`
+        // is 'auto' on already-loaded JS rows, avoid stalling up to 4.5s on CDN imports
+        // or running discarded worker SQL queries before computing the JS response.
+        if (
+            requiresWasmExecution
+            && (targetEngine === 'duckdb-wasm' || normalizeWasmWarmupRequested(this.config, this.rows.length))
+        ) {
             if (!this.wasmReady) {
                 const initialized = await this.tryInitializeWasm();
                 if (initialized && resolveClientEngineKind(this.config, this.rows.length, true) === 'duckdb-wasm') {
@@ -481,24 +564,88 @@ export class DuckDbWasmExecutor {
             }
         }
 
-        const allRows = applyCustomDimensionsToDataset(this.rows, plan.customDimensions);
-        const filteredRows = filterDatasetRows(allRows, plan.filters);
+        const customDimsKey = plan.customDimensions.length > 0 ? JSON.stringify(plan.customDimensions) : '';
+        const filtersKey = plan.filters.length > 0 ? JSON.stringify(plan.filters) : '';
+        const colFieldsKey = plan.colFields.length > 0 ? plan.colFields.join('\u0000') : '';
 
-        const colSet = new Set<string>();
-        if (plan.colFields.length > 0) {
-            for (const row of filteredRows) {
-                const key = plan.colFields
-                    .map((colField) => {
-                        const val = row[colField];
-                        return val === null || val === undefined ? 'null' : String(val);
-                    })
-                    .join('_');
-                colSet.add(key);
+        let allRows: Array<{ [key: string]: unknown }>;
+        let filteredRows: Array<{ [key: string]: unknown }>;
+        let colCombinations: string[];
+
+        const cached = this.preparedCache;
+        if (
+            cached
+            && cached.rowsRef === this.rows
+            && cached.customDimsKey === customDimsKey
+            && cached.filtersKey === filtersKey
+            && cached.colFieldsKey === colFieldsKey
+        ) {
+            allRows = cached.allRows;
+            filteredRows = cached.filteredRows;
+            colCombinations = cached.colCombinations;
+        } else {
+            if (
+                cached
+                && cached.rowsRef === this.rows
+                && cached.customDimsKey === customDimsKey
+            ) {
+                allRows = cached.allRows;
+            } else {
+                allRows = applyCustomDimensionsToDataset(this.rows, plan.customDimensions);
             }
+
+            if (
+                cached
+                && cached.rowsRef === this.rows
+                && cached.customDimsKey === customDimsKey
+                && cached.filtersKey === filtersKey
+            ) {
+                filteredRows = cached.filteredRows;
+            } else {
+                filteredRows = filterDatasetRows(allRows, plan.filters);
+            }
+
+            if (
+                cached
+                && cached.rowsRef === this.rows
+                && cached.customDimsKey === customDimsKey
+                && cached.filtersKey === filtersKey
+                && cached.colFieldsKey === colFieldsKey
+            ) {
+                colCombinations = cached.colCombinations;
+            } else {
+                const colSet = new Set<string>();
+                if (plan.colFields.length === 1) {
+                    const cf = plan.colFields[0];
+                    for (const row of filteredRows) {
+                        const val = row[cf];
+                        colSet.add(val === null || val === undefined ? 'null' : String(val));
+                    }
+                } else if (plan.colFields.length > 1) {
+                    for (const row of filteredRows) {
+                        const parts: string[] = [];
+                        for (let i = 0; i < plan.colFields.length; i += 1) {
+                            const val = row[plan.colFields[i]];
+                            parts.push(val === null || val === undefined ? 'null' : String(val));
+                        }
+                        colSet.add(parts.join('_'));
+                    }
+                }
+                colCombinations = Array.from(colSet).sort((a, b) =>
+                    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+                );
+            }
+
+            this.preparedCache = {
+                rowsRef: this.rows,
+                customDimsKey,
+                filtersKey,
+                colFieldsKey,
+                allRows,
+                filteredRows,
+                colCombinations,
+            };
         }
-        const colCombinations = Array.from(colSet).sort((a, b) =>
-            a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-        );
 
         const endTime = typeof performance !== 'undefined' && typeof performance.now === 'function'
             ? performance.now()
@@ -519,6 +666,7 @@ export class DuckDbWasmExecutor {
         return {
             filteredRows,
             allRows,
+            availableFields: this.getAvailableFields(),
             colCombinations,
             engineUsed,
             executionMs,

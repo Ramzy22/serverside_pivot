@@ -522,7 +522,7 @@ Keyword arguments:
 
 - unitSuffix (string; default PropTypes.string)
 
-- valConfigs (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    id: PropTypes.string,    field: PropTypes.string,    agg: PropTypes.oneOf(['sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula']),    weightField: PropTypes.string,    windowFn: PropTypes.oneOf(['percent_of_row', 'percent_of_col', 'percent_of_grand_total']),    format: PropTypes.string,    percentile: PropTypes.number,    separator: PropTypes.string,    formula: PropTypes.string,    label: PropTypes.string,    shortLabel: PropTypes.string,    headerGroup: PropTypes.string,    valueScale: PropTypes.number,    unitSuffix: PropTypes.string,    formulaRef: PropTypes.string,    formulaScope: PropTypes.oneOf(['measures', 'columns']),    headerStyle: PropTypes.object,    headerBg: PropTypes.string,    headerColor: PropTypes.string,    headerTextColor: PropTypes.string,    sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])  })))
+- valConfigs (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    id: PropTypes.string,    field: PropTypes.string,    agg: PropTypes.oneOf(['sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula']),    weightField: PropTypes.string,    windowFn: PropTypes.oneOf(['percent_of_row', 'percent_of_col', 'percent_of_grand_total']),    format: PropTypes.string,    percentile: PropTypes.number,    separator: PropTypes.string,    formula: PropTypes.string,    label: PropTypes.string,    shortLabel: PropTypes.string,    headerGroup: PropTypes.string,    valueScale: PropTypes.number,    unitSuffix: PropTypes.string,    formulaRef: PropTypes.string,    formulaScope: PropTypes.oneOf(['measures', 'columns']),    headerStyle: PropTypes.object,    headerBg: PropTypes.string,    headerColor: PropTypes.string,    headerTextColor: PropTypes.string,    displayVariant: PropTypes.string,    dataBars: PropTypes.bool,    sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])  })))
 
     `valConfigs` is a list of dicts with keys:
 
@@ -565,6 +565,22 @@ Keyword arguments:
     - headerColor (string; optional)
 
     - headerTextColor (string; optional)
+
+    - displayVariant (string; optional)
+
+    - dataBars (dict; optional)
+
+        `dataBars` is a dict with keys:
+
+        - valueOf (optional):
+
+            Returns the primitive value of the specified object.
+
+              Or dict with keys:
+
+        - valueOf (optional):
+
+            Returns the primitive value of the specified object.
 
     - sparkline (dict; optional)
 
@@ -612,6 +628,13 @@ Keyword arguments:
         }
     )
 
+    ValConfigsDataBars = TypedDict(
+        "ValConfigsDataBars",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
     ValConfigsSparkline = TypedDict(
         "ValConfigsSparkline",
             {
@@ -642,6 +665,8 @@ Keyword arguments:
             "headerBg": NotRequired[typing.Union[str]],
             "headerColor": NotRequired[typing.Union[str]],
             "headerTextColor": NotRequired[typing.Union[str]],
+            "displayVariant": NotRequired[typing.Union[str]],
+            "dataBars": NotRequired[typing.Union["ValConfigsDataBars"]],
             "sparkline": NotRequired[typing.Union["ValConfigsSparkline", dict]]
         }
     )

@@ -533,6 +533,20 @@ export const deriveStructuralThemeTokens = (baseTheme, explicitOverrides = null)
         || text;
 
     /** @type {any} */
+    const explicitPrimary = resolveExplicitThemeColor(overrideSource.primary);
+    /** @type {any} */
+    const explicitSurface = resolveExplicitThemeColor(
+        overrideSource.surfaceBg || overrideSource.background || overrideSource.pageBg
+    );
+    /** @type {any} */
+    const explicitHeaderSurface = resolveExplicitThemeColor(
+        overrideSource.surfaceInset || overrideSource.headerSubtleBg || overrideSource.headerBg
+    );
+    /** @type {any} */
+    const explicitSortedHeaderText = resolveExplicitThemeColor(overrideSource.sortedHeaderText);
+    /** @type {any} */
+    const explicitText = resolveExplicitThemeColor(overrideSource.text);
+    /** @type {any} */
     const explicitHierarchyBg = resolveExplicitThemeColor(overrideSource.hierarchyBg);
     /** @type {any} */
     const explicitTotalBg = resolveExplicitThemeColor(overrideSource.totalBg);
@@ -545,27 +559,50 @@ export const deriveStructuralThemeTokens = (baseTheme, explicitOverrides = null)
 
     /** @type {any} */
     const hierarchyBg = explicitHierarchyBg
-        || resolveExplicitThemeColor(themeSource.hierarchyBg)
-        || mixHexColors(primary, insetSurface, isDark ? 0.12 : 0.05)
-        || insetSurface;
+        || explicitHeaderSurface
+        || (
+            (explicitPrimary || explicitSurface)
+                ? (mixHexColors(primary, insetSurface, isDark ? 0.12 : 0.05) || insetSurface)
+                : (resolveExplicitThemeColor(themeSource.hierarchyBg)
+                    || mixHexColors(primary, insetSurface, isDark ? 0.12 : 0.05)
+                    || insetSurface)
+        );
     /** @type {any} */
     const totalBg = explicitTotalBg
-        || resolveExplicitThemeColor(themeSource.totalBg)
-        || mixHexColors(primary, surface, isDark ? 0.20 : 0.10)
-        || insetSurface;
+        || (
+            (explicitPrimary || explicitSurface)
+                ? (mixHexColors(primary, surface, isDark ? 0.20 : 0.10) || insetSurface)
+                : (resolveExplicitThemeColor(themeSource.totalBg)
+                    || mixHexColors(primary, surface, isDark ? 0.20 : 0.10)
+                    || insetSurface)
+        );
     /** @type {any} */
     const totalBgStrong = explicitTotalBgStrong
-        || resolveExplicitThemeColor(themeSource.totalBgStrong)
-        || mixHexColors(primary, surface, isDark ? 0.46 : 0.16)
-        || totalBg;
+        || explicitTotalBg
+        || (
+            (explicitPrimary || explicitSurface)
+                ? (mixHexColors(primary, surface, isDark ? 0.46 : 0.16) || totalBg)
+                : (resolveExplicitThemeColor(themeSource.totalBgStrong)
+                    || mixHexColors(primary, surface, isDark ? 0.46 : 0.16)
+                    || totalBg)
+        );
     /** @type {any} */
     const totalText = explicitTotalText
-        || resolveExplicitThemeColor(themeSource.totalText)
-        || (isDark ? text : strongText);
+        || (
+            (explicitPrimary || explicitSortedHeaderText || explicitText)
+                ? (isDark ? text : strongText)
+                : (resolveExplicitThemeColor(themeSource.totalText)
+                    || (isDark ? text : strongText))
+        );
     /** @type {any} */
     const totalTextStrong = explicitTotalTextStrong
-        || resolveExplicitThemeColor(themeSource.totalTextStrong)
-        || (isDark ? (resolveExplicitThemeColor(themeSource.pageBg) || '#0A0C10') : strongText);
+        || explicitTotalText
+        || (
+            (explicitPrimary || explicitSortedHeaderText || explicitText)
+                ? (isDark ? (resolveExplicitThemeColor(themeSource.pageBg) || text) : strongText)
+                : (resolveExplicitThemeColor(themeSource.totalTextStrong)
+                    || (isDark ? (resolveExplicitThemeColor(themeSource.pageBg) || '#0A0C10') : strongText))
+        );
 
     return {
         hierarchyBg,
@@ -796,6 +833,8 @@ export const resolveGridLineBorders = (theme) => {
 export const buildThemeCssVars = (theme) => {
     if (!theme || typeof theme !== 'object') return {};
     /** @type {any} */
+    const isDark = isDarkTheme(theme);
+    /** @type {any} */
     const borders = resolveGridLineBorders(theme);
     /** @type {any} */
     const fontFamily = theme.fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif";
@@ -825,7 +864,12 @@ export const buildThemeCssVars = (theme) => {
     const vars = {
         '--sp-primary':            theme.primary,
         '--sp-border':             theme.border,
-        '--sp-border-strong':      theme.borderStrong || theme.border,
+        '--sp-border-strong':      theme.borderStrong || withAlpha(theme.text, isDark ? 0.22 : 0.16, theme.border),
+        '--sp-focus-ring':         withAlpha(theme.primary, isDark ? 0.36 : 0.24, theme.primary),
+        '--sp-glass-bg':           withAlpha(theme.surfaceBg || theme.background, isDark ? 0.80 : 0.86, theme.surfaceBg || theme.background),
+        '--sp-glass-border':       withAlpha(isDark ? '#ffffff' : '#0f172a', isDark ? 0.14 : 0.10, theme.border),
+        '--sp-row-hover-tint':     isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(15, 23, 42, 0.032)',
+        '--sp-ease-apple':         'cubic-bezier(0.22, 1, 0.36, 1)',
         '--sp-header-bg':          theme.headerBg,
         '--sp-header-subtle-bg':   theme.headerSubtleBg || theme.headerBg,
         '--sp-surface-bg':         theme.surfaceBg || theme.background,
@@ -997,7 +1041,7 @@ export const getStyles = (theme) => {
         boxShadow: theme.shadowSm || '0 1px 2px rgba(0,0,0,0.05)',
         position: 'relative',
         color: theme.text,
-        transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease'
+        transition: 'border-color 140ms var(--sp-ease-apple, ease), background 140ms var(--sp-ease-apple, ease), box-shadow 140ms var(--sp-ease-apple, ease), transform 140ms var(--sp-ease-apple, ease)'
     },
     dropZone: {
         minHeight: '52px',
@@ -1115,7 +1159,7 @@ export const getStyles = (theme) => {
         color: theme.text,
         whiteSpace: 'nowrap',
         lineHeight: 1.5,
-        transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
+        transition: 'background-color 140ms var(--sp-ease-apple, ease), border-color 140ms var(--sp-ease-apple, ease), box-shadow 140ms var(--sp-ease-apple, ease), transform 110ms var(--sp-ease-apple, ease)',
         boxSizing: 'border-box',
         userSelect: 'none',
     },

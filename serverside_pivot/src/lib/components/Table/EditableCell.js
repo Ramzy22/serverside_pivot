@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { formatValue } from '../../utils/helpers';
 import { CELL_CONTENT_RESET_STYLE } from '../../utils/styles';
+import ThemedSelect from '../ThemedSelect';
 import { useOptionalPivotValueDisplay } from '../../contexts/PivotValueDisplayContext';
 import {
     coerceEditorValue,
@@ -467,10 +468,11 @@ const EditableCell = ({
 
         if (editorType === 'select') {
             return (
-                <select
+                <ThemedSelect
                     {...commonInputProps}
+                    size="sm"
                     value={value === null || value === undefined ? '' : value}
-                    onChange={(e) => {
+                    onChange={(/** @type {any} */ e) => {
                         const nextValue = e.target.value;
                         setValue(nextValue);
                         if (isRowEditing) {
@@ -496,7 +498,7 @@ const EditableCell = ({
                             {option.label}
                         </option>
                     ))}
-                </select>
+                </ThemedSelect>
             );
         }
 

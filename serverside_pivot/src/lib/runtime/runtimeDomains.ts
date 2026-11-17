@@ -22,6 +22,8 @@ export interface PivotRuntimeProps {
     showRowTotals?: boolean;
     showColTotals?: boolean;
     showSubtotals?: boolean;
+    /** Controls Grand Total row visibility in pivot, tree, and report modes. Defaults to `showColTotals` in pivot/report mode or `treeConfig.showGrandTotal` in tree mode. */
+    showGrandTotal?: boolean;
     grandTotalPosition?: 'top' | 'bottom';
     runtimeRequest?: PivotObject;
     runtimeResponse?: RuntimeResponseV1 | PivotObject;
@@ -68,7 +70,7 @@ export interface PivotRuntimeProps {
     sortLock?: boolean;
     defaultTheme?: PivotThemeName;
     theme?: PivotThemeName;
-    themeOverrides?: PivotObject;
+    themeOverrides?: PivotThemeOverrides | PivotObject;
     loadWebFonts?: boolean;
     immersiveExitPosition?: 'top-right' | 'bottom-right' | 'hidden';
     groupAllowUnbalanced?: boolean;
@@ -77,7 +79,11 @@ export interface PivotRuntimeProps {
     rowHeaderLabel?: string | ((rowFields: readonly string[]) => string);
     valueScale?: number;
     unitSuffix?: string;
-    fitToWidth?: boolean;
+    /** Fits all columns into container width. Accepts `true` or `{ enabled?: boolean; minFontSize?: number }`. */
+    fitToWidth?: boolean | { enabled?: boolean; minFontSize?: number };
+    /** Minimum font size (px) when `fitToWidth` scales text down. Can also be set via `themeOverrides.minFontSize`. Defaults to `10`. */
+    minFontSize?: number;
+    fitMinFontSize?: number;
     autoSizeStrategy?: 'fitGridWidth' | 'fitCellContents' | string;
     duckdbBundleUrl?: string;
     sortEvent?: PivotObject;
@@ -112,6 +118,7 @@ export type PivotThemeName =
     | (string & {});
 
 export interface ValConfig {
+    id?: string;
     field?: string;
     agg?: 'sum' | 'avg' | 'count' | 'min' | 'max' | 'weighted_avg' | 'wavg' | 'weighted_mean' | 'array_agg' | 'formula' | (string & {});
     weightField?: string;
@@ -121,6 +128,11 @@ export interface ValConfig {
     separator?: string;
     formula?: string;
     label?: string;
+    /** Compact header label used when the column is narrow (`< 80px` or narrower than full header label). */
+    shortLabel?: string;
+    headerGroup?: string;
+    valueScale?: number;
+    unitSuffix?: string;
     formulaRef?: string;
     formulaScope?: 'measures' | 'columns';
     headerStyle?: React.CSSProperties | PivotObject;
@@ -129,6 +141,82 @@ export interface ValConfig {
     headerTextColor?: string;
     sparkline?: boolean | PivotObject;
     [key: string]: unknown;
+}
+
+/**
+ * Theme token overrides accepted by `themeOverrides`.
+ *
+ * Surface mapping:
+ * - Grid & chrome: `pageBg` / `background` (outer frame), `surfaceBg` (default cells), `headerBg` (top bar & regular column headers), `headerGroupBg` / `headerGroupText` (multi-level group headers, falling back to `headerSubtleBg` / `headerBg`).
+ * - Row-header / hierarchy column: `hierarchyBg` drives the `hierarchy` column header and body fallback; derives from overridden `headerSubtleBg` / `headerBg` / `surfaceInset` or `primary` when not explicitly set.
+ * - Body rows: `groupBg` / `groupText` / `groupFontWeight` (depth arrays or single values for parent/group rows) and `leafBg` / `leafFontWeight` (leaf rows).
+ * - Totals & pinned Grand Total: `totalBg` / `totalText` style subtotals & total columns; `totalBgStrong` / `totalTextStrong` style the pinned/summary Grand Total row (deriving from overridden `totalBg` / `totalText` when not explicitly set).
+ * - Headers & fitting: `headerWrap` (wraps on spaces), `headerControls` (`'always' | 'hover' | 'never'`), `showAbsoluteSortBadge`, `fontSize`, `minFontSize`.
+ */
+export interface PivotThemeOverrides {
+    /** Outer brand accent & sort/focus border highlight. */
+    primary?: string;
+    border?: string;
+    borderStrong?: string;
+    pageBg?: string;
+    background?: string;
+    surfaceBg?: string;
+    surfaceMuted?: string;
+    surfaceInset?: string;
+    sidebarBg?: string;
+    /** Column header & app-bar background; also drives `hierarchyBg` fallback when overridden. */
+    headerBg?: string;
+    headerSubtleBg?: string;
+    headerGroupBg?: string;
+    headerGroupText?: string;
+    /** Row-header (`hierarchy`) column & header background. Derives from `headerBg`/`headerSubtleBg` when omitted. */
+    hierarchyBg?: string;
+    /** Depth-indexed or scalar fill for expandable parent rows. */
+    groupBg?: string | readonly string[];
+    groupText?: string | readonly string[];
+    groupFontWeight?: number | readonly number[];
+    /** Fill and weight for leaf rows. */
+    leafBg?: string;
+    leafFontWeight?: number;
+    /** Fill and text for subtotal rows & total columns; also drives `totalBgStrong`/`totalTextStrong` when omitted. */
+    totalBg?: string;
+    totalText?: string;
+    /** Fill and text for pinned / summary Grand Total rows & group headers. */
+    totalBgStrong?: string;
+    totalTextStrong?: string;
+    totalBorder?: string;
+    totalFontWeight?: number;
+    text?: string;
+    textSec?: string;
+    textSoft?: string;
+    hover?: string;
+    hoverStrong?: string;
+    rowHoverBg?: string;
+    select?: string;
+    gridLines?: 'both' | 'horizontal' | 'vertical' | 'none';
+    rowBorder?: string;
+    columnBorder?: string;
+    fontFamily?: string;
+    numericFontFamily?: string;
+    fontSize?: number | string;
+    /** Minimum font size (px) when `fitToWidth` scales text down. Defaults to `10`. */
+    minFontSize?: number;
+    fitMinFontSize?: number;
+    headerFontSize?: number | string;
+    headerGroupFontSize?: number | string;
+    headerLineHeight?: number | string;
+    headerWrap?: boolean;
+    headerControls?: 'always' | 'hover' | 'never';
+    /** Explicitly show or hide the `|x|` absolute-sort badge; defaults to following `headerControls`. */
+    showAbsoluteSortBadge?: boolean;
+    showSortPriority?: boolean;
+    sortIndicator?: 'arrow' | 'none' | string;
+    cellPaddingX?: number | string;
+    headerPaddingX?: number | string;
+    numericPaddingRight?: number | string;
+    rowHeight?: number;
+    headerHeight?: number;
+    [token: string]: unknown;
 }
 
 export type PivotValueConfig = ValConfig;
@@ -428,6 +516,7 @@ export interface WorkspacePresentation {
     readonly customDimensions: WorkspaceCollection;
     readonly dataBarsColumns: readonly string[];
     readonly dataBarMaximums: WorkspaceRecord;
+    readonly dataBarVariant?: 'fill' | 'underbar';
     readonly decimalPlaces: number;
     readonly defaultValueFormat: string;
     readonly detailConfig: WorkspaceRecord | null;
@@ -570,6 +659,7 @@ export interface WorkspacePresentation {
     readonly setCustomDimensions: RuntimeCommand;
     readonly setDataBarsColumns: RuntimeCommand;
     readonly setDataBarMaximums: RuntimeCommand;
+    readonly setDataBarVariant?: RuntimeCommand;
     readonly setDecimalPlaces: RuntimeCommand;
     readonly setDefaultValueFormat: RuntimeCommand;
     readonly setDetailSurface: RuntimeCommand;

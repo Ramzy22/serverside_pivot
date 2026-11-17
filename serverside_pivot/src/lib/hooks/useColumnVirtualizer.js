@@ -149,7 +149,9 @@ export const useColumnVirtualizer = ({
             if (!lastRect) return;
             /** @type {any} */
             const width = instance.scrollElement?.clientWidth ?? lastRect.width;
-            notify({ ...lastRect, width: Math.max(0, width - pinnedWidthRef.current) });
+            /** @type {any} */
+            const height = instance.scrollElement?.clientHeight ?? lastRect.height;
+            notify({ ...lastRect, width: Math.max(0, width - pinnedWidthRef.current), height });
         };
         publishCenterRectRef.current = publish;
         /** @type {any} */
@@ -234,13 +236,13 @@ export const useColumnVirtualizer = ({
     }, [leftCols, rightCols, centerTotalWidth]);
 
     /** @type {any} */
-    const visibleColRange = useMemo(() => {
-        if (virtualCenterCols.length === 0) return { start: 0, end: 0 };
-        return {
-            start: virtualCenterCols[0].index,
-            end: virtualCenterCols[virtualCenterCols.length - 1].index
-        };
-    }, [virtualCenterCols]);
+    const firstVisibleColIndex = virtualCenterCols.length > 0 ? virtualCenterCols[0].index : 0;
+    const lastVisibleColIndex = virtualCenterCols.length > 0 ? virtualCenterCols[virtualCenterCols.length - 1].index : 0;
+    const visibleColRange = useMemo(() => (
+        virtualCenterCols.length === 0
+            ? DEFAULT_VISIBLE_RANGE
+            : { start: firstVisibleColIndex, end: lastVisibleColIndex }
+    ), [virtualCenterCols.length, firstVisibleColIndex, lastVisibleColIndex]);
 
     /** @type {any} */
     const averageCenterColumnWidth = useMemo(() => {
@@ -342,9 +344,14 @@ export const useColumnVirtualizer = ({
         serverSide,
     ]);
 
+    const lastReportedVisibleRangeRef = useRef({ start: -1, end: -1, stateEpoch: null });
     useEffect(() => {
         if (typeof onPreciseVisibleColRange !== 'function') return;
-        onPreciseVisibleColRange(centerCols.length > 0 ? visibleColRange : DEFAULT_VISIBLE_RANGE);
+        const targetRange = centerCols.length > 0 ? visibleColRange : DEFAULT_VISIBLE_RANGE;
+        const prev = lastReportedVisibleRangeRef.current;
+        if (prev.start === targetRange.start && prev.end === targetRange.end && prev.stateEpoch === stateEpoch) return;
+        lastReportedVisibleRangeRef.current = { start: targetRange.start, end: targetRange.end, stateEpoch };
+        onPreciseVisibleColRange(targetRange);
     }, [centerCols.length, onPreciseVisibleColRange, visibleColRange, stateEpoch]);
 
     return {

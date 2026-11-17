@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { PivotAppBar } from './PivotAppBar';
+import ShimmerFallback from './ShimmerFallback';
 
 // The field/filter/report editor is several times larger than the toolbar.
 // Loading it on first sidebar render lets the grid mount and become
@@ -26,6 +27,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     columnGroupSeparatorOverrides,
     dataBarsColumns,
     dataBarMaximums,
+    dataBarVariant,
     decimalPlaces,
     defaultValueFormat,
     editValueDisplayMode,
@@ -57,6 +59,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     setColumnGroupSeparatorOverrides,
     setDataBarsColumns,
     setDataBarMaximums,
+    setDataBarVariant,
     setDecimalPlaces,
     setDefaultValueFormat,
     setEditValueDisplayMode,
@@ -113,6 +116,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     onApplySelectionValueFormat={applySelectionValueFormat}
     dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
     dataBarMaximums={dataBarMaximums} setDataBarMaximums={setDataBarMaximums}
+    dataBarVariant={dataBarVariant} setDataBarVariant={setDataBarVariant}
     canUndoTransactions={transactionHistoryState.undoCount > 0}
     canRedoTransactions={transactionHistoryState.redoCount > 0}
     transactionHistoryPending={transactionHistoryState.pending}
@@ -189,7 +193,7 @@ export function PivotWorkspaceSidebar({ sidebar }) {
     valConfigs,
   } = sidebar;
 
-  return <React.Suspense fallback={null}>
+  return <React.Suspense fallback={<ShimmerFallback variant="sidebar" width={sidebarWidth} />}>
     <LazySidebarPanel
     sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
     rowFields={rowFields} setRowFields={setRowFieldsWithHistory}

@@ -2,44 +2,70 @@ import React from 'react';
 import Icons from '../utils/Icons';
 
 /** @param {any} p0 @returns {any} */
-const Notification = ({ message, type, onClose }) => (
-    <div role="status" aria-live="polite" style={{
-        position: 'fixed', // Changed from absolute
-        bottom: '20px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        padding: '12px 20px',
-        borderRadius: '8px',
-        color: '#fff',
-        fontSize: '14px',
-        background: type === 'error' ? '#d32f2f' :
-                   type === 'warning' ? '#f57c00' : '#323232',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
-        zIndex: 10000, // High z-index
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        maxWidth: '400px',
-        minWidth: '200px',
-        // Feedback can overlap a cell near the viewport bottom. Keep that
-        // cell usable while the notification is visible; only dismiss targets input.
-        pointerEvents: 'none'
-    }}>
-        <span style={{flex: 1}}>{message}</span>
-        <button type="button" aria-label="Dismiss notification" onClick={onClose} style={{
-            pointerEvents: 'auto',
-            border: 0,
-            margin: 0,
-            color: 'inherit',
-            font: 'inherit',
-            cursor:'pointer',
-            opacity: 0.7,
+const Notification = ({ message, type, onClose }) => {
+    const accentColor = type === 'error'
+        ? '#ef4444'
+        : type === 'warning'
+            ? '#f59e0b'
+            : type === 'success'
+                ? '#10b981'
+                : 'var(--sp-primary, #0a84ff)';
+    return (
+        <div role="status" aria-live="polite" className="sp-toast-surface" style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '10px 14px 10px 16px',
+            borderRadius: '999px',
+            color: 'var(--sp-text, #f8fafc)',
+            fontSize: '13px',
+            fontWeight: 500,
+            fontFamily: 'var(--sp-font-sans, system-ui, -apple-system, sans-serif)',
+            background: 'var(--sp-glass-bg, rgba(28, 28, 30, 0.90))',
+            backdropFilter: 'blur(18px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+            border: '1px solid var(--sp-glass-border, rgba(255, 255, 255, 0.14))',
+            boxShadow: 'var(--sp-shadow, 0 12px 32px rgba(0,0,0,0.28))',
+            animation: 'pivot-toast-enter 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both',
+            zIndex: 10000,
             display: 'flex',
-            padding: '2px',
-            borderRadius: '4px',
-            background: 'rgba(255,255,255,0.1)'
-        }}><Icons.Close/></button>
-    </div>
-);
+            alignItems: 'center',
+            gap: '10px',
+            maxWidth: 'min(440px, calc(100vw - 32px))',
+            minWidth: '220px',
+            // Feedback can overlap a cell near the viewport bottom. Keep that
+            // cell usable while the notification is visible; only dismiss targets input.
+            pointerEvents: 'none'
+        }}>
+            <span aria-hidden="true" style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '999px',
+                background: accentColor,
+                boxShadow: `0 0 0 3px ${type === 'error' ? 'rgba(239,68,68,0.16)' : type === 'warning' ? 'rgba(245,158,11,0.16)' : 'rgba(10,132,255,0.16)'}`,
+                flexShrink: 0,
+            }} />
+            <span style={{ flex: 1, lineHeight: 1.35 }}>{message}</span>
+            <button type="button" className="sp-btn sp-btn-ghost" aria-label="Dismiss notification" onClick={onClose} style={{
+                pointerEvents: 'auto',
+                border: 0,
+                margin: 0,
+                color: 'var(--sp-text-sec, inherit)',
+                font: 'inherit',
+                cursor: 'pointer',
+                opacity: 0.78,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '24px',
+                height: '24px',
+                padding: 0,
+                borderRadius: '999px',
+                background: 'var(--sp-hover, rgba(255,255,255,0.1))'
+            }}><Icons.Close/></button>
+        </div>
+    );
+};
 
 export default Notification;

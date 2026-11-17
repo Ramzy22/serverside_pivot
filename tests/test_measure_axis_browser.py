@@ -1091,7 +1091,7 @@ def _drag_sidebar_chip_to_zone(driver, source, zone_id):
 def _activate_persisted_measure_axis(chrome_driver, url):
     chrome_driver.get(url)
     WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     chrome_driver.execute_script(
         """
@@ -1108,7 +1108,7 @@ def _activate_persisted_measure_axis(chrome_driver, url):
     )
     chrome_driver.refresh()
     values_as_select = WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1154,7 +1154,7 @@ def test_measure_axis_rows_browser_renders_aggregate_first_pivot(measure_axis_br
     chrome_driver.get(measure_axis_browser_server)
 
     values_as_select = WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1181,7 +1181,7 @@ def test_measure_axis_rows_browser_renders_hierarchy_levels(measure_axis_hierarc
     chrome_driver.get(measure_axis_hierarchy_browser_server)
 
     values_as_select = WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1203,7 +1203,7 @@ def test_measure_axis_rows_browser_renders_second_level_hierarchy_with_column_fi
     chrome_driver.get(measure_axis_hierarchy_columns_browser_server)
 
     values_as_select = WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1284,7 +1284,7 @@ def test_measure_axis_value_removal_and_restore_keep_hierarchy_populated(
     chrome_driver.get(measure_axis_value_removal_expand_browser_server)
 
     values_as_select = WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1357,7 +1357,7 @@ def test_measure_axis_rows_browser_drag_measure_names_to_second_row_position_the
 ):
     chrome_driver.get(measure_axis_drag_browser_server)
     WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
 
     measure_names_chip = _find_sidebar_chip(
@@ -1388,7 +1388,7 @@ def test_measure_axis_rows_browser_drag_measure_names_to_second_row_position_the
         )
     ]
     assert row_chip_labels == ["Region", "Measure Name", "Desk"]
-    values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, 'select[title="Values placement"]')
+    values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, '[title="Values placement"]')
     assert values_as_select.get_attribute("value") == "rows"
 
     _wait_for_numeric_cell(chrome_driver, "North", "Amount", 200.0)
@@ -1425,7 +1425,7 @@ def test_measure_axis_rows_browser_drag_measure_names_renders_array_agg_sparklin
 ):
     chrome_driver.get(measure_axis_array_drag_browser_server)
     WebDriverWait(chrome_driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[title="Values placement"]'))
     )
 
     measure_names_chip = _find_sidebar_chip(
@@ -1461,7 +1461,7 @@ def test_measure_axis_rows_browser_drag_measure_names_renders_array_agg_sparklin
         )
     ]
     assert row_chip_labels == ["Instrument", "Measure Name"]
-    values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, 'select[title="Values placement"]')
+    values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, '[title="Values placement"]')
     assert values_as_select.get_attribute("value") == "rows"
 
     _click_row_expander(chrome_driver, "AAA")

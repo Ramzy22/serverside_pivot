@@ -2233,17 +2233,11 @@ class ScalablePivotController(PivotController):
                 if 2 <= group_len <= max_group_len:
                     levels_to_paths.setdefault(group_len, []).append(path)
 
-        # 4) Fetch each needed deeper level once (batched).
-        for group_len in sorted(levels_to_paths.keys()):
-            parent_dims = rows[:group_len - 1]
-            group_rows = rows[:group_len]
-            parent_paths = levels_to_paths[group_len]
-            valid_parent_keys = (
-                {self._path_key(p) for p in (parent_paths or [])}
-                if parent_paths
-                else None
-            )
+        # 4) Fetch each needed deeper level once (batched, concurrently when independent).
+        sorted_levels = sorted(levels_to_paths.keys())
 
+        async def _fetch_level(group_len: int, sanitized_paths: Optional[List[List[str]]]):
+            group_rows = rows[:group_len]
             level_spec = spec.copy()
             level_spec.rows = group_rows
             self._mark_measure_axis_exact_layout(level_spec)
@@ -2252,17 +2246,10 @@ class ScalablePivotController(PivotController):
             # Only root level should carry totals. Deeper totals create duplicate subtotal
             # rows and inflate collapsed row counts.
             level_spec.totals = False
-            if parent_paths:
-                parent_paths = self._sanitize_parent_paths_for_level(
-                    spec.table,
-                    parent_dims,
-                    parent_paths,
-                    valid_node_keys_by_depth.get(group_len - 1),
-                )
-                if not parent_paths:
-                    continue
+            if sanitized_paths:
+                parent_dims = rows[:group_len - 1]
                 level_spec.filters = list(spec.filters or []) + self._build_parent_batch_filters(
-                    parent_dims, parent_paths
+                    parent_dims, sanitized_paths
                 )
 
             level_profile: Dict[str, Any] = {}
@@ -2275,16 +2262,23 @@ class ScalablePivotController(PivotController):
                 )
             except Exception as e:
                 print(f"Error loading level group_len={group_len}: {e}")
-                continue
+                return group_len, None, level_profile, level_started_at
+            return group_len, level_table, level_profile, level_started_at
 
+        def _ingest_level(group_len: int, parent_paths: Optional[List[List[str]]], level_table: Any, level_profile: Dict[str, Any], level_started_at: float) -> None:
+            parent_dims = rows[:group_len - 1]
+            group_rows = rows[:group_len]
+            valid_parent_keys = (
+                {self._path_key(p) for p in (parent_paths or [])}
+                if parent_paths
+                else None
+            )
             level_profiles[f"depth{group_len}"] = {
                 "totalMs": self._profile_ms(level_started_at, time.perf_counter()),
                 **level_profile,
             }
-
             if not isinstance(level_table, pa.Table):
-                continue
-
+                return
             current_level_keys: set[str] = set()
             for row in level_table.to_pylist():
                 parent_key = self._row_parent_key(row, parent_dims)
@@ -2294,9 +2288,30 @@ class ScalablePivotController(PivotController):
                 current_key = self._row_parent_key(row, group_rows)
                 if current_key:
                     current_level_keys.add(current_key)
-
             if current_level_keys:
                 valid_node_keys_by_depth[group_len] = current_level_keys
+
+        if len(sorted_levels) > 1 and all(levels_to_paths[g] is None for g in sorted_levels):
+            fetched = await asyncio.gather(*(_fetch_level(g, None) for g in sorted_levels))
+            for group_len, level_table, level_profile, level_started_at in fetched:
+                if level_table is not None:
+                    _ingest_level(group_len, None, level_table, level_profile, level_started_at)
+        else:
+            for group_len in sorted_levels:
+                parent_dims = rows[:group_len - 1]
+                parent_paths = levels_to_paths[group_len]
+                if parent_paths:
+                    parent_paths = self._sanitize_parent_paths_for_level(
+                        spec.table,
+                        parent_dims,
+                        parent_paths,
+                        valid_node_keys_by_depth.get(group_len - 1),
+                    )
+                    if not parent_paths:
+                        continue
+                g_len, level_table, level_profile, level_started_at = await _fetch_level(group_len, parent_paths)
+                if level_table is not None:
+                    _ingest_level(g_len, parent_paths, level_table, level_profile, level_started_at)
 
         _finish_batch_profile()
         return results

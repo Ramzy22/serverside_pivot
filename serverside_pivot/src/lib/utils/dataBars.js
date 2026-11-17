@@ -4,6 +4,11 @@ export const normalizeDataBarMaximums = (value) => Object.fromEntries(
         .filter(([column, maximum]) => column && typeof maximum === 'number' && Number.isFinite(maximum) && maximum > 0)
 );
 
+/** @param {any} [value] @returns {'fill' | 'underbar'} */
+export const normalizeDataBarVariant = (value) => (
+    String(value || '').trim().toLowerCase() === 'underbar' ? 'underbar' : 'fill'
+);
+
 /** @param {any} [previous] @param {any} [columns] @param {any} [maximum] @returns {any} */
 export const updateDataBarMaximums = (previous, columns, maximum) => {
     /** @type {any} */

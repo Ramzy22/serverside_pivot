@@ -135,6 +135,8 @@ export const useServerSideRowModel = ({
     tableName = null,
     abortGeneration = 0,
     structuralInFlight = false,
+    stateEpochRef = null,
+    structuralPendingVersionRef = null,
     requestVersionRef: externalRequestVersionRef = null,
     colStart = null,
     colEnd = null,
@@ -170,6 +172,11 @@ export const useServerSideRowModel = ({
     const internalRequestVersionRef = useRef(0);
     /** @type {any} */
     const requestVersionRef = externalRequestVersionRef || internalRequestVersionRef;
+    const hasPendingStructuralTransition = useCallback(() => Boolean(
+        structuralInFlight
+        || (structuralPendingVersionRef && structuralPendingVersionRef.current)
+        || (stateEpochRef && Number.isFinite(Number(stateEpochRef.current)) && stateEpochRef.current !== stateEpoch)
+    ), [structuralInFlight, structuralPendingVersionRef, stateEpochRef, stateEpoch]);
     /** @type {any} */
     const inflightRequestRef = useRef(null);
     /** @type {any} */
@@ -338,6 +345,16 @@ export const useServerSideRowModel = ({
         rowVirtualizer.measure();
     }, [serverSide, rowCount, rowHeight, rowVirtualizer]);
 
+    const previousLifecycle = lifecycleResetRef.current;
+    const cacheKeyChangedThisRender = Boolean(
+        serverSide
+        && (
+            !previousLifecycle.initialized
+            || !previousLifecycle.serverSide
+            || previousLifecycle.cacheKey !== cacheKey
+        )
+    );
+
     useEffect(() => {
         const previous = lifecycleResetRef.current;
         if (!serverSide) {
@@ -419,8 +436,9 @@ export const useServerSideRowModel = ({
         }
     }, [serverSide, rowCount, rowHeight, rowVirtualizer, parentRef]);
 
-    // 3. Sync incoming data to Cache
-    useEffect(() => {
+    // 3. Sync incoming data to Cache before browser paint so expand/collapse updates
+    // rowCount and cached rows atomically without a 1-frame skeleton flash.
+    useLayoutEffect(() => {
         if (!serverSide || !data) return;
 
         /** @type {any} */
@@ -805,7 +823,7 @@ export const useServerSideRowModel = ({
         queuedAt = Date.now(),
         options = {}
     ) => {
-        if (!isMountedRef.current || !setProps || blocksNeeded.length === 0) return false;
+        if (!isMountedRef.current || !setProps || blocksNeeded.length === 0 || (hasPendingStructuralTransition() && !options.allowRetry)) return false;
         /** @type {any} */
         const abortSignal = viewportAbortControllerRef.current ? viewportAbortControllerRef.current.signal : null;
         if (abortSignal && abortSignal.aborted) return false;
@@ -1107,6 +1125,7 @@ export const useServerSideRowModel = ({
         showSubtotals,
         layoutRequestFields,
         scheduleViewportRetry,
+        hasPendingStructuralTransition,
         rowCount,
     ]);
 
@@ -1232,7 +1251,7 @@ export const useServerSideRowModel = ({
 
     /** @type {(...args: any[]) => any} */
     const requestUrgentColumnViewport = useCallback((overrideColStart, overrideColEnd) => {
-        if (!serverSide || !parentRef.current || structuralInFlight) return false;
+        if (!serverSide || !parentRef.current || hasPendingStructuralTransition()) return false;
 
         const scrollEl = parentRef.current;
         /** @type {any} */
@@ -1301,7 +1320,7 @@ export const useServerSideRowModel = ({
             && !(inflight && inflight.version === failed.windowSeq && failed.requestId
                 && inflight.requestId !== failed.requestId));
         if (failed && !retryIsCurrent) return false;
-        if (!serverSide || !parentRef.current || (structuralInFlight && !retryIsCurrent)) return false;
+        if (!serverSide || !parentRef.current || (hasPendingStructuralTransition() && !retryIsCurrent)) return false;
 
         // Explicit recovery retires the failed request and any queued stale
         // window, then goes through normal current-viewport request generation.
@@ -1346,7 +1365,7 @@ export const useServerSideRowModel = ({
             overrideColStart,
             overrideColEnd,
             Date.now(),
-            { silent: !retryIsCurrent }
+            { silent: !retryIsCurrent, allowRetry: retryIsCurrent }
         );
     }, [
         blockSize,
@@ -1378,7 +1397,7 @@ export const useServerSideRowModel = ({
 
         /** @returns {any} */
         const handleScroll = () => {
-            if (structuralInFlight) {
+            if (hasPendingStructuralTransition() || cacheKeyChangedThisRender) {
                 lastObservedScrollTopRef.current = scrollEl.scrollTop;
                 return;
             }
@@ -1444,6 +1463,7 @@ export const useServerSideRowModel = ({
         serverSide,
         parentRef,
         structuralInFlight,
+        cacheKeyChangedThisRender,
         rowHeight,
         blockSize,
         rowCount,
@@ -1505,7 +1525,7 @@ export const useServerSideRowModel = ({
             lastPrunedRangeRef.current = { startBlock, endBlock };
         }
 
-        if (structuralInFlight) {
+        if (hasPendingStructuralTransition() || cacheKeyChangedThisRender) {
             const existingPending = pendingViewportRef.current;
             pendingViewportRef.current = existingPending
                 ? {
@@ -1557,6 +1577,7 @@ export const useServerSideRowModel = ({
         stateEpoch,
         structuralInFlight,
         inflightClearedAt,
+        cacheKeyChangedThisRender,
         cacheVersion,
         collectBlocksNeeded,
         enqueueViewportRequest,
@@ -1568,7 +1589,7 @@ export const useServerSideRowModel = ({
     ]);
 
     useEffect(() => {
-        if (!viewportSchedulingEnabled || !serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0) return;
+        if (!viewportSchedulingEnabled || !serverSide || hasPendingStructuralTransition() || cacheKeyChangedThisRender || !pendingViewportRef.current || virtualRows.length === 0) return;
 
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
@@ -1576,13 +1597,7 @@ export const useServerSideRowModel = ({
         const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
 
         /** @type {any} */
-        const { startBlock, endBlock, blocksNeeded } = pending.blocksNeeded && pending.blocksNeeded.length > 0
-            ? {
-                startBlock: Math.floor(pending.firstRow / blockSize),
-                endBlock: Math.floor(pending.lastRow / blockSize),
-                blocksNeeded: pending.blocksNeeded,
-            }
-            : collectBlocksNeeded(pending.firstRow, pending.lastRow);
+        const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(pending.firstRow, pending.lastRow);
 
         setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
         pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
@@ -1590,7 +1605,7 @@ export const useServerSideRowModel = ({
         if (blocksNeeded.length > 0) {
             enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, { immediate: true });
         }
-    }, [serverSide, structuralInFlight, virtualRows, blockSize, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange]);
+    }, [viewportSchedulingEnabled, serverSide, structuralInFlight, cacheKeyChangedThisRender, virtualRows, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange, hasPendingStructuralTransition]);
 
     // 4. Check Viewport & Trigger Fetch (with Debounce)
     useEffect(() => {
@@ -1660,7 +1675,7 @@ export const useServerSideRowModel = ({
                 }
             }
 
-            if (structuralInFlight) {
+            if (hasPendingStructuralTransition() || cacheKeyChangedThisRender) {
                 pendingViewportRef.current = { firstRow, lastRow };
                 return;
             }
@@ -1694,7 +1709,7 @@ export const useServerSideRowModel = ({
     }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd, resolveRetentionBufferBlocks]);
 
     useEffect(() => {
-        if (!serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
+        if (!serverSide || hasPendingStructuralTransition() || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
 
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
@@ -1764,6 +1779,9 @@ export const useServerSideRowModel = ({
 
     // 5. Cleanup Effect
     useEffect(() => {
+        if (!viewportAbortControllerRef.current || viewportAbortControllerRef.current.signal.aborted) {
+            viewportAbortControllerRef.current = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        }
         return () => {
             // Clear cache when hook unmounts to prevent memory leaks
             if (clearCache) clearCache();

@@ -1234,3 +1234,451 @@ test('Audit fix: formula measure with custom id and colFields.length > 0 aligns 
         'column-scope formula id ending with _<field> must not create a bogus group'
     );
 });
+
+test('Content-aware fitToWidth, configurable minFontSize, explicit fontSize preservation, and mobile compact scaling', () => {
+    const {
+        computeCompactFitThemeOverrides,
+        computeFitToWidthLayout,
+        createTextWidthMeasurer,
+        measureColumnFitMetric,
+    } = loader.load('src/lib/utils/pivotLayoutUtils.js');
+
+    const measure8pxChar = createTextWidthMeasurer('12px Inter', 7);
+    const sampleRows = [
+        { original: { _id: 'APAC', depth: 0, a: 1200, b: 950, c: 410, d: 88, e: 12, f: 45, g: 310, h: 99 } },
+        { original: { _id: 'Grand Total', depth: 0, a: 1234567, b: 950000, c: 41000, d: 8800, e: 1200, f: 4500, g: 31000, h: 9900 } },
+    ];
+    const colIds = ['hierarchy', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const desktopMetrics = colIds.map((columnId) => measureColumnFitMetric({
+        columnId,
+        baseSize: 190, // sum = 1710 > 1500, yet content easily fits at 12px!
+        rows: sampleRows,
+        getCellRawValue: (row, id) => row.original[id],
+        formatCellText: (val) => String(val ?? ''),
+        headerLines: [columnId === 'hierarchy' ? 'Region' : columnId.toUpperCase()],
+        headerWrap: true,
+        headerControlsMode: 'hover',
+        canSort: true,
+        sortIndicator: 'arrow',
+        measureBodyText: measure8pxChar,
+        measureHeaderText: measure8pxChar,
+        cellPaddingX: 12,
+        headerPaddingX: 12,
+        numericPaddingRight: 8,
+    }));
+
+    const desktopFit = computeFitToWidthLayout({
+        columns: desktopMetrics,
+        containerWidth: 1500,
+        baseFontSize: 12,
+        minFontSize: 5,
+    });
+    assert.equal(desktopFit.fontSize, 12, '1500px desktop must keep explicit 12px fontSize when content fits');
+    const desktopTotalWidth = Object.values(desktopFit.columnSizing).reduce((acc, w) => acc + w, 0);
+    assert.ok(desktopTotalWidth <= 1500);
+
+    // Tight 393px phone container where 12px content overflows: must scale below 10px down toward configurable minFontSize
+    const phoneCols = ['hierarchy', 'm1', 'm2', 'm3', 'm4', 'm5'].map((columnId) => measureColumnFitMetric({
+        columnId,
+        baseSize: 140,
+        rows: [{ original: { _id: 'Commercial', depth: 0, m1: '$123,456,789', m2: '$98,765,432', m3: '$45,678,901', m4: '$12,345,678', m5: '$87,654,321' } }],
+        getCellRawValue: (row, id) => row.original[id],
+        formatCellText: (val) => String(val ?? ''),
+        headerLines: [columnId === 'hierarchy' ? 'Region' : 'Total Revenue'],
+        shortLabel: columnId === 'hierarchy' ? null : columnId.toUpperCase(),
+        headerWrap: true,
+        headerControlsMode: 'hover',
+        canSort: true,
+        sortIndicator: 'arrow',
+        measureBodyText: measure8pxChar,
+        measureHeaderText: measure8pxChar,
+        cellPaddingX: 12,
+        headerPaddingX: 12,
+        numericPaddingRight: 8,
+    }));
+
+    const phoneFit = computeFitToWidthLayout({
+        columns: phoneCols,
+        containerWidth: 393,
+        baseFontSize: 12,
+        minFontSize: 4,
+    });
+    assert.ok(phoneFit.fontSize < 10 && phoneFit.fontSize >= 4, `Expected phone fontSize in [4, 10), got ${phoneFit.fontSize}`);
+    const phoneTotalWidth = Object.values(phoneFit.columnSizing).reduce((acc, w) => acc + w, 0);
+    assert.ok(phoneTotalWidth <= 393, `Expected phone fitted width <= 393, got ${phoneTotalWidth}`);
+    const compact = computeCompactFitThemeOverrides(
+        { fontSize: 12, headerFontSize: 12, cellPaddingX: 12, headerPaddingX: 12, numericPaddingRight: 8 },
+        phoneFit.fontSize / 12,
+        phoneFit.fontSize,
+        4
+    );
+    assert.equal(compact.fontSize, phoneFit.fontSize);
+    assert.ok(compact.cellPaddingX < 12, 'mobile fit scales horizontal cell padding proportionally');
+    assert.ok(compact.numericPaddingRight < 8);
+});
+
+test('Structural theme tokens derive hierarchyBg from headerBg and totalBgStrong/totalTextStrong from totalBg/totalText', () => {
+    const { themes, deriveStructuralThemeTokens, resolveThemeOverrides } = loader.load('src/lib/utils/styles.js');
+    const overrides = resolveThemeOverrides('flash', {
+        headerBg: '#F1F5F9',
+        totalBg: '#ECFDF5',
+        totalText: '#065F46',
+    });
+    const derived = deriveStructuralThemeTokens({ ...themes.flash, ...overrides }, overrides);
+    assert.equal(derived.hierarchyBg, '#F1F5F9');
+    assert.equal(derived.totalBgStrong, '#ECFDF5');
+    assert.equal(derived.totalTextStrong, '#065F46');
+
+    const explicit = resolveThemeOverrides('flash', {
+        headerBg: '#F1F5F9',
+        hierarchyBg: '#E2E8F0',
+        totalBg: '#ECFDF5',
+        totalBgStrong: '#D1FAE5',
+        totalText: '#065F46',
+        totalTextStrong: '#022C22',
+    });
+    const derivedExplicit = deriveStructuralThemeTokens({ ...themes.flash, ...explicit }, explicit);
+    assert.equal(derivedExplicit.hierarchyBg, '#E2E8F0');
+    assert.equal(derivedExplicit.totalBgStrong, '#D1FAE5');
+    assert.equal(derivedExplicit.totalTextStrong, '#022C22');
+});
+
+test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badge obeys headerControls/showAbsoluteSortBadge', () => {
+    const React = localRequire('react');
+    const ReactDOMServer = localRequire('react-dom/server');
+    const { useRenderHelpers } = loader.load('src/lib/hooks/useRenderHelpers.js');
+    const { themes } = loader.load('src/lib/utils/styles.js');
+
+    const findElements = (node, pred, acc = []) => {
+        if (!node || typeof node !== 'object') return acc;
+        if (Array.isArray(node)) {
+            node.forEach((child) => findElements(child, pred, acc));
+            return acc;
+        }
+        if (pred(node)) acc.push(node);
+        if (node.props && node.props.children) findElements(node.props.children, pred, acc);
+        return acc;
+    };
+
+    const renderHeaderWith = ({ themeOverrides = {}, headerWidth = 92, wrapHeaders = true }) => {
+        let helperApi = null;
+        const theme = { ...themes.flash, ...themeOverrides };
+        function Probe() {
+            helperApi = useRenderHelpers({
+                serverSide: true,
+                selectedCells: {},
+                fillRange: null,
+                dragStart: null,
+                theme,
+                getStickyStyle: () => ({}),
+                isDarkTheme: () => false,
+                handleCellMouseDown: () => {},
+                handleCellMouseEnter: () => {},
+                handleContextMenu: () => {},
+                handleFillMouseDown: () => {},
+                visibleLeafColIndexMap: new Map([['pnl_sum', 0]]),
+                lastSelected: null,
+                styles: { cell: {}, headerCell: {} },
+                getConditionalStyle: () => ({}),
+                rowHeight: 32,
+                headerHeight: 36,
+                rowFields: ['region'],
+                tableRef: { current: null },
+                leftCols: [],
+                centerCols: [{ id: 'pnl_sum' }],
+                rightCols: [],
+                columnPinning: { left: [], right: [] },
+                sorting: [{ id: 'pnl_sum', desc: true, absoluteSort: true }],
+                sortOptions: { columnOptions: { pnl_sum: { absoluteSort: true } } },
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 12,
+                handleHeaderContextMenu: () => {},
+                autoSizeColumn: () => {},
+                autoSizeBounds: { minWidth: 40, maxWidth: 400 },
+                hoveredHeaderIdRef: { current: null },
+                setHoveredHeaderId: () => {},
+                focusedHeaderIdRef: { current: null },
+                setFocusedHeaderId: () => {},
+                onDragStart: () => {},
+                onHeaderDrop: () => {},
+                onHeaderDragOver: () => {},
+                onHeaderDragEnd: () => {},
+                onHeaderKeyboardMove: () => {},
+                onHeaderKeyboardPin: () => {},
+                dragOverHeaderId: null,
+                dragOverSide: null,
+                handleFilterClick: () => {},
+                handleHeaderFilter: () => {},
+                activeFilterCol: null,
+                filterAnchorEl: null,
+                closeFilterPopover: () => {},
+                activeFilterOptions: [],
+                activeFilterOptionMeta: null,
+                requestFilterOptions: () => {},
+                filters: {},
+                selectedCols: new Set(),
+                getHeaderStickyStyle: () => ({}),
+                dataBarsColumns: new Set(),
+                dataBarMaximums: {},
+                colorScaleStats: {},
+                cellFormatRules: {},
+                resolveEditedCellMarker: () => null,
+                resolveCellDisplayValue: (_r, _c, v) => v,
+                editedCellEpoch: 0,
+                headerFormatting: {},
+                getLocaleText: (_k, fallback) => fallback,
+                wrapHeaders,
+                table: null,
+                selectedRowKeys: new Set(),
+                toggleRowCheckbox: () => {},
+                rowCheckboxMode: 'single',
+            });
+            return null;
+        }
+        ReactDOMServer.renderToStaticMarkup(React.createElement(Probe));
+        const fakeColumn = {
+            id: 'pnl_sum',
+            columns: [],
+            columnDef: {
+                header: 'Consolidated Performance Revenue',
+                meta: { shortLabel: 'x', preserveHeaderLabel: true },
+            },
+            getSize: () => headerWidth,
+            getCanSort: () => true,
+            getCanResize: () => true,
+            getIsSorted: () => 'desc',
+            getSortIndex: () => 0,
+            getIsResizing: () => false,
+            getIsPinned: () => false,
+            getLeafColumns: () => [],
+            getToggleSortingHandler: () => () => {},
+        };
+        fakeColumn.getLeafColumns = () => [fakeColumn];
+        const fakeHeader = {
+            id: 'pnl_sum',
+            column: fakeColumn,
+            isPlaceholder: false,
+            subHeaders: [],
+            getSize: () => headerWidth,
+            getContext: () => ({}),
+            getResizeHandler: () => () => {},
+        };
+        return helperApi.renderHeaderCell(fakeHeader, 0, 'center', headerWidth, false);
+    };
+
+    const hoverTree = renderHeaderWith({ themeOverrides: { headerControls: 'hover', headerWrap: true }, headerWidth: 92 });
+    const headerTextNodes = findElements(hoverTree, (el) => el.props && el.props['data-header-text'] === 'true');
+    assert.equal(headerTextNodes.length, 1);
+    assert.equal(headerTextNodes[0].props.style.wordBreak, 'normal');
+    assert.equal(headerTextNodes[0].props.style.overflowWrap, 'normal');
+    assert.equal(headerTextNodes[0].props.children, 'x', 'overflowing header at 92px must switch to shortLabel');
+    assert.equal(headerTextNodes[0].props.title, 'Consolidated Performance Revenue');
+
+    const hoverBadge = findElements(hoverTree, (el) => el.props && el.props.title === 'Absolute value sort');
+    assert.equal(hoverBadge.length, 1);
+    assert.ok(String(hoverBadge[0].props.className).includes('sp-header-control'), 'under headerControls=hover, |x| badge hides until hover/focus');
+
+    const disabledBadgeTree = renderHeaderWith({ themeOverrides: { headerControls: 'hover', showAbsoluteSortBadge: false }, headerWidth: 180 });
+    assert.equal(findElements(disabledBadgeTree, (el) => el.props && el.props.title === 'Absolute value sort').length, 0);
+
+    const forcedBadgeTree = renderHeaderWith({ themeOverrides: { headerControls: 'hover', showAbsoluteSortBadge: true }, headerWidth: 180 });
+    const forcedBadges = findElements(forcedBadgeTree, (el) => el.props && el.props.title === 'Absolute value sort');
+    assert.equal(forcedBadges.length, 1);
+    assert.ok(!String(forcedBadges[0].props.className || '').includes('sp-header-control'));
+});
+
+test('Pivot mode header-click re-sorting preserves absoluteSort and showGrandTotal={false} hides Grand Total', async () => {
+    const harness = createRuntimeHarness();
+    try {
+        const rows = [
+            { region: 'South', pnl: -250 },
+            { region: 'North', pnl: 120 },
+            { region: 'East', pnl: 50 },
+            { region: 'West', pnl: -10 },
+        ];
+        let latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs: [{ field: 'pnl', agg: 'sum', label: 'Consolidated PnL', shortLabel: 'PnL' }],
+            sorting: [{ id: 'pnl_sum', desc: true, absoluteSort: true }],
+            showGrandTotal: false,
+            themeOverrides: {
+                headerControls: 'hover',
+                headerBg: '#F1F5F9',
+                totalBg: '#ECFDF5',
+                totalText: '#065F46',
+                fontSize: 12,
+                minFontSize: 5,
+            },
+        }, 5);
+
+        assert.equal(latest.workspace.presentation.grandTotalRow, undefined, 'showGrandTotal={false} must suppress grand total in pivot mode');
+        assert.deepEqual(
+            latest.workspace.presentation.effectiveCenterRows.map((r) => r.original._id),
+            ['South', 'North', 'East', 'West'],
+            'initial sort by |pnl| desc'
+        );
+
+        // Simulate clicking header to flip desc -> asc
+        latest.workspace.presentation.table.getColumn('pnl_sum').toggleSorting(false);
+        latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs: [{ field: 'pnl', agg: 'sum', label: 'Consolidated PnL', shortLabel: 'PnL' }],
+            sorting: [{ id: 'pnl_sum', desc: true, absoluteSort: true }],
+            showGrandTotal: false,
+            themeOverrides: {
+                headerControls: 'hover',
+                headerBg: '#F1F5F9',
+                totalBg: '#ECFDF5',
+                totalText: '#065F46',
+                fontSize: 12,
+                minFontSize: 5,
+            },
+        }, 5);
+        assert.equal(latest.viewport.sorting[0].absoluteSort, true, 'flipping direction must keep absoluteSort=true');
+        assert.deepEqual(
+            latest.workspace.presentation.effectiveCenterRows.map((r) => r.original._id),
+            ['West', 'East', 'North', 'South'],
+            'flipped header click sort must sort by |pnl| asc'
+        );
+
+        // Sort another column, then click pnl_sum again -> absoluteSort still preserved!
+        latest.workspace.presentation.table.getColumn('hierarchy').toggleSorting(false);
+        latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs: [{ field: 'pnl', agg: 'sum', label: 'Consolidated PnL', shortLabel: 'PnL' }],
+            sorting: [{ id: 'pnl_sum', desc: true, absoluteSort: true }],
+            showGrandTotal: false,
+            themeOverrides: {
+                headerControls: 'hover',
+                headerBg: '#F1F5F9',
+                totalBg: '#ECFDF5',
+                totalText: '#065F46',
+                fontSize: 12,
+                minFontSize: 5,
+            },
+        }, 5);
+        latest.workspace.presentation.table.getColumn('pnl_sum').toggleSorting(true);
+        latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs: [{ field: 'pnl', agg: 'sum', label: 'Consolidated PnL', shortLabel: 'PnL' }],
+            sorting: [{ id: 'pnl_sum', desc: true, absoluteSort: true }],
+            showGrandTotal: false,
+            themeOverrides: {
+                headerControls: 'hover',
+                headerBg: '#F1F5F9',
+                totalBg: '#ECFDF5',
+                totalText: '#065F46',
+                fontSize: 12,
+                minFontSize: 5,
+            },
+        }, 5);
+        assert.equal(latest.viewport.sorting[0].absoluteSort, true, 'returning to pnl_sum header must preserve absoluteSort=true');
+        assert.deepEqual(
+            latest.workspace.presentation.effectiveCenterRows.map((r) => r.original._id),
+            ['South', 'North', 'East', 'West']
+        );
+
+        // Also test 2D pivot (colFields: ['quarter']) shortLabel propagation & absoluteSort click
+        const pivot2dHarness = createRuntimeHarness();
+        try {
+            const pivot2dProps = {
+                data: [
+                    { region: 'South', quarter: 'Q1', pnl: -250 },
+                    { region: 'North', quarter: 'Q1', pnl: 120 },
+                    { region: 'East', quarter: 'Q1', pnl: -50 },
+                ],
+                rowFields: ['region'],
+                colFields: ['quarter'],
+                valConfigs: [{ field: 'pnl', agg: 'sum', label: 'Quarterly Profit', shortLabel: 'x' }],
+                sortOptions: { columnOptions: { Q1_pnl_sum: { absoluteSort: true } } },
+            };
+            let pivot2d = await pivot2dHarness.settle(pivot2dProps, 5);
+            const q1LeafCol = pivot2d.workspace.presentation.table.getColumn('Q1_pnl_sum');
+            assert.ok(q1LeafCol);
+            assert.equal(q1LeafCol.columnDef.meta.shortLabel, 'x', '2D pivot leaf column must retain shortLabel');
+            q1LeafCol.toggleSorting(true);
+            pivot2d = await pivot2dHarness.settle(pivot2dProps, 5);
+            assert.equal(pivot2d.viewport.sorting[0].absoluteSort, true);
+            assert.deepEqual(
+                pivot2d.workspace.presentation.effectiveCenterRows.map((r) => r.original._id),
+                ['South', 'North', 'East']
+            );
+        } finally {
+            pivot2dHarness.cleanup();
+        }
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('End-to-end fitToWidth preserves explicit fontSize on 1500px desktop and scales below 10px at 393px phone', async () => {
+    const prevResizeObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+    const harness = createRuntimeHarness();
+    try {
+        const rows = [
+            { region: 'North', a: 1234567, b: 987654, c: 456789, d: 234567, e: 876543 },
+            { region: 'South', a: 2345678, b: 654321, c: 345678, d: 123456, e: 765432 },
+        ];
+        const valConfigs = [
+            { field: 'a', agg: 'sum', label: 'Revenue A', shortLabel: 'A' },
+            { field: 'b', agg: 'sum', label: 'Revenue B', shortLabel: 'B' },
+            { field: 'c', agg: 'sum', label: 'Revenue C', shortLabel: 'C' },
+            { field: 'd', agg: 'sum', label: 'Revenue D', shortLabel: 'D' },
+            { field: 'e', agg: 'sum', label: 'Revenue E', shortLabel: 'E' },
+        ];
+        let mockWidth = 1500;
+        const resizeCbs = new Set();
+        globalThis.ResizeObserver = class {
+            constructor(cb) { this.cb = cb; }
+            observe() { resizeCbs.add(this.cb); }
+            disconnect() { resizeCbs.delete(this.cb); }
+        };
+        let latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs,
+            fitToWidth: { enabled: true, minFontSize: 4 },
+            themeOverrides: { fontSize: 12, headerControls: 'hover', headerWrap: true },
+        }, 5);
+
+        // Simulate 1500px container -> content fits -> explicit 12px preserved
+        latest.workspace.presentation.parentRef.current = {
+            get clientWidth() { return mockWidth; },
+            clientHeight: 600,
+            scrollTop: 0,
+            scrollLeft: 0,
+            addEventListener() {},
+            removeEventListener() {},
+        };
+        latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs,
+            fitToWidth: { enabled: true, minFontSize: 4 },
+            themeOverrides: { fontSize: 12, headerControls: 'hover', headerWrap: true },
+        }, 5);
+        assert.equal(latest.viewport.effectiveFontSize, '12px', 'desktop 1500px must keep explicit 12px fontSize');
+
+        // Shrink container to 393px phone -> overflows -> scales below 10px cleanly
+        mockWidth = 393;
+        resizeCbs.forEach((cb) => cb());
+        latest = await harness.settle({
+            data: rows,
+            rowFields: ['region'],
+            valConfigs,
+            fitToWidth: { enabled: true, minFontSize: 4 },
+            themeOverrides: { fontSize: 12, headerControls: 'hover', headerWrap: true },
+        }, 5);
+        const phoneFontPx = parseFloat(latest.viewport.effectiveFontSize);
+        assert.ok(Number.isFinite(phoneFontPx) && phoneFontPx < 10 && phoneFontPx >= 4, `Expected phone effectiveFontSize < 10 and >= 4, got ${latest.viewport.effectiveFontSize}`);
+        assert.equal(latest.shellElement.props.style['--sp-font-size'], latest.viewport.effectiveFontSize);
+    } finally {
+        harness.cleanup();
+        if (prevResizeObserver) Object.defineProperty(globalThis, 'ResizeObserver', prevResizeObserver);
+        else delete globalThis.ResizeObserver;
+    }
+});

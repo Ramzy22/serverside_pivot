@@ -78,6 +78,7 @@ function normalizeValConfigs(value: unknown): NormalizedValConfig[] {
             agg,
             id,
             label,
+            shortLabel: typeof item.shortLabel === 'string' && item.shortLabel.trim() ? item.shortLabel.trim() : undefined,
             weightField: typeof item.weightField === 'string' ? item.weightField : undefined,
             windowFn: windowFnRaw,
             formula: typeof item.formula === 'string' ? item.formula : undefined,
@@ -227,6 +228,9 @@ function normalizeSorting(rawSorting: unknown, rawSortOptions: unknown): Normali
     const fieldOptions = (sortOpts.fieldOptions && typeof sortOpts.fieldOptions === 'object')
         ? (sortOpts.fieldOptions as { [key: string]: { [key: string]: unknown } })
         : {};
+    const columnOptions = (sortOpts.columnOptions && typeof sortOpts.columnOptions === 'object')
+        ? (sortOpts.columnOptions as { [key: string]: { [key: string]: unknown } })
+        : {};
     const result: NormalizedSortRule[] = [];
     for (const item of rawSorting) {
         if (!item || typeof item !== 'object') continue;
@@ -235,17 +239,21 @@ function normalizeSorting(rawSorting: unknown, rawSortOptions: unknown): Normali
             ? entry.id.trim()
             : (typeof entry.colId === 'string' ? entry.colId.trim() : '');
         if (!id) continue;
-        const fieldOpt = fieldOptions[id] || {};
+        const fieldOpt = {
+            ...(fieldOptions[id] || {}),
+            ...(columnOptions[id] || {}),
+        };
+        const rawSortType = entry.sortType ?? entry.sortMode ?? fieldOpt.sortType ?? fieldOpt.sortMode;
+        const normalizedType = typeof rawSortType === 'string' ? rawSortType.trim().toLowerCase() : '';
+        const isAbsType = normalizedType === 'absolute' || normalizedType === 'abs' || normalizedType === 'absolute_value' || normalizedType === 'absolute-value';
         result.push({
             id,
             desc: Boolean(entry.desc),
-            sortType: typeof entry.sortType === 'string'
-                ? entry.sortType
-                : (typeof fieldOpt.sortType === 'string' ? fieldOpt.sortType : undefined),
+            sortType: typeof rawSortType === 'string' ? rawSortType : undefined,
             sortKeyField: typeof entry.sortKeyField === 'string'
                 ? entry.sortKeyField
                 : (typeof fieldOpt.sortKeyField === 'string' ? fieldOpt.sortKeyField : undefined),
-            absoluteSort: Boolean(entry.absoluteSort ?? fieldOpt.absoluteSort),
+            absoluteSort: Boolean(entry.absoluteSort ?? fieldOpt.absoluteSort ?? isAbsType),
         });
     }
     return result;
@@ -570,6 +578,9 @@ export class ClientSqlPlanner {
                 naturalSort: sortOptionsRaw.naturalSort !== false,
                 fieldOptions: (sortOptionsRaw.fieldOptions && typeof sortOptionsRaw.fieldOptions === 'object')
                     ? (sortOptionsRaw.fieldOptions as LogicalPivotPlan['sortOptions']['fieldOptions'])
+                    : {},
+                columnOptions: (sortOptionsRaw.columnOptions && typeof sortOptionsRaw.columnOptions === 'object')
+                    ? (sortOptionsRaw.columnOptions as LogicalPivotPlan['sortOptions']['columnOptions'])
                     : {},
             },
             expandedAll,

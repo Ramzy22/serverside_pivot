@@ -29,6 +29,7 @@ export type { PivotWorkspaceProps } from './components/PivotWorkspace';
 export type {
     PivotRuntimeProps,
     PivotThemeName,
+    PivotThemeOverrides,
     PivotValueConfig,
     ValConfig,
     FilterCondition,

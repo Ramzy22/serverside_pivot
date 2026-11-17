@@ -832,4 +832,58 @@ if (process.env.PIVOT_CLIENT_BATCH_INPUT && process.env.PIVOT_CLIENT_BATCH_OUTPU
             URL.revokeObjectURL = originalRevokeObjectURL;
         }
     });
+
+    test('ClientPivotTransport emits full dataset availableFields independently of rowFields and envelope preserves it', async () => {
+        const { ClientPivotTransport } = loadClientModule();
+        const normMod = (() => {
+            const filename = path.join(frontend, 'src/lib/hooks/usePivotNormalization.js');
+            const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), { filename, presets }).code;
+            const mod = { exports: {} };
+            const helpersPath = path.join(frontend, 'src/lib/utils/helpers.js');
+            const helpersCode = babel.transformSync(fs.readFileSync(helpersPath, 'utf8'), { filename: helpersPath, presets }).code;
+            const helpersMod = { exports: {} };
+            new Function('module', 'exports', 'require', helpersCode)(helpersMod, helpersMod.exports, (s) => localRequire(s));
+            new Function('module', 'exports', 'require', code)(mod, mod.exports, (s) => (s.includes('helpers') ? helpersMod.exports : localRequire(s)));
+            return mod.exports;
+        })();
+
+        const transport = new ClientPivotTransport({
+            executionMode: 'client',
+            data: SAMPLE_DATASET,
+            tableName: 'sales',
+        });
+        const expectedSchema = Object.keys(SAMPLE_DATASET[0]);
+        assert.deepEqual(transport.getAvailableFields(), expectedSchema);
+
+        let envelope = null;
+        for (const rowFields of [['region', 'country'], ['country'], []]) {
+            const res = await transport.request({
+                schemaVersion: 1,
+                requestId: `avail-${rowFields.length}`,
+                kind: 'data',
+                table: 'sales',
+                state: {
+                    viewMode: 'pivot',
+                    layoutMode: 'hierarchy',
+                    rowFields,
+                    colFields: ['year'],
+                    valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                },
+                payload: { start: 0, end: 20, include_grand_total: true },
+            });
+            assert.deepEqual(res.payload.availableFields, expectedSchema);
+            envelope = normMod.normalizeRuntimeDataEnvelope(res.payload, envelope || {});
+            assert.deepEqual(envelope.availableFields, expectedSchema);
+        }
+
+        // Scroll updates without availableFields must retain previously committed schema
+        const scrollOnlyEnvelope = normMod.normalizeRuntimeDataEnvelope({
+            data: [],
+            rowCount: 1,
+            columns: [],
+            dataOffset: 0,
+            dataVersion: 4,
+        }, envelope);
+        assert.deepEqual(scrollOnlyEnvelope.availableFields, expectedSchema);
+    });
 }

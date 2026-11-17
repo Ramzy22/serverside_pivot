@@ -59,7 +59,7 @@ export function useWorkspaceStatusPresentation({
     data: {
       viewMode,
       rowCount: statusRowCount,
-      visibleRowsCount: rows.length,
+      visibleRowsCount: serverSide ? loadedRows.length : rows.length,
       totalCenterColumns: totalCenterCols,
       rowFieldCount: rowFields.length,
       columnFieldCount: colFields.length,

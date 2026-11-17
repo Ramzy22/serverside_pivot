@@ -106,8 +106,30 @@ function App() {
             {qualification && <button data-qualification-workspace-toggle onClick={() => setWorkspaceMounted(value => !value)}>
                 {workspaceMounted ? 'Unmount workspace' : 'Mount workspace'}
             </button>}
-            {workspaceConfig && workspaceMounted ? <PivotWorkspace {...workspaceConfig} transport={transport} /> : workspaceConfig ? null : (
-                <p role="status">{workspaceConfigError || 'Loading workspace configuration…'}</p>
+            {workspaceConfig && workspaceMounted ? <PivotWorkspace {...workspaceConfig} transport={transport} /> : workspaceConfig ? null : workspaceConfigError ? (
+                <div className="workspace-error" role="alert">
+                    {workspaceConfigError}
+                </div>
+            ) : (
+                <div className="workspace-skeleton" role="status" aria-label="Loading workspace configuration">
+                    <div className="workspace-skeleton-shimmer workspace-skeleton-bar" />
+                    <div className="workspace-skeleton-body">
+                        <div className="workspace-skeleton-sidebar">
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 150 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 220 }} />
+                        </div>
+                        <div className="workspace-skeleton-grid">
+                            <div className="workspace-skeleton-shimmer" style={{ height: 36 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34, opacity: 0.88 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34, opacity: 0.76 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34, opacity: 0.64 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 34, opacity: 0.52 }} />
+                            <div className="workspace-skeleton-shimmer" style={{ height: 28, marginTop: 'auto' }} />
+                        </div>
+                    </div>
+                </div>
             )}
         </section>
 

@@ -80,6 +80,21 @@ export function useRuntimeStructuralSync({
   const initialSyncState = { ...DEFAULT_INITIAL_SYNC_STATE, ...initialState };
   /** @type {any} */
   const lastPropsRef = useRef(initialSyncState);
+  /** @type {any} */
+  const initialBootstrapSentRef = useRef(false);
+  /** @type {any} */
+  const lastPreBootstrapPropsRef = useRef(initialSyncState);
+  /** @type {any} */
+  const serverSideRef = useRef(serverSide);
+  serverSideRef.current = serverSide;
+  useEffect(() => {
+    return () => {
+      if (serverSideRef.current && Number(latestDataVersionRef.current || 0) === 0) {
+        initialBootstrapSentRef.current = false;
+        lastPropsRef.current = lastPreBootstrapPropsRef.current;
+      }
+    };
+  }, []);
   useEffect(() => {
     /** @type {Record<string, any>} */
     const nextProps = {
@@ -103,7 +118,12 @@ export function useRuntimeStructuralSync({
     const colFieldsChanged = JSON.stringify(nextProps.colFields) !== JSON.stringify(lastPropsRef.current.colFields);
     /** @type {any} */
     const changedKeys = Object.keys(nextSyncState).filter(key => JSON.stringify(nextSyncState[key]) !== JSON.stringify(lastPropsRef.current[key]));
-    if (!setPropsRef.current || changedKeys.length === 0) return;
+    const needsInitialBootstrap = Boolean(serverSide && Number(latestDataVersionRef.current || 0) === 0 && !initialBootstrapSentRef.current);
+    if (!setPropsRef.current || (changedKeys.length === 0 && !needsInitialBootstrap)) return;
+    if (!initialBootstrapSentRef.current && Number(latestDataVersionRef.current || 0) === 0) {
+      lastPreBootstrapPropsRef.current = lastPropsRef.current;
+    }
+    initialBootstrapSentRef.current = true;
 
     // A hierarchy toggle can coincide with local display updates during the
     // same React commit. It must still retain the cache and layout history;
@@ -243,7 +263,7 @@ export function useRuntimeStructuralSync({
     /** @type {any} */
     const structuralColumnWindow = resolveStableRequestedColumnWindow();
     /** @type {any} */
-    const schemaShapeChanged = serverSide && changedKeys.some(/** @param {any} [key] @returns {any} */ key => SCHEMA_SHAPE_CHANGE_KEYS.has(key));
+    const schemaShapeChanged = serverSide && (needsInitialBootstrap || changedKeys.some(/** @param {any} [key] @returns {any} */ key => SCHEMA_SHAPE_CHANGE_KEYS.has(key)));
     /** @type {any} */
     const shouldUseFullInitialColumnWindow = serverSide && (schemaShapeChanged || Number(latestDataVersionRef.current || 0) === 0 && structuralColumnWindow.start === 0 && structuralColumnWindow.end === 0);
     /** @type {any} */

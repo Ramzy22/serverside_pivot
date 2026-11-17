@@ -168,13 +168,26 @@ export function createRuntimeRequest(
     input: RuntimeRequestInput,
     defaults: RuntimeRequestDefaults = {},
 ): RuntimeRequestV1 {
+    const resolvedKind = resolveKind(input.kind);
     const payload = resolvePayload(input);
     const rawState = asRecord(input.state);
     const legacyState = asRecord(payload.stateOverride || payload.state_override);
-    const state = Object.keys(rawState).length > 0 ? rawState : legacyState;
+    const mergedState = { ...rawState, ...legacyState };
+    const stateLayoutMode = stringValue(mergedState.layoutMode ?? mergedState.layout_mode);
+    const state = Object.fromEntries(
+        Object.entries(mergedState).filter(([key]) => key !== 'layoutMode' && key !== 'layout_mode')
+    );
     delete payload.stateOverride;
     delete payload.state_override;
 
+    if (
+        stateLayoutMode
+        && payload.layoutMode === undefined
+        && payload.layout_mode === undefined
+        && (resolvedKind !== 'export' || (payload.action !== 'status' && payload.action !== 'cancel'))
+    ) {
+        payload.layoutMode = stateLayoutMode;
+    }
     if (defaults.viewMode && payload.viewMode === undefined) payload.viewMode = defaults.viewMode;
     if (defaults.detailMode && payload.detailMode === undefined) payload.detailMode = defaults.detailMode;
     if (defaults.treeConfig && payload.treeConfig === undefined) payload.treeConfig = defaults.treeConfig as JsonValue;
@@ -185,11 +198,11 @@ export function createRuntimeRequest(
         input.requestId || input.request_id || payload.requestId || payload.request_id
         || payload.request_signature || payload.windowSeq || payload.window_seq
         || payload.version || payload.nonce,
-    ) || `${resolveKind(input.kind)}:${Date.now()}`;
+    ) || `${resolvedKind}:${Date.now()}`;
 
     return {
         schemaVersion: RUNTIME_SCHEMA_VERSION,
-        kind: resolveKind(input.kind),
+        kind: resolvedKind,
         requestId,
         table: stringValue(input.table || payload.table || defaults.tableName),
         sessionId: stringValue(input.sessionId || input.session_id || payload.sessionId || payload.session_id || defaults.sessionId),

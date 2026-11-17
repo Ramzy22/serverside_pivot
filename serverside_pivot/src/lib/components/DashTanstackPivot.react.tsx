@@ -130,6 +130,8 @@ export interface DashValueConfig {
   headerBg?: string;
   headerColor?: string;
   headerTextColor?: string;
+  displayVariant?: string;
+  dataBars?: boolean;
   sparkline?: boolean | object;
 }
 
@@ -231,6 +233,8 @@ DashTanstackPivot.propTypes = {
     headerBg: PropTypes.string,
     headerColor: PropTypes.string,
     headerTextColor: PropTypes.string,
+    displayVariant: PropTypes.string,
+    dataBars: PropTypes.bool,
     sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])
   })),
   measureAxis: PropTypes.shape({

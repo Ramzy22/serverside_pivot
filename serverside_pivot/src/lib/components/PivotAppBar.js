@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
+import ThemedSelect from './ThemedSelect';
 import { themes, buildEditedCellVisualStyle, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
@@ -61,6 +62,7 @@ const NUMBER_FORMAT_CATEGORY_OPTIONS = [
     { value: 'currency', label: 'Currency' },
     { value: 'accounting', label: 'Accounting' },
     { value: 'percentage', label: 'Percentage' },
+    { value: 'pill_percent', label: '+% Pill Badge' },
     { value: 'scientific', label: 'Scientific' },
 ];
 /** @type {any[]} */
@@ -92,7 +94,8 @@ const getNumberFormatCategory = (formatValue) => {
     const normalized = typeof formatValue === 'string' ? formatValue.trim() : '';
     if (normalized === 'currency' || normalized.startsWith('currency:')) return 'currency';
     if (normalized === 'accounting' || normalized.startsWith('accounting:')) return 'accounting';
-    if (normalized === 'percent') return 'percentage';
+    if (normalized === 'pill:signed_percent' || normalized.startsWith('pill:signed_percent:')) return 'pill_percent';
+    if (normalized === 'percent' || normalized === 'signed_percent') return 'percentage';
     if (normalized === 'scientific') return 'scientific';
     return 'number';
 };
@@ -120,6 +123,8 @@ const getFormatValueForCategory = (category, currencySymbol = DEFAULT_CURRENCY_S
         return `accounting:${safeSymbol}`;
     case 'percentage':
         return 'percent';
+    case 'pill_percent':
+        return 'pill:signed_percent';
     case 'scientific':
         return 'scientific';
     default:
@@ -178,7 +183,7 @@ function NumberFormatDialog({
     /** @type {any} */
     const previewFormat = getFormatValueForCategory(category, currencySymbol) || null;
     /** @type {any} */
-    const previewSeed = category === 'percentage' ? 0.12345 : 1234567.891;
+    const previewSeed = (category === 'percentage' || category === 'pill_percent') ? 0.12345 : 1234567.891;
     /** @type {any} */
     const previewPositive = formatValue(previewSeed, previewFormat, localDecimals, activeSeparator);
     /** @type {any} */
@@ -191,12 +196,15 @@ function NumberFormatDialog({
     return (
         <div
             role="presentation"
+            className="sp-dialog-backdrop"
             onClick={onClose}
             style={{
                 position: 'fixed',
                 inset: 0,
                 zIndex: 10020,
-                background: 'rgba(15, 23, 42, 0.34)',
+                background: 'rgba(15, 23, 42, 0.36)',
+                backdropFilter: 'blur(6px)',
+                WebkitBackdropFilter: 'blur(6px)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -205,6 +213,7 @@ function NumberFormatDialog({
         >
             <div
                 role="dialog"
+                className="sp-dialog-surface"
                 aria-modal="true"
                 aria-label="Format Cells"
                 onClick={(event) => event.stopPropagation()}
@@ -214,7 +223,7 @@ function NumberFormatDialog({
                     background: theme.surfaceBg || theme.background || '#fff',
                     border: `1px solid ${theme.border}`,
                     borderRadius: '14px',
-                    boxShadow: '0 20px 48px rgba(15, 23, 42, 0.24)',
+                    boxShadow: theme.shadow || '0 20px 56px rgba(15, 23, 42, 0.24)',
                     display: 'flex',
                     flexDirection: 'column',
                     overflow: 'hidden',
@@ -229,12 +238,14 @@ function NumberFormatDialog({
                     background: theme.headerSubtleBg || theme.hover,
                 }}>
                     <div>
-                        <div style={{ fontSize: '15px', fontWeight: 700, color: theme.text }}>Format Cells</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', color: theme.text }}>Format Cells</div>
                         <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>Number</div>
                     </div>
                     <button
+                        type="button"
+                        className="sp-btn sp-btn-ghost"
                         onClick={onClose}
-                        style={{ ...styles.btn, minWidth: '36px', padding: '6px', background: 'transparent', border: `1px solid ${theme.border}` }}
+                        style={{ ...styles.btn, minWidth: '32px', height: '32px', padding: '6px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: '8px' }}
                         title="Close"
                     >
                         <Icons.Close />
@@ -258,11 +269,13 @@ function NumberFormatDialog({
                             return (
                                 <button
                                     key={option.value}
+                                    type="button"
+                                    className={`sp-btn ${active ? 'sp-btn-subtle' : 'sp-btn-ghost'}`}
                                     onClick={() => setCategory(option.value)}
                                     style={{
                                         width: '100%',
                                         textAlign: 'left',
-                                        padding: '10px 12px',
+                                        padding: '9px 12px',
                                         borderRadius: '8px',
                                         border: 'none',
                                         background: active ? (theme.select || '#E8F0FE') : 'transparent',
@@ -340,9 +353,10 @@ function NumberFormatDialog({
 
                             <div>
                                 <label style={{ fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '6px' }}>Separator style</label>
-                                <select
+                                <ThemedSelect
+                                    aria-label="Separator style"
                                     value={separatorStyle}
-                                    onChange={(event) => setSeparatorStyle(normalizeNumberGroupSeparator(event.target.value))}
+                                    onChange={(/** @type {any} */ event) => setSeparatorStyle(normalizeNumberGroupSeparator(event.target.value))}
                                     disabled={!useThousandsSeparator}
                                     style={{
                                         width: '100%',
@@ -358,7 +372,7 @@ function NumberFormatDialog({
                                     {NUMBER_GROUP_SEPARATOR_OPTIONS.filter((option) => option.value !== 'none').map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
-                                </select>
+                                </ThemedSelect>
                             </div>
                         </div>
 
@@ -659,15 +673,17 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
     };
 
     const popover = (
-        <div ref={popoverRef} data-cell-format-popover="true" style={{
+        <div ref={popoverRef} className="sp-menu-surface" data-cell-format-popover="true" style={{
             position: 'fixed',
             left: popoverPosition ? `${popoverPosition.left}px` : '12px',
             top: popoverPosition ? `${popoverPosition.top}px` : '12px',
             zIndex: 9999,
-            background: theme.background || '#fff',
+            background: `var(--sp-glass-bg, ${theme.surfaceBg || theme.background || '#fff'})`,
+            backdropFilter: 'blur(18px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(18px) saturate(180%)',
             border: `1px solid ${theme.border}`,
-            borderRadius: '10px',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            borderRadius: '12px',
+            boxShadow: theme.shadow || '0 16px 40px rgba(15, 23, 42, 0.2)',
             padding: '14px',
             boxSizing: 'border-box',
             width: popoverPosition ? `${popoverPosition.width}px` : 'min(360px, calc(100vw - 24px))',
@@ -713,9 +729,9 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
                     <div style={{display: 'grid', gridTemplateColumns: '1.25fr 0.9fr 58px', gap: '8px', alignItems: 'end', marginBottom: '12px'}}>
                         <label style={{display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec, fontWeight: 600}}>
                             Style
-                            <select aria-label="Border style" value={borderStyle} onChange={(event) => setBorderStyle(event.target.value)} style={{height: '30px', border: `1px solid ${theme.border}`, borderRadius: '6px', background: theme.background, color: theme.text, fontSize: '11px'}}>
+                            <ThemedSelect size="sm" aria-label="Border style" value={borderStyle} onChange={(/** @type {any} */ event) => setBorderStyle(event.target.value)} style={{height: '30px', border: `1px solid ${theme.border}`, borderRadius: '6px', background: theme.background, color: theme.text, fontSize: '11px', width: '100%'}}>
                                 {CELL_BORDER_STYLES.map((option) => <option key={option.value || 'none'} value={option.value}>{option.label}</option>)}
-                            </select>
+                            </ThemedSelect>
                         </label>
                         <CellColorField label="Color" value={borderColor} onChange={setBorderColor} fallback="#CBD5E1" theme={theme} />
                         <label style={{display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec, fontWeight: 600}}>
@@ -793,19 +809,19 @@ function DataBarBoundsDialog({ columns, maximums, onApply, onClose, theme, style
     }, [onClose]);
 
     return (
-        <div role="presentation" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10020, background: 'rgba(15,23,42,0.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
-            <div role="dialog" aria-modal="true" aria-label="Data Bar Bounds" onClick={event => event.stopPropagation()} style={{ width: 'min(380px, 90vw)', padding: '18px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.surfaceBg || theme.background, color: theme.text, boxShadow: theme.shadowMd }}>
-                <div style={{ fontWeight: 700, marginBottom: '10px' }}>Data Bar Bounds</div>
-                <p style={{ fontSize: '12px', lineHeight: 1.5 }}>Bars start at zero. Negative values use their magnitude and a red tint. Values above the maximum fill the cell.</p>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+        <div role="presentation" className="sp-dialog-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10020, background: 'rgba(15,23,42,0.36)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+            <div role="dialog" className="sp-dialog-surface" aria-modal="true" aria-label="Data Bar Bounds" onClick={event => event.stopPropagation()} style={{ width: 'min(380px, 90vw)', padding: '20px', borderRadius: '14px', border: `1px solid ${theme.border}`, background: theme.surfaceBg || theme.background, color: theme.text, boxShadow: theme.shadow || '0 20px 56px rgba(15,23,42,0.24)' }}>
+                <div style={{ fontWeight: 700, fontSize: '15px', letterSpacing: '-0.01em', marginBottom: '10px' }}>Data Bar Bounds</div>
+                <p style={{ fontSize: '12px', lineHeight: 1.5, color: theme.textSec, marginTop: 0 }}>Bars start at zero. Negative values use their magnitude and a red tint. Values above the maximum fill the cell.</p>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', fontWeight: 600 }}>
                     Maximum bar magnitude
-                    <input autoFocus aria-label="Maximum bar magnitude" type="number" min="0" step="any" placeholder="Auto" value={maximum} onChange={event => setMaximum(event.target.value)} style={{ padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, color: theme.text, background: theme.background }} />
+                    <input autoFocus aria-label="Maximum bar magnitude" type="number" min="0" step="any" placeholder="Auto" value={maximum} onChange={event => setMaximum(event.target.value)} style={{ padding: '8px 10px', borderRadius: '8px', border: `1px solid ${theme.border}`, color: theme.text, background: theme.background }} />
                 </label>
                 <p style={{ fontSize: '11px', color: theme.textSec }}>Leave blank to use automatic column bounds. Applies to {columns.length} selected column{columns.length === 1 ? '' : 's'}.</p>
-                {!valid && <div role="alert" style={{ fontSize: '12px' }}>Enter a positive finite maximum, or leave blank for Auto.</div>}
+                {!valid && <div role="alert" style={{ fontSize: '12px', color: '#ef4444' }}>Enter a positive finite maximum, or leave blank for Auto.</div>}
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' }}>
-                    <button type="button" onClick={onClose} style={styles.btn}>Cancel</button>
-                    <button type="button" disabled={!valid} onClick={() => onApply(parsedMaximum)} style={{ ...styles.btn, background: theme.primary, color: '#fff' }}>Apply bounds</button>
+                    <button type="button" className="sp-btn sp-btn-subtle" onClick={onClose} style={styles.btn}>Cancel</button>
+                    <button type="button" className="sp-btn sp-btn-primary" disabled={!valid} onClick={() => onApply(parsedMaximum)} style={{ ...styles.btn, background: theme.primary, color: '#fff', borderColor: theme.primary }}>Apply bounds</button>
                 </div>
             </div>
         </div>
@@ -978,16 +994,18 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
     );
 
     return (
-        <div ref={popoverRef} style={{
+        <div ref={popoverRef} className="sp-menu-surface" style={{
             position: 'fixed',
             top: `${popoverLayout.top}px`,
             left: `${popoverLayout.left}px`,
             zIndex: 9999,
-            background: theme.surfaceBg || '#fff',
+            background: `var(--sp-glass-bg, ${theme.surfaceBg || '#fff'})`,
+            backdropFilter: 'blur(18px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(18px) saturate(180%)',
             border: `1px solid ${theme.border}`,
-            borderRadius: theme.radiusSm || '10px',
-            boxShadow: theme.shadowMd || '0 12px 28px rgba(0,0,0,0.12)',
-            padding: '12px',
+            borderRadius: '12px',
+            boxShadow: theme.shadow || '0 18px 44px rgba(15, 23, 42, 0.2)',
+            padding: '14px',
             width: `${popoverLayout.width}px`,
             maxWidth: 'calc(100vw - 24px)',
             maxHeight: `${popoverLayout.maxHeight}px`,
@@ -1101,8 +1119,8 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
                 </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                <button onClick={clearAll} style={{ border: `1px solid ${theme.border}`, background: theme.headerSubtleBg || theme.hover, color: theme.text, borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1 }}>Clear Overrides</button>
-                <button onClick={onClose} style={{ border: `1px solid ${theme.primary}`, background: theme.primary, color: '#fff', borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1 }}>Done</button>
+                <button type="button" className="sp-btn sp-btn-subtle" onClick={clearAll} style={{ border: `1px solid ${theme.border}`, background: theme.headerSubtleBg || theme.hover, color: theme.text, borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1, fontWeight: 600 }}>Clear Overrides</button>
+                <button type="button" className="sp-btn sp-btn-primary" onClick={onClose} style={{ border: `1px solid ${theme.primary}`, background: theme.primary, color: '#fff', borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1, fontWeight: 600 }}>Done</button>
             </div>
         </div>
     );
@@ -1112,6 +1130,26 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
 function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
     /** @type {any} */
     const menuRef = useRef(null);
+    useEffect(() => {
+        /** @param {any} [event] @returns {any} */
+        const handleOutside = (event) => {
+            if (menuRef.current && menuRef.current.hasAttribute('open') && !isEventInsideElement(event, menuRef.current)) {
+                menuRef.current.removeAttribute('open');
+            }
+        };
+        /** @param {any} [event] @returns {any} */
+        const handleEscape = (event) => {
+            if (event.key === 'Escape' && menuRef.current && menuRef.current.hasAttribute('open')) {
+                menuRef.current.removeAttribute('open');
+            }
+        };
+        document.addEventListener('mousedown', handleOutside);
+        document.addEventListener('keydown', handleEscape);
+        return () => {
+            document.removeEventListener('mousedown', handleOutside);
+            document.removeEventListener('keydown', handleEscape);
+        };
+    }, []);
     /** @param {any} [format] @returns {any} */
     const runExport = (format) => {
         if (format === 'csv') exportPivot('csv');
@@ -1125,8 +1163,10 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
         background: 'transparent',
         color: theme.text,
         cursor: isExporting ? 'not-allowed' : 'pointer',
-        padding: '8px 12px',
+        padding: '7px 10px',
         textAlign: 'left',
+        fontSize: '12px',
+        fontWeight: 500,
         whiteSpace: 'nowrap',
         opacity: isExporting ? 0.55 : 1,
     };
@@ -1135,6 +1175,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
         <div role="group" aria-label="Export table" style={{ display: 'inline-flex', alignItems: 'stretch' }}>
             <button
                 type="button"
+                className="sp-btn sp-btn-primary"
                 data-testid="pivot-export-xlsx"
                 aria-label="Export XLSX"
                 style={{ ...buttonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
@@ -1145,6 +1186,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
             </button>
             <details ref={menuRef} style={{ position: 'relative', display: 'flex' }}>
                 <summary
+                    className="sp-btn sp-btn-primary"
                     aria-label="Choose export format"
                     aria-disabled={isExporting}
                     onClick={event => { if (isExporting) event.preventDefault(); }}
@@ -1153,44 +1195,48 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
                         alignItems: 'center',
                         borderTopLeftRadius: 0,
                         borderBottomLeftRadius: 0,
-                        borderLeft: `1px solid ${theme.border}`,
+                        borderLeft: '1px solid rgba(255,255,255,0.22)',
                         boxSizing: 'border-box',
                         cursor: isExporting ? 'not-allowed' : 'pointer',
                         display: 'inline-flex',
                         height: '100%',
                         listStyle: 'none',
                         opacity: isExporting ? 0.55 : 1,
-                        paddingLeft: '8px',
-                        paddingRight: '8px',
+                        paddingLeft: '7px',
+                        paddingRight: '7px',
                     }}
                 >
-                    <span aria-hidden="true">{'\u25BE'}</span>
+                    <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center' }}><Icons.ChevronDown /></span>
                 </summary>
                 <ul
                     role="list"
+                    className="sp-menu-surface"
                     aria-label="Export formats"
                     style={{
                         position: 'absolute',
                         right: 0,
-                        top: 'calc(100% + 4px)',
+                        top: 'calc(100% + 6px)',
                         zIndex: 50,
-                        minWidth: '150px',
+                        minWidth: '156px',
                         margin: 0,
-                        padding: '4px',
+                        padding: '5px',
                         listStyle: 'none',
                         border: `1px solid ${theme.border}`,
-                        borderRadius: theme.radiusSm || '8px',
-                        background: theme.surfaceBg || theme.headerBg,
-                        boxShadow: theme.shadowMd || theme.shadow,
+                        borderRadius: '10px',
+                        background: `var(--sp-glass-bg, ${theme.surfaceBg || theme.headerBg})`,
+                        backdropFilter: 'blur(18px) saturate(180%)',
+                        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+                        boxShadow: theme.shadow || '0 14px 36px rgba(15, 23, 42, 0.18)',
+                        transformOrigin: 'top right',
                     }}
                 >
                     <li>
-                        <button type="button" aria-label="Export XLSX" style={menuButtonStyle} onClick={() => runExport('xlsx')} disabled={isExporting}>
+                        <button type="button" className="sp-menu-item" aria-label="Export XLSX" style={menuButtonStyle} onClick={() => runExport('xlsx')} disabled={isExporting}>
                             Export XLSX
                         </button>
                     </li>
                     <li>
-                        <button type="button" data-testid="pivot-export-csv" aria-label="Export CSV" style={menuButtonStyle} onClick={() => runExport('csv')} disabled={isExporting}>
+                        <button type="button" className="sp-menu-item" data-testid="pivot-export-csv" aria-label="Export CSV" style={menuButtonStyle} onClick={() => runExport('csv')} disabled={isExporting}>
                             Export CSV
                         </button>
                     </li>
@@ -1233,6 +1279,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     onApplySelectionValueFormat,
     dataBarsColumns, setDataBarsColumns,
     dataBarMaximums, setDataBarMaximums,
+    dataBarVariant = 'fill', setDataBarVariant,
     canUndoTransactions,
     canRedoTransactions,
     transactionHistoryPending,
@@ -1533,23 +1580,43 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     };
     /** @type {Record<string, any>} */
     const valueModeFrameStyle = {
-        display: 'inline-flex',
+        position: 'relative',
+        display: 'inline-grid',
+        gridTemplateColumns: '1fr 1fr',
         alignItems: 'center',
-        gap: '4px',
+        gap: '2px',
         padding: '3px',
         borderRadius: theme.radiusSm || '10px',
         background: theme.headerSubtleBg || theme.hover,
         border: `1px solid ${theme.border}`,
         boxShadow: theme.shadowInset || 'none',
     };
+    /** @type {React.CSSProperties} */
+    const valueModeSliderStyle = {
+        position: 'absolute',
+        top: '3px',
+        bottom: '3px',
+        left: '3px',
+        width: 'calc(50% - 4px)',
+        borderRadius: '7px',
+        background: theme.select || 'rgba(59,130,246,0.16)',
+        border: `1px solid ${theme.primary}`,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+        transform: editValueDisplayMode === 'original' ? 'translateX(calc(100% + 2px))' : 'translateX(0)',
+        transition: 'transform 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+        pointerEvents: 'none',
+    };
     /** @param {any} [mode] @param {any} [disabled] @returns {any} */
     const valueModeButtonStyle = (mode, disabled = false) => ({
         ...btnBase,
-        minHeight: '30px',
+        position: 'relative',
+        zIndex: 1,
+        justifyContent: 'center',
+        minHeight: '28px',
         padding: '4px 10px',
-        borderRadius: '8px',
-        background: editValueDisplayMode === mode ? theme.select : 'transparent',
-        border: `1px solid ${editValueDisplayMode === mode ? theme.primary : 'transparent'}`,
+        borderRadius: '7px',
+        background: 'transparent',
+        border: '1px solid transparent',
         color: editValueDisplayMode === mode ? theme.primary : theme.textSec,
         opacity: disabled ? 0.45 : 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
@@ -1563,15 +1630,13 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         border: `1px solid ${theme.primary}`,
         boxShadow: '0 8px 18px rgba(79,70,229,0.18)',
     };
-    // Save View: animated shimmer gradient (same keyframe as skeleton loader)
+    // Save View: calm Apple-style tinted accent pill
     /** @type {Record<string, any>} */
     const btnSaveView = {
         ...btnBase,
-        background: 'linear-gradient(90deg, rgba(79,70,229,0.10) 0%, rgba(129,140,248,0.30) 45%, rgba(79,70,229,0.10) 100%)',
-        backgroundSize: '220% 100%',
-        border: `1px solid rgba(99,102,241,0.28)`,
+        background: theme.select || 'rgba(79,70,229,0.12)',
+        border: '1px solid var(--sp-border-strong, rgba(99,102,241,0.28))',
         color: theme.primary,
-        animation: 'pivot-skeleton-shimmer 2.8s linear infinite',
         fontWeight: 600,
         boxShadow: theme.shadowInset || 'none',
     };
@@ -1646,15 +1711,38 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     /** @param {any} [active] @returns {any} */
     const sectionToggleButtonStyle = (active) => (active ? btnActive : btnSubtle);
 
+    const segmentedGroupStyle = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '2px',
+        padding: '2px',
+        borderRadius: theme.radiusSm || '8px',
+        background: theme.surfaceInset || theme.headerSubtleBg || theme.hover,
+        border: `1px solid ${theme.border}`,
+    };
+    /** @param {any} [active] @returns {any} */
+    const segmentedItemStyle = (active) => ({
+        ...btnBase,
+        padding: '4px 8px',
+        fontSize: '11px',
+        borderRadius: '6px',
+        border: active ? `1px solid ${theme.borderStrong || theme.primary}` : '1px solid transparent',
+        background: active ? (theme.surfaceRaised || theme.surfaceBg || '#fff') : 'transparent',
+        color: active ? theme.primary : theme.textSec,
+        fontWeight: active ? 600 : 500,
+        boxShadow: active ? (theme.shadowSm || '0 1px 2px rgba(15, 23, 42, 0.08)') : 'none',
+    });
+
     const viewControls = (
         <>
-            <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
-            <button style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
-            {uiConfig.showFilters !== false && <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>}
-            <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
-            <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
-            <button style={showSubtotals ? btnActive : btnSubtle} onClick={() => setShowSubtotals(prev => !prev)} title="Toggle hierarchy subtotal rows">Subtotals</button>
+            <button aria-pressed={Boolean(showRowNumbers)} className={`sp-btn ${showRowNumbers ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
+            <button aria-pressed={Boolean(stickyHeaders)} className={`sp-btn ${stickyHeaders ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
+            {uiConfig.showFilters !== false && <button aria-pressed={Boolean(showFloatingFilters)} className={`sp-btn ${showFloatingFilters ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>}
+            <button aria-pressed={Boolean(showRowTotals)} className={`sp-btn ${showRowTotals ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
+            <button aria-pressed={Boolean(showColTotals)} className={`sp-btn ${showColTotals ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
+            <button aria-pressed={Boolean(showSubtotals)} className={`sp-btn ${showSubtotals ? 'sp-btn-active' : 'sp-btn-subtle'}`} style={showSubtotals ? btnActive : btnSubtle} onClick={() => setShowSubtotals(prev => !prev)} title="Toggle hierarchy subtotal rows">Subtotals</button>
             <button
+                className="sp-btn sp-btn-subtle"
                 style={canTranspose ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
                 onClick={onTransposePivot}
                 title="Swap row fields and column fields"
@@ -1662,13 +1750,40 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             >
                 <Icons.Transpose /> Transpose
             </button>
-            <button style={btnSubtle} onClick={() => setSpacingMode((spacingMode + 1) % 3)} title="Cycle row density">
-                <Icons.Spacing/> {spacingLabels[spacingMode]}
-            </button>
-            <button style={btnSubtle} onClick={() => setLayoutMode(/** @param {any} [prev] @returns {any} */ prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
-                {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
-            </button>
+            <div role="group" aria-label="Row density" style={segmentedGroupStyle} title="Row density">
+                {spacingLabels.map(/** @param {any} [label] @param {any} [idx] @returns {any} */ (label, idx) => (
+                    <button
+                        key={label}
+                        type="button"
+                        aria-pressed={spacingMode === idx}
+                        className={`sp-btn ${spacingMode === idx ? 'sp-btn-active' : 'sp-btn-ghost'}`}
+                        style={segmentedItemStyle(spacingMode === idx)}
+                        onClick={() => setSpacingMode(idx)}
+                    >
+                        {idx === 0 && <Icons.Spacing />} {label}
+                    </button>
+                ))}
+            </div>
+            <div role="group" aria-label="Layout mode" style={segmentedGroupStyle} title="Layout mode">
+                {[
+                    { id: 'hierarchy', label: 'Hierarchy' },
+                    { id: 'outline', label: 'Outline' },
+                    { id: 'tabular', label: 'Tabular' },
+                ].map((mode) => (
+                    <button
+                        key={mode.id}
+                        type="button"
+                        aria-pressed={layoutMode === mode.id}
+                        className={`sp-btn ${layoutMode === mode.id ? 'sp-btn-active' : 'sp-btn-ghost'}`}
+                        style={segmentedItemStyle(layoutMode === mode.id)}
+                        onClick={() => setLayoutMode(mode.id)}
+                    >
+                        {mode.label}
+                    </button>
+                ))}
+            </div>
             <button
+                className="sp-btn sp-btn-subtle"
                 style={btnSubtle}
                 onClick={onAutoSizeColumns}
                 title="Auto-size all visible columns to fit their content"
@@ -1680,8 +1795,9 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
 
     const formatControls = (
         <>
-            <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+            <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'8px', padding:'2px 4px'}}>
                 <button
+                    className="sp-btn sp-btn-ghost"
                     title={hasSelection ? 'Decrease decimals for selected cells' : 'Decrease decimal places'}
                     style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
                     onClick={() => handleDecimalChange(-1)}
@@ -1689,6 +1805,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 >-.0</button>
                 <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
                 <button
+                    className="sp-btn sp-btn-ghost"
                     title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
                     style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
                     onClick={() => handleDecimalChange(1)}
@@ -1698,6 +1815,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             <div style={{ position:'relative' }}>
                 <button
                     ref={cellFormatBtnRef}
+                    className={`sp-btn ${cellFormatOpen || hasSelection || hasSavedCellFormats ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                     style={cellFormatOpen || hasSelection || hasSavedCellFormats ? btnActive : btnSubtle}
                     onClick={() => setCellFormatOpen(/** @param {any} [open] @returns {any} */ open => !open)}
                     title={hasSelection ? 'Format selected cells' : 'Open cell formatting'}
@@ -1717,6 +1835,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 )}
             </div>
             <button
+                className={`sp-btn ${numberFormatDialogOpen || hasSelection || hasNumberFormatCustomization ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                 style={numberFormatDialogOpen || hasSelection || hasNumberFormatCustomization ? {
                     ...btnActive,
                     display: 'inline-flex',
@@ -1760,9 +1879,10 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     <Icons.ChevronDown />
                 </span>
             </button>
-            <select
+            <ThemedSelect
+                size="sm"
                 value={colorScaleMode}
-                onChange={e => setColorScaleMode(e.target.value, Array.from(selectedCellColIds))}
+                onChange={(/** @type {any} */ e) => setColorScaleMode(e.target.value, Array.from(selectedCellColIds))}
                 title="Color scale"
                 style={{...compactSelectStyle, ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
             >
@@ -1770,17 +1890,19 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 <option value="row">By Row</option>
                 <option value="col">By Col</option>
                 <option value="table">By Table</option>
-            </select>
+            </ThemedSelect>
             {colorScaleMode !== 'off' && (
-                <select
+                <ThemedSelect
+                    size="sm"
+                    aria-label="Color palette"
                     value={colorPalette}
-                    onChange={e => setColorPalette(e.target.value)}
+                    onChange={(/** @type {any} */ e) => setColorPalette(e.target.value)}
                     style={{...compactSelectStyle, background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary}}
                 >
                     {COLOR_PALETTE_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
-                </select>
+                </ThemedSelect>
             )}
             {(() => {
                 /** @type {any} */
@@ -1793,6 +1915,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 const isActive = hasBars || anyBars;
                 return (
                     <button
+                        className={`sp-btn ${isActive ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                         title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
                         style={isActive ? btnActive : btnSubtle}
                         onClick={() => {
@@ -1817,27 +1940,40 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             })()}
             <button
                 type="button"
+                className="sp-btn sp-btn-subtle"
                 title={selectedNumericColumnIds.length ? 'Set data bar bounds for selected columns' : 'Select numeric cells to set data bar bounds'}
                 disabled={selectedNumericColumnIds.length === 0}
                 onClick={() => setDataBarBoundsColumns([...selectedNumericColumnIds])}
                 style={{ ...btnSubtle, opacity: selectedNumericColumnIds.length ? 1 : 0.45 }}
             >Bar Bounds</button>
-            <select value={fontFamily} onChange={e => setFontFamily(e.target.value)} title="Font family"
+            {typeof setDataBarVariant === 'function' && (
+                <button
+                    type="button"
+                    className={`sp-btn ${dataBarVariant === 'underbar' ? 'sp-btn-active' : 'sp-btn-subtle'}`}
+                    title="Switch Data Bars between slim under-bar track and full cell fill"
+                    onClick={() => setDataBarVariant(/** @param {any} [prev] @returns {any} */ prev => (prev === 'underbar' ? 'fill' : 'underbar'))}
+                    style={dataBarVariant === 'underbar' ? btnActive : btnSubtle}
+                >
+                    {dataBarVariant === 'underbar' ? 'Bar: Underbar' : 'Bar: Fill'}
+                </button>
+            )}
+            <ThemedSelect size="sm" value={fontFamily} onChange={(/** @type {any} */ e) => setFontFamily(e.target.value)} title="Font family"
                 style={{...compactSelectStyle, fontFamily}}>
                 {FONT_FAMILY_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value} style={{fontFamily: opt.value}}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
-            </select>
-            <select value={fontSize} onChange={e => setFontSize(e.target.value)} title="Font size"
+            </ThemedSelect>
+            <ThemedSelect size="sm" value={fontSize} onChange={(/** @type {any} */ e) => setFontSize(e.target.value)} title="Font size"
                 style={compactSelectStyle}>
                 {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+            </ThemedSelect>
         </>
     );
 
     const chartControls = (
         <>
             <button
+                className="sp-btn sp-btn-subtle"
                 style={canCreateSelectionChart ? { ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px' } : { ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px', opacity: 0.45, cursor: 'not-allowed' }}
                 onClick={onCreateSelectionChart}
                 title={canCreateSelectionChart ? 'Create a range chart from the current cell selection' : 'Select cells to create a range chart'}
@@ -1847,6 +1983,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             </button>
             {typeof onAddChartPane === 'function' ? (
                 <button
+                    className="sp-btn sp-btn-subtle"
                     data-add-chart-pane="true"
                     style={{ ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     onClick={onAddChartPane}
@@ -1862,6 +1999,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         <>
             <div style={{ position:'relative' }}>
                 <button
+                    className={`sp-btn ${Object.keys(themeOverrides || {}).length > 0 ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                     ref={themeEditorBtnRef}
                     style={Object.keys(themeOverrides || {}).length > 0 ? btnActive : btnSubtle}
                     onClick={() => setThemeEditorOpen(/** @param {any} [open] @returns {any} */ open => !open)}
@@ -1880,23 +2018,19 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     />
                 )}
             </div>
-            <select value={themeName} onChange={e => setThemeName(e.target.value)}
+            <ThemedSelect size="sm" aria-label="Theme" value={themeName} onChange={(/** @type {any} */ e) => setThemeName(e.target.value)}
                 style={themeSelectStyle}>
                 {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
                     .map(t => (
                         <option
                             key={t}
                             value={t}
-                            style={{
-                                background: theme.themeSelectorMenuBg || theme.surfaceBg || theme.background,
-                                color: theme.themeSelectorMenuText || theme.text,
-                            }}
                         >
                             {THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, /** @param {any} [c] @returns {any} */ c => c.toUpperCase())}
                         </option>
                     ))}
-            </select>
-            <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
+            </ThemedSelect>
+            <button className="sp-btn sp-btn-primary-soft" style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
         </>
     );
 
@@ -1925,6 +2059,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         }}>
             <div style={firstLineStyle}>
                 {uiConfig.showSidebar !== false && <button
+                    className="sp-btn sp-btn-ghost"
                     data-testid="pivot-toggle-sidebar"
                     onClick={() => setSidebarOpen(!sidebarOpen)}
                     style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
@@ -1933,12 +2068,14 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
                 </button>}
                 <button
+                    className="sp-btn sp-btn-ghost"
                     style={{...(canUndoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
                     onClick={onUndoTransaction}
                     title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
                     disabled={!canUndoTransactions || transactionHistoryPending}
                 ><Icons.Undo /></button>
                 <button
+                    className="sp-btn sp-btn-ghost"
                     style={{...(canRedoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
                     onClick={onRedoTransaction}
                     title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
@@ -1946,23 +2083,48 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 ><Icons.Redo /></button>
                 {SHOW_PIVOT_MODE_TOGGLE ? (
                     <div style={{
-                        display: 'flex',
-                        background: theme.hover,
+                        position: 'relative',
+                        display: 'inline-grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        background: theme.headerSubtleBg || theme.hover,
                         border: `1px solid ${theme.border}`,
                         borderRadius: theme.radiusSm || '10px',
-                        padding: '2px',
+                        padding: '3px',
                         gap: '2px',
+                        boxShadow: theme.shadowInset || 'none',
                     }}>
+                        <div
+                            aria-hidden="true"
+                            style={{
+                                position: 'absolute',
+                                top: '3px',
+                                bottom: '3px',
+                                left: '3px',
+                                width: 'calc(50% - 4px)',
+                                borderRadius: '7px',
+                                background: theme.primary || '#4F46E5',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+                                transform: pivotMode === 'report' ? 'translateX(calc(100% + 2px))' : 'translateX(0)',
+                                transition: 'transform 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                pointerEvents: 'none',
+                            }}
+                        />
                         <button
+                            className="sp-btn"
                             data-testid="pivot-mode-pivot"
                             style={{
                                 ...btnBase,
-                                padding: '5px 12px',
-                                minHeight: '30px',
+                                position: 'relative',
+                                zIndex: 1,
+                                justifyContent: 'center',
+                                padding: '4px 12px',
+                                minHeight: '28px',
                                 fontSize: '11px',
-                                background: pivotMode === 'pivot' ? (theme.primary || '#4F46E5') : 'transparent',
-                                color: pivotMode === 'pivot' ? '#fff' : theme.text,
+                                borderRadius: '7px',
+                                background: 'transparent',
+                                color: pivotMode === 'pivot' ? '#fff' : theme.textSec || theme.text,
                                 border: 'none',
+                                boxShadow: 'none',
                                 fontWeight: pivotMode === 'pivot' ? 700 : 500,
                             }}
                             onClick={() => setPivotMode('pivot')}
@@ -1971,15 +2133,21 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                             <Icons.Columns /> Pivot
                         </button>
                         <button
+                            className="sp-btn"
                             data-testid="pivot-mode-report"
                             style={{
                                 ...btnBase,
-                                padding: '5px 12px',
-                                minHeight: '30px',
+                                position: 'relative',
+                                zIndex: 1,
+                                justifyContent: 'center',
+                                padding: '4px 12px',
+                                minHeight: '28px',
                                 fontSize: '11px',
-                                background: pivotMode === 'report' ? (theme.primary || '#4F46E5') : 'transparent',
-                                color: pivotMode === 'report' ? '#fff' : theme.text,
+                                borderRadius: '7px',
+                                background: 'transparent',
+                                color: pivotMode === 'report' ? '#fff' : theme.textSec || theme.text,
                                 border: 'none',
+                                boxShadow: 'none',
                                 fontWeight: pivotMode === 'report' ? 700 : 500,
                             }}
                             onClick={() => setPivotMode('report')}
@@ -1994,9 +2162,10 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 </div>
                 {/* Report selector dropdown */}
                 {pivotMode === 'report' && savedReports && savedReports.length > 0 && (
-                    <select
+                    <ThemedSelect
+                        size="sm"
                         value={activeReportId || ''}
-                        onChange={e => {
+                        onChange={(/** @type {any} */ e) => {
                             const id = e.target.value;
                             if (!id) return;
                             /** @type {any} */
@@ -2021,11 +2190,11 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                         {savedReports.map(/** @param {any} [r] @returns {any} */ r => (
                             <option key={r.id} value={r.id}>{r.name}</option>
                         ))}
-                    </select>
+                    </ThemedSelect>
                 )}
                 <div style={innerDividerStyle} />
                 <div style={{display:'flex', alignItems:'center', flex:'1 1 250px', minWidth:'220px', maxWidth:'360px'}}>
-                    <div style={{
+                    <div className="sp-search-shell" style={{
                         ...styles.searchBox,
                         width:'100%',
                         borderRadius:theme.radiusSm || '10px',
@@ -2055,20 +2224,23 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 {uiConfig.showEditing !== false && <>
                 <div style={innerDividerStyle} />
                 <div style={valueModeFrameStyle} title="Switch between current edited values and the original values captured before this session's active edits">
+                    <div aria-hidden="true" style={valueModeSliderStyle} />
                     <button
                         type="button"
+                        className="sp-btn"
                         data-edit-value-mode="edited"
                         aria-pressed={editValueDisplayMode === 'edited'}
-                        style={valueModeButtonStyle('edited')}
+                        style={{ ...valueModeButtonStyle('edited'), boxShadow: editValueDisplayMode === 'edited' ? '0 1px 3px rgba(0,0,0,0.10)' : 'none' }}
                         onClick={() => setEditValueDisplayMode('edited')}
                     >
                         Edited
                     </button>
                     <button
                         type="button"
+                        className="sp-btn"
                         data-edit-value-mode="original"
                         aria-pressed={editValueDisplayMode === 'original'}
-                        style={valueModeButtonStyle('original')}
+                        style={{ ...valueModeButtonStyle('original'), boxShadow: editValueDisplayMode === 'original' ? '0 1px 3px rgba(0,0,0,0.10)' : 'none' }}
                         onClick={() => setEditValueDisplayMode('original')}
                     >
                         Original
@@ -2076,30 +2248,33 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 </div>
                 </>}
                 <div style={innerDividerStyle} />
-                <button data-testid="pivot-toolbar-view" data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
-                <button data-testid="pivot-toolbar-format" data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
-                {uiConfig.showCharts !== false && <button data-testid="pivot-toolbar-charts" data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
-                <button data-testid="pivot-toolbar-theme" data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
+                <button className={`sp-btn ${openToolbarSections.view ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-view" data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
+                <button className={`sp-btn ${openToolbarSections.format ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-format" data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
+                {uiConfig.showCharts !== false && <button className={`sp-btn ${openToolbarSections.charts ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-charts" data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
+                <button className={`sp-btn ${openToolbarSections.theme ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-theme" data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
                 <div style={innerDividerStyle} />
-                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.headerSubtleBg || theme.hover, border:`1px solid ${theme.border}`, borderRadius:'8px', padding:'2px 4px', boxShadow: theme.shadowInset || 'none'}}>
                     <button
+                        className="sp-btn sp-btn-ghost"
                         title="Zoom out"
-                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', minHeight: '28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
                         onClick={() => handleZoomChange(-ZOOM_STEP)}
                         disabled={zoomLevel <= ZOOM_MIN}
                     >-</button>
-                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
+                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600, fontVariantNumeric: 'tabular-nums'}}>{zoomLevel}%</span>
                     <button
+                        className="sp-btn sp-btn-ghost"
                         title="Zoom in"
-                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', minHeight: '28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
                         onClick={() => handleZoomChange(ZOOM_STEP)}
                         disabled={zoomLevel >= ZOOM_MAX}
                     >+</button>
                 </div>
-                <div style={innerDividerStyle} />
                 {!uiConfig.lockImmersiveMode ? <>
-                    <div style={{...innerDividerStyle, marginLeft:'auto'}} />
+                    <div style={{marginLeft:'auto'}} />
+                    <div style={innerDividerStyle} />
                     <button
+                        className={`sp-btn ${immersiveMode ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                         style={{...(immersiveMode ? btnActive : btnSubtle), display:'inline-flex', alignItems:'center', gap:'5px'}}
                         onClick={() => setImmersiveMode(!immersiveMode)}
                         title="Immersive Mode — hide all controls and show only the table"
@@ -2115,7 +2290,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             </div>
 
             {activeSections.length > 0 ? (
-                <div style={secondLineStyle}>
+                <div className="sp-toolbar-drawer" style={secondLineStyle}>
                     {activeSections.map(/** @param {any} [section] @param {any} [index] @returns {any} */ (section, index) => (
                         <div key={section.id} style={sectionBlockStyle(index === activeSections.length - 1)}>
                             <span style={sectionLabelStyle}>{section.label}</span>

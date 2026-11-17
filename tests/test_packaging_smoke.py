@@ -533,7 +533,7 @@ def test_package_metadata_has_a_readme_and_external_build_staging():
     data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
     readme = data["project"].get("readme")
 
-    assert readme == "README.md"
+    assert readme in ("README.md", "README_PYPI.md")
     assert (PKG_DIR / readme).is_file()
 
     setup_cfg = (PKG_DIR / "setup.cfg").read_text(encoding="utf-8")

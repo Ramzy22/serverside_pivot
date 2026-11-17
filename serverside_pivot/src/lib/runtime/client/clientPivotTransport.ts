@@ -83,6 +83,10 @@ export class ClientPivotTransport implements ClientPivotTransportInterface {
         return this.executor.getData();
     }
 
+    public getAvailableFields(): string[] {
+        return this.executor.getAvailableFields();
+    }
+
     public updateConfig(config: Partial<ClientRuntimeConfig>): void {
         this.config = { ...this.config, ...config };
         this.executor.updateConfig(config);

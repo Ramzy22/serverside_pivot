@@ -107,26 +107,206 @@ def validate_runtime_request_v1(value: Any) -> Dict[str, Any]:
     return deepcopy(value)
 
 
-def validate_runtime_response_v1(value: Any) -> Dict[str, Any]:
-    """Return a deep-copy of a valid canonical V1 response envelope."""
+_RESPONSE_ALLOWED_KEYS = frozenset({
+    "schemaVersion",
+    "kind",
+    "status",
+    "requestId",
+    "table",
+    "sessionId",
+    "clientInstance",
+    "stateEpoch",
+    "windowSeq",
+    "message",
+    "payload",
+    "profile",
+})
+_EXPORT_JOB_ALLOWED_KEYS = frozenset({
+    "jobId",
+    "phase",
+    "rowsWritten",
+    "bytesWritten",
+    "totalRows",
+    "payloadRef",
+})
+_EXPORT_JOB_PHASES = frozenset({
+    "queued",
+    "running",
+    "cancelling",
+    "cancelled",
+    "completed",
+    "failed",
+    "interrupted",
+})
+
+
+def _validate_json_tree(root: Any, root_path: str) -> None:
+    """Fast structural replacement for recursive jsonschema $defs/jsonObject check."""
+    if not isinstance(root, dict):
+        raise RuntimeContractError(
+            f"Invalid runtime response at {root_path}: {root!r} is not of type 'object'",
+            code="invalid_runtime_response",
+        )
+    stack: list[tuple[str, Any]] = [(root_path, root)]
+    while stack:
+        path, current = stack.pop()
+        if isinstance(current, dict):
+            for key, item in current.items():
+                if not isinstance(key, str):
+                    raise RuntimeContractError(
+                        f"Invalid runtime response at {path}: object keys must be strings",
+                        code="invalid_runtime_response",
+                    )
+                if item is None or isinstance(item, (bool, int, float, str)):
+                    continue
+                if isinstance(item, (dict, list)):
+                    stack.append((f"{path}.{key}", item))
+                    continue
+                raise RuntimeContractError(
+                    f"Invalid runtime response at {path}.{key}: {type(item).__name__!r} is not JSON-serializable",
+                    code="invalid_runtime_response",
+                )
+        elif isinstance(current, list):
+            for idx, item in enumerate(current):
+                if item is None or isinstance(item, (bool, int, float, str)):
+                    continue
+                if isinstance(item, (dict, list)):
+                    stack.append((f"{path}.{idx}", item))
+                    continue
+                raise RuntimeContractError(
+                    f"Invalid runtime response at {path}.{idx}: {type(item).__name__!r} is not JSON-serializable",
+                    code="invalid_runtime_response",
+                )
+
+
+def _validate_export_job_payload(payload: Dict[str, Any]) -> None:
+    for required_key in ("jobId", "phase", "rowsWritten", "bytesWritten", "totalRows"):
+        if required_key not in payload:
+            raise RuntimeContractError(
+                f"Invalid runtime response at payload: '{required_key}' is a required property",
+                code="invalid_runtime_response",
+            )
+    extra = sorted(k for k in payload if k not in _EXPORT_JOB_ALLOWED_KEYS)
+    if extra:
+        raise RuntimeContractError(
+            f"Invalid runtime response at payload: Additional properties are not allowed ({extra[0]!r} was unexpected)",
+            code="invalid_runtime_response",
+        )
+    job_id = payload["jobId"]
+    if not isinstance(job_id, str) or not job_id:
+        raise RuntimeContractError(
+            "Invalid runtime response at payload.jobId: must be a non-empty string",
+            code="invalid_runtime_response",
+        )
+    phase = payload["phase"]
+    if phase not in _EXPORT_JOB_PHASES:
+        raise RuntimeContractError(
+            f"Invalid runtime response at payload.phase: {phase!r} is not valid",
+            code="invalid_runtime_response",
+        )
+    for int_key in ("rowsWritten", "bytesWritten"):
+        val = payload[int_key]
+        if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+            raise RuntimeContractError(
+                f"Invalid runtime response at payload.{int_key}: must be a non-negative integer",
+                code="invalid_runtime_response",
+            )
+    total_rows = payload["totalRows"]
+    if total_rows is not None and (isinstance(total_rows, bool) or not isinstance(total_rows, int) or total_rows < 0):
+        raise RuntimeContractError(
+            "Invalid runtime response at payload.totalRows: must be null or a non-negative integer",
+            code="invalid_runtime_response",
+        )
+    if phase == "completed":
+        if "payloadRef" not in payload:
+            raise RuntimeContractError(
+                "Invalid runtime response at payload: 'payloadRef' is a required property",
+                code="invalid_runtime_response",
+            )
+        payload_ref = payload["payloadRef"]
+        if not isinstance(payload_ref, dict) or not payload_ref:
+            raise RuntimeContractError(
+                "Invalid runtime response at payload.payloadRef: must be a non-empty object",
+                code="invalid_runtime_response",
+            )
+        _validate_json_tree(payload_ref, "payload.payloadRef")
+    elif "payloadRef" in payload:
+        raise RuntimeContractError(
+            "Invalid runtime response at payload: 'payloadRef' is not allowed unless phase is 'completed'",
+            code="invalid_runtime_response",
+        )
+
+
+def validate_runtime_response_v1(value: Any, *, copy: bool = True) -> Dict[str, Any]:
+    """Return a validated canonical V1 response envelope (fast path avoiding O(N) jsonschema recursion)."""
     if not isinstance(value, dict):
         raise RuntimeContractError(
             "Runtime response must be an object.", code="invalid_runtime_response"
         )
-    global _RESPONSE_VALIDATOR
-    if _RESPONSE_VALIDATOR is None:
-        _RESPONSE_VALIDATOR = _schema_validator("runtime-response.schema.json")
-    errors = sorted(
-        _RESPONSE_VALIDATOR.iter_errors(value), key=lambda error: list(error.path)
-    )
-    if errors:
-        error = errors[0]
-        path = ".".join(str(segment) for segment in error.path) or "response"
+    for required_key in ("schemaVersion", "kind", "status", "payload"):
+        if required_key not in value:
+            raise RuntimeContractError(
+                f"Invalid runtime response at response: '{required_key}' is a required property",
+                code="invalid_runtime_response",
+            )
+    extra = sorted(k for k in value if k not in _RESPONSE_ALLOWED_KEYS)
+    if extra:
         raise RuntimeContractError(
-            f"Invalid runtime response at {path}: {error.message}",
+            f"Invalid runtime response at response: Additional properties are not allowed ({extra[0]!r} was unexpected)",
             code="invalid_runtime_response",
         )
-    return deepcopy(value)
+    sv = value["schemaVersion"]
+    if isinstance(sv, bool) or sv != 1:
+        raise RuntimeContractError(
+            "Invalid runtime response at schemaVersion: 1 was expected",
+            code="invalid_runtime_response",
+        )
+    kind = value["kind"]
+    if kind not in RUNTIME_COMMAND_KINDS:
+        raise RuntimeContractError(
+            f"Invalid runtime response at kind: {kind!r} is not one of {sorted(RUNTIME_COMMAND_KINDS)}",
+            code="invalid_runtime_response",
+        )
+    status = value["status"]
+    if not isinstance(status, str) or not status:
+        raise RuntimeContractError(
+            "Invalid runtime response at status: must be a non-empty string",
+            code="invalid_runtime_response",
+        )
+    for str_key in ("requestId", "table", "sessionId", "clientInstance"):
+        if str_key in value:
+            sv_item = value[str_key]
+            if not isinstance(sv_item, str) or not sv_item:
+                raise RuntimeContractError(
+                    f"Invalid runtime response at {str_key}: must be a non-empty string",
+                    code="invalid_runtime_response",
+                )
+    for int_key in ("stateEpoch", "windowSeq"):
+        if int_key in value:
+            iv = value[int_key]
+            if isinstance(iv, bool) or not isinstance(iv, int) or iv < 0:
+                raise RuntimeContractError(
+                    f"Invalid runtime response at {int_key}: must be a non-negative integer",
+                    code="invalid_runtime_response",
+                )
+    if "message" in value and not isinstance(value["message"], str):
+        raise RuntimeContractError(
+            "Invalid runtime response at message: must be a string",
+            code="invalid_runtime_response",
+        )
+    payload = value["payload"]
+    if not isinstance(payload, dict):
+        raise RuntimeContractError(
+            "Invalid runtime response at payload: must be an object",
+            code="invalid_runtime_response",
+        )
+    if kind == "export" and (status == "export_job" or "jobId" in payload or "phase" in payload):
+        _validate_export_job_payload(payload)
+    else:
+        _validate_json_tree(payload, "payload")
+    if "profile" in value:
+        _validate_json_tree(value["profile"], "profile")
+    return deepcopy(value) if copy else value
 
 
 def _normalize_id(value: Any) -> str:

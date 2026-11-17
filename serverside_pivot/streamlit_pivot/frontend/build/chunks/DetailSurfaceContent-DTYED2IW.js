@@ -1,36 +1,36 @@
-import { j as e, z as v } from "./index-C8_65yWw.js";
+import { j as e, I as a } from "./index-DfQH8t2o.js";
 import { a as B } from "./charts-DthW1Q8W.js";
-function M({
-  detailState: s,
-  onClose: C,
-  onPageChange: l,
-  onSort: n,
-  onFilter: b,
+function R({
+  detailState: i,
+  onClose: S,
+  onPageChange: n,
+  onSort: o,
+  onFilter: y,
   theme: r,
-  compact: o = !1
+  compact: l = !1
 }) {
-  const [y, j] = B.useState("");
+  const [j, h] = B.useState("");
   if (B.useEffect(() => {
-    j(s && typeof s.filterText == "string" ? s.filterText : "");
-  }, [s && s.filterText]), !s) return null;
+    h(i && typeof i.filterText == "string" ? i.filterText : "");
+  }, [i && i.filterText]), !i) return null;
   const {
-    loading: a,
+    loading: c,
     rows: d = [],
-    columns: c = [],
-    page: i = 0,
-    pageSize: S = 100,
-    totalRows: h = 0,
-    sortCol: k = null,
-    sortDir: w = "asc",
+    columns: g = [],
+    page: s = 0,
+    pageSize: C = 100,
+    totalRows: k = 0,
+    sortCol: w = null,
+    sortDir: v = "asc",
     title: $ = "Detail",
-    rowPath: g = ""
-  } = s, u = Array.isArray(c) && c.length > 0 ? c.map((t) => typeof t == "string" ? t : t.id).filter(Boolean) : d[0] ? Object.keys(d[0]).filter((t) => !t.startsWith("_")) : [], x = Math.max(1, Math.ceil((h || 0) / Math.max(1, S || 100))), z = (t) => {
-    if (n) {
-      if (k === t) {
-        n(t, w === "asc" ? "desc" : "asc");
+    rowPath: u = ""
+  } = i, f = Array.isArray(g) && g.length > 0 ? g.map((t) => typeof t == "string" ? t : t.id).filter(Boolean) : d[0] ? Object.keys(d[0]).filter((t) => !t.startsWith("_")) : [], x = Math.max(1, Math.ceil((k || 0) / Math.max(1, C || 100))), z = (t) => {
+    if (o) {
+      if (w === t) {
+        o(t, v === "asc" ? "desc" : "asc");
         return;
       }
-      n(t, "asc");
+      o(t, "asc");
     }
   };
   return /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }, children: [
@@ -39,20 +39,20 @@ function M({
       alignItems: "center",
       justifyContent: "space-between",
       gap: "12px",
-      padding: o ? "10px 12px" : "14px 16px",
+      padding: l ? "10px 12px" : "14px 16px",
       borderBottom: `1px solid ${r.border}`,
       background: r.headerBg
     }, children: [
       /* @__PURE__ */ e.jsxs("div", { style: { minWidth: 0 }, children: [
-        /* @__PURE__ */ e.jsx("div", { style: { fontSize: o ? "12px" : "13px", fontWeight: 700, color: r.text }, children: $ }),
-        g && /* @__PURE__ */ e.jsx("div", { style: {
+        /* @__PURE__ */ e.jsx("div", { style: { fontSize: l ? "12px" : "13px", fontWeight: 700, color: r.text }, children: $ }),
+        u && /* @__PURE__ */ e.jsx("div", { style: {
           fontSize: "11px",
           color: r.textSec,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
-          maxWidth: o ? "320px" : "460px"
-        }, children: g })
+          maxWidth: l ? "320px" : "460px"
+        }, children: u })
       ] }),
       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }, children: [
         /* @__PURE__ */ e.jsxs("div", { style: {
@@ -64,16 +64,16 @@ function M({
           borderRadius: "999px",
           background: r.surfaceBg || r.background
         }, children: [
-          /* @__PURE__ */ e.jsx(v.Search, {}),
+          /* @__PURE__ */ e.jsx(a.Search, {}),
           /* @__PURE__ */ e.jsx(
             "input",
             {
               type: "text",
-              value: y,
+              value: j,
               placeholder: "Filter rows...",
-              onChange: (t) => j(t.target.value),
+              onChange: (t) => h(t.target.value),
               onKeyDown: (t) => {
-                t.key === "Enter" && b && b(y);
+                t.key === "Enter" && y && y(j);
               },
               style: {
                 border: "none",
@@ -81,7 +81,7 @@ function M({
                 background: "transparent",
                 color: r.text,
                 fontSize: "12px",
-                width: o ? "140px" : "180px",
+                width: l ? "140px" : "180px",
                 padding: "8px 0"
               }
             }
@@ -91,7 +91,7 @@ function M({
           "button",
           {
             type: "button",
-            onClick: C,
+            onClick: S,
             style: {
               width: "28px",
               height: "28px",
@@ -105,12 +105,12 @@ function M({
               justifyContent: "center"
             },
             title: "Close detail",
-            children: /* @__PURE__ */ e.jsx(v.Close, {})
+            children: /* @__PURE__ */ e.jsx(a.Close, {})
           }
         )
       ] })
     ] }),
-    /* @__PURE__ */ e.jsx("div", { style: { flex: 1, minHeight: 0, overflow: "auto", background: r.surfaceBg || r.background }, children: a ? /* @__PURE__ */ e.jsx("div", { style: {
+    /* @__PURE__ */ e.jsx("div", { style: { flex: 1, minHeight: 0, overflow: "auto", background: r.surfaceBg || r.background }, children: c ? /* @__PURE__ */ e.jsx("div", { style: {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
@@ -118,9 +118,9 @@ function M({
       color: r.textSec,
       fontSize: "13px"
     }, children: "Loading detail..." }) : /* @__PURE__ */ e.jsxs("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" }, children: [
-      /* @__PURE__ */ e.jsx("thead", { children: /* @__PURE__ */ e.jsx("tr", { children: u.map(
+      /* @__PURE__ */ e.jsx("thead", { children: /* @__PURE__ */ e.jsx("tr", { children: f.map(
         /** @param {any} [columnId] @returns {any} */
-        (t) => /* @__PURE__ */ e.jsxs(
+        (t) => /* @__PURE__ */ e.jsx(
           "th",
           {
             onClick: () => z(t),
@@ -129,17 +129,17 @@ function M({
               top: 0,
               zIndex: 1,
               textAlign: "left",
-              padding: o ? "8px 10px" : "10px 12px",
+              padding: l ? "8px 10px" : "10px 12px",
               background: r.headerBg,
               color: r.text,
               borderBottom: `1px solid ${r.border}`,
-              cursor: n ? "pointer" : "default",
+              cursor: o ? "pointer" : "default",
               whiteSpace: "nowrap"
             },
-            children: [
-              t,
-              k === t ? w === "asc" ? " ▲" : " ▼" : ""
-            ]
+            children: /* @__PURE__ */ e.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px" }, children: [
+              /* @__PURE__ */ e.jsx("span", { children: t }),
+              w === t ? /* @__PURE__ */ e.jsx("span", { style: { display: "inline-flex", alignItems: "center" }, children: v === "asc" ? /* @__PURE__ */ e.jsx(a.SortAsc, {}) : /* @__PURE__ */ e.jsx(a.SortDesc, {}) }) : null
+            ] })
           },
           t
         )
@@ -147,7 +147,7 @@ function M({
       /* @__PURE__ */ e.jsx("tbody", { children: d.length === 0 ? /* @__PURE__ */ e.jsx("tr", { children: /* @__PURE__ */ e.jsx(
         "td",
         {
-          colSpan: Math.max(u.length, 1),
+          colSpan: Math.max(f.length, 1),
           style: {
             padding: "18px 12px",
             textAlign: "center",
@@ -158,24 +158,24 @@ function M({
         }
       ) }) : d.map(
         /** @param {any} [row] @param {any} [index] @returns {any} */
-        (t, f) => /* @__PURE__ */ e.jsx("tr", { style: {
-          background: f % 2 === 0 ? r.surfaceBg || r.background : r.headerSubtleBg
-        }, children: u.map(
+        (t, b) => /* @__PURE__ */ e.jsx("tr", { style: {
+          background: b % 2 === 0 ? r.surfaceBg || r.background : r.headerSubtleBg
+        }, children: f.map(
           /** @param {any} [columnId] @returns {any} */
           (p) => /* @__PURE__ */ e.jsx(
             "td",
             {
               style: {
-                padding: o ? "7px 10px" : "9px 12px",
+                padding: l ? "7px 10px" : "9px 12px",
                 borderBottom: `1px solid ${r.border}`,
                 color: r.text,
                 whiteSpace: "nowrap"
               },
               children: t[p] !== void 0 && t[p] !== null ? String(t[p]) : ""
             },
-            `${p}:${f}`
+            `${p}:${b}`
           )
-        ) }, `${s.rowKey || g || "detail"}:${f}`)
+        ) }, `${i.rowKey || u || "detail"}:${b}`)
       ) })
     ] }) }),
     /* @__PURE__ */ e.jsxs("div", { style: {
@@ -183,7 +183,7 @@ function M({
       alignItems: "center",
       justifyContent: "space-between",
       gap: "12px",
-      padding: o ? "10px 12px" : "12px 16px",
+      padding: l ? "10px 12px" : "12px 16px",
       borderTop: `1px solid ${r.border}`,
       background: r.headerBg,
       fontSize: "12px",
@@ -191,12 +191,12 @@ function M({
     }, children: [
       /* @__PURE__ */ e.jsxs("span", { children: [
         "Page ",
-        i + 1,
+        s + 1,
         " of ",
         x,
         " ",
         "(",
-        h || 0,
+        k || 0,
         " rows)"
       ] }),
       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
@@ -204,16 +204,16 @@ function M({
           "button",
           {
             type: "button",
-            onClick: () => l && l(Math.max(i - 1, 0)),
-            disabled: a || i <= 0,
+            onClick: () => n && n(Math.max(s - 1, 0)),
+            disabled: c || s <= 0,
             style: {
               padding: "6px 10px",
               borderRadius: "8px",
               border: `1px solid ${r.border}`,
               background: r.surfaceBg || r.background,
               color: r.text,
-              cursor: i <= 0 ? "default" : "pointer",
-              opacity: i <= 0 ? 0.45 : 1
+              cursor: s <= 0 ? "default" : "pointer",
+              opacity: s <= 0 ? 0.45 : 1
             },
             children: "Previous"
           }
@@ -222,16 +222,16 @@ function M({
           "button",
           {
             type: "button",
-            onClick: () => l && l(i + 1),
-            disabled: a || i >= x - 1,
+            onClick: () => n && n(s + 1),
+            disabled: c || s >= x - 1,
             style: {
               padding: "6px 10px",
               borderRadius: "8px",
               border: `1px solid ${r.border}`,
               background: r.surfaceBg || r.background,
               color: r.text,
-              cursor: i >= x - 1 ? "default" : "pointer",
-              opacity: i >= x - 1 ? 0.45 : 1
+              cursor: s >= x - 1 ? "default" : "pointer",
+              opacity: s >= x - 1 ? 0.45 : 1
             },
             children: "Next"
           }
@@ -241,5 +241,5 @@ function M({
   ] });
 }
 export {
-  M as D
+  R as D
 };

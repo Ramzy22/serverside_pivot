@@ -10,6 +10,7 @@ import {
 import { ChartWorkspace } from './Charts/ChartWorkspace';
 import { PaginationBar } from './PivotSmallComponents';
 import { PivotTableBody } from './Table/PivotTableBody';
+import ShimmerFallback from './ShimmerFallback';
 import { RuntimeDataError } from './RuntimeDataError';
 
 /** @type {any} */
@@ -96,7 +97,6 @@ export function PivotWorkspaceCanvas({ canvas }) {
     setEditValueDisplayMode,
     setPaginationState,
     showColumnLoadingSkeletons,
-    showSubtotals,
     statusAccessoryActions,
     statusAccessoryModel,
     statusRowCount,
@@ -175,7 +175,6 @@ export function PivotWorkspaceCanvas({ canvas }) {
       <RuntimeDataError error={runtimeDataError} onRetry={retryRuntimeData} theme={theme} />
     <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
       <PivotTableBody
-        key={`pivot-body-${editValueDisplayMode}-${layoutMode}-${showSubtotals ? 'with-subtotals' : 'no-subtotals'}`}
         parentRef={parentRef}
         handleKeyDown={handleKeyDown}
         rows={rows}

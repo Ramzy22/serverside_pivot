@@ -1,9 +1,28 @@
 :root {
-  font-family: Manrope, Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Manrope, Inter, ui-sans-serif, system-ui, sans-serif;
   color: #e5eef9;
   background: #07111f;
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.34);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.54);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 * { box-sizing: border-box; }
@@ -23,7 +42,67 @@ code { font-family: "DM Mono", ui-monospace, SFMono-Regular, Consolas, monospace
 .hero-stats strong { display: block; color: #5eead4; font-size: 1.2rem; letter-spacing: -.04em; }
 .hero-stats span { color: #90a6bf; display: block; font-size: .67rem; margin-top: .22rem; }
 .capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; padding: 1.7rem 0; }
-.capability-card { border: 1px solid #1e3852; border-radius: 16px; padding: 1.1rem; min-height: 155px; background: linear-gradient(145deg, #0d1c2f, #091523); }
+.capability-card {
+  border: 1px solid #1e3852;
+  border-radius: 16px;
+  padding: 1.1rem;
+  min-height: 155px;
+  background: linear-gradient(145deg, #0d1c2f, #091523);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), border-color 200ms ease, box-shadow 200ms ease;
+}
+.capability-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(94, 234, 212, 0.32);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+.workspace-skeleton {
+  padding: 16px;
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #0b1726;
+}
+.workspace-skeleton-shimmer {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.08) 25%, rgba(148, 163, 184, 0.17) 50%, rgba(148, 163, 184, 0.08) 75%);
+  background-size: 200% 100%;
+  animation: flagship-shimmer 1.35s linear infinite;
+  border-radius: 8px;
+}
+.workspace-skeleton-bar { height: 42px; width: 100%; }
+.workspace-skeleton-body {
+  display: grid;
+  grid-template-columns: 270px 1fr;
+  gap: 12px;
+  flex: 1;
+}
+.workspace-skeleton-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workspace-skeleton-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.workspace-error {
+  margin: 24px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+@keyframes flagship-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .capability-card { transition: none; }
+  .workspace-skeleton-shimmer { animation: none; }
+}
 .capability-number { color: #5eead4; font: 700 .68rem "DM Mono", ui-monospace, monospace; letter-spacing: .09em; }
 .capability-card h2, .integration-grid h2 { color: #f8fafc; font-size: .98rem; margin: .75rem 0 .35rem; }
 .capability-card p, .integration-grid p { color: #9db0c6; font-size: .78rem; line-height: 1.62; margin: 0; }

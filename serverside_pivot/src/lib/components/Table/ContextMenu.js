@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useLayoutEffect, useRef, useCallback } from 'react';
+import Icons from '../../utils/Icons';
 
 const OPEN_DELAY = 80;
 const CLOSE_DELAY = 220;
@@ -25,17 +26,14 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                 <div
                     key={i}
                     ref={(el) => { if (itemRefs) itemRefs.current[i] = el; }}
+                    className="sp-menu-item"
                     role="menuitem"
                     aria-haspopup={hasChildren ? 'menu' : undefined}
                     aria-disabled={disabled || undefined}
                     tabIndex={disabled ? -1 : 0}
                     title={action.title || (typeof action.label === 'string' ? action.label : undefined)}
-                    onMouseEnter={(event) => {
-                        event.currentTarget.style.backgroundColor = disabled ? '' : (theme?.hover || '#f5f5f5');
+                    onMouseEnter={() => {
                         if (onItemMouseEnter) onItemMouseEnter(i, hasChildren, disabled);
-                    }}
-                    onMouseLeave={(event) => {
-                        event.currentTarget.style.backgroundColor = '';
                     }}
                     onClick={(e) => {
                         if (disabled || hasChildren) { e.stopPropagation(); return; }
@@ -55,7 +53,7 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                         }
                     }}
                     style={{
-                        padding: '7px 12px 7px 14px',
+                        padding: '7px 10px',
                         cursor: disabled ? 'not-allowed' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
@@ -72,7 +70,9 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                     )}
                     <span style={{ flex: 1 }}>{action.label}</span>
                     {hasChildren && (
-                        <span style={{ color: theme?.textSec || '#9ca3af', fontSize: '10px', marginLeft: '4px' }}>▶</span>
+                        <span aria-hidden="true" style={{ color: theme?.textSec || '#9ca3af', display: 'inline-flex', alignItems: 'center', marginLeft: '4px' }}>
+                            {Icons && Icons.ChevronRight ? <Icons.ChevronRight /> : '>'}
+                        </span>
                     )}
                 </div>
             );
@@ -82,11 +82,13 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
 
 /** @param {any} [theme] @returns {any} */
 const menuStyle = (theme) => ({
-    background: theme?.surfaceBg || theme?.background || '#fff',
+    background: `var(--sp-glass-bg, ${theme?.surfaceBg || theme?.background || '#fff'})`,
+    backdropFilter: 'blur(18px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(18px) saturate(180%)',
     border: `1px solid ${theme?.border || '#ccc'}`,
-    boxShadow: theme?.shadowMd || '0 4px 20px rgba(0,0,0,0.15)',
-    padding: '6px 0',
-    borderRadius: theme?.radiusSm || '8px',
+    boxShadow: theme?.shadow || theme?.shadowMd || '0 14px 36px rgba(0,0,0,0.18)',
+    padding: '5px',
+    borderRadius: '10px',
     fontSize: '13px',
     minWidth: '190px',
     maxWidth: '300px',
@@ -279,6 +281,7 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
             {/* Root menu */}
             <div
                 ref={menuRef}
+                className="sp-menu-surface"
                 role="menu"
                 style={{ position: 'fixed', top: pos.y, left: pos.x, zIndex: 10001, ...menuStyle(theme) }}
                 onMouseLeave={scheduleClose}
@@ -298,6 +301,7 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
             {subActions && (
                 <div
                     ref={submenuRef}
+                    className="sp-menu-surface"
                     role="menu"
                     style={{ position: 'fixed', top: submenuPos.top, left: submenuPos.left, zIndex: 10002, ...menuStyle(theme) }}
                     onMouseEnter={cancelClose}

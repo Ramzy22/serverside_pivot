@@ -82,9 +82,29 @@ const applyGroupSeparator = (str, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATO
     return str.replace(/,/g, NUMBER_GROUP_SEPARATOR_CHAR_MAP[normalized]);
 };
 
+const NUMBER_FORMATTER_CACHE = new Map();
+const MAX_NUMBER_FORMATTER_CACHE_SIZE = 128;
+
+/** @param {any} [options] @returns {Intl.NumberFormat} */
+const getCachedNumberFormatter = (options = {}) => {
+    const keys = Object.keys(options).sort();
+    const cacheKey = keys.length === 0
+        ? ''
+        : keys.map(key => `${key}:${String(options[key])}`).join('|');
+    let formatter = NUMBER_FORMATTER_CACHE.get(cacheKey);
+    if (!formatter) {
+        if (NUMBER_FORMATTER_CACHE.size >= MAX_NUMBER_FORMATTER_CACHE_SIZE) {
+            NUMBER_FORMATTER_CACHE.clear();
+        }
+        formatter = new Intl.NumberFormat('en-US', options);
+        NUMBER_FORMATTER_CACHE.set(cacheKey, formatter);
+    }
+    return formatter;
+};
+
 /** @param {any} [value] @param {any} [options] @param {any} [groupSeparator] @returns {any} */
 const formatNumberWithOptions = (value, options = {}, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => (
-    applyGroupSeparator(new Intl.NumberFormat('en-US', options).format(value), groupSeparator)
+    applyGroupSeparator(getCachedNumberFormatter(options).format(value), groupSeparator)
 );
 
 /** @param {any} [fmt] @returns {any} */
@@ -215,13 +235,34 @@ const resolveCompactSpec = (value, decimalPlaces) => {
     return { value: rounded, suffix, minDecimals, maxDecimals };
 };
 
+/** @param {any} [fmt] @returns {{ isPill: boolean, innerFormat: string }} */
+export const unwrapNumericDisplayFormat = (fmt) => {
+    const raw = typeof fmt === 'string' ? fmt.trim() : '';
+    if (!raw) return { isPill: false, innerFormat: '' };
+    if (raw === 'pill') return { isPill: true, innerFormat: '' };
+    if (raw.startsWith('pill:')) {
+        return { isPill: true, innerFormat: raw.slice('pill:'.length).trim() };
+    }
+    return { isPill: false, innerFormat: raw };
+};
+
+/** @param {any} [fmtStr] @returns {{ decimals: number | null } | null} */
+const parseSignedPercentFormat = (fmtStr) => {
+    if (fmtStr === 'signed_percent') return { decimals: null };
+    if (typeof fmtStr === 'string' && fmtStr.startsWith('signed_percent:')) {
+        const parsed = parseInt(fmtStr.slice('signed_percent:'.length), 10);
+        return { decimals: Number.isFinite(parsed) ? Math.max(0, Math.min(20, parsed)) : null };
+    }
+    return null;
+};
+
 /** @param {any} [value] @param {any} [fmt] @param {any} [decimalPlaces] @param {any} [options] @returns {any} */
 export const resolveNumericDisplayValue = (value, fmt, decimalPlaces, options = {}) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return value;
     /** @type {any} */
     const scaled = scaleValueForDisplay(value, options && options.valueScale);
     /** @type {any} */
-    const fmtStr = typeof fmt === 'string' ? fmt.trim() : '';
+    const fmtStr = unwrapNumericDisplayFormat(fmt).innerFormat;
     /** @type {any} */
     const hasExplicitDecimals = decimalPlaces !== undefined && decimalPlaces !== null && Number.isFinite(Number(decimalPlaces));
 
@@ -234,9 +275,13 @@ export const resolveNumericDisplayValue = (value, fmt, decimalPlaces, options = 
         const spec = resolveCompactSpec(scaled, Number.isFinite(compactDec) ? compactDec : null);
         return normalizeNegativeZero(spec.value);
     }
-    if (fmtStr === 'percent') {
+    const signedPctSpec = parseSignedPercentFormat(fmtStr);
+    if (fmtStr === 'percent' || signedPctSpec) {
         /** @type {any} */
-        const dec = hasExplicitDecimals ? Math.max(0, Math.min(20, Math.floor(Number(decimalPlaces)))) : 2;
+        const fallbackDec = signedPctSpec && signedPctSpec.decimals !== null
+            ? signedPctSpec.decimals
+            : (signedPctSpec ? 1 : 2);
+        const dec = hasExplicitDecimals ? Math.max(0, Math.min(20, Math.floor(Number(decimalPlaces)))) : fallbackDec;
         /** @type {any} */
         const pctRounded = roundHalfAwayFromZero(scaled * 100, dec);
         return normalizeNegativeZero(pctRounded / 100);
@@ -306,7 +351,17 @@ export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_
 
     try {
         /** @type {any} */
-        const fmtStr = String(fmt).trim();
+        const unwrapped = unwrapNumericDisplayFormat(fmt);
+        const fmtStr = unwrapped.innerFormat;
+        if (!fmtStr) {
+            if (decimalPlaces !== undefined && decimalPlaces !== null) {
+                return appendUnit(formatNumberWithOptions(displayValue, {
+                    minimumFractionDigits: decimalPlaces,
+                    maximumFractionDigits: decimalPlaces,
+                }, groupSeparator));
+            }
+            return appendUnit(formatNumberWithOptions(displayValue, {}, groupSeparator));
+        }
         if (fmtStr === 'compact' || fmtStr.startsWith('compact:')) {
             /** @type {any} */
             const hasExplicitDecimals = decimalPlaces !== undefined && decimalPlaces !== null && Number.isFinite(Number(decimalPlaces));
@@ -334,11 +389,18 @@ export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_
                 currencyFormat.type === 'accounting'
             ));
         }
-        if (fmtStr === 'percent') {
+        const signedPctSpec = parseSignedPercentFormat(fmtStr);
+        if (fmtStr === 'percent' || signedPctSpec) {
+            const hasExplicitDecimals = decimalPlaces !== undefined && decimalPlaces !== null && Number.isFinite(Number(decimalPlaces));
+            const fallbackDec = signedPctSpec && signedPctSpec.decimals !== null
+                ? signedPctSpec.decimals
+                : (signedPctSpec ? 1 : 2);
+            const dec = hasExplicitDecimals ? decimalPlaces : fallbackDec;
             /** @type {Record<string, any>} */
-            const opts = { style: 'percent', maximumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2 };
-            if (decimalPlaces !== undefined && decimalPlaces !== null) opts.minimumFractionDigits = decimalPlaces;
-            return appendUnit(formatNumberWithOptions(displayValue, opts, groupSeparator));
+            const opts = { style: 'percent', minimumFractionDigits: dec, maximumFractionDigits: dec };
+            const pctText = formatNumberWithOptions(displayValue, opts, groupSeparator);
+            const signedPrefix = signedPctSpec && typeof displayValue === 'number' && displayValue > 0 ? '+' : '';
+            return appendUnit(`${signedPrefix}${pctText}`);
         }
         if (fmtStr === 'scientific') {
             return appendUnit(displayValue.toExponential(decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2));

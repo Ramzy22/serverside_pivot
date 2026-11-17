@@ -3923,7 +3923,7 @@ def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
     ).read_text(encoding="utf-8")
 
     assert "updateSortingForColumn({" in component_source
-    assert "normalizeSortingState(rawNextSorting, stage.sorting)" in component_source
+    assert "normalizeSortingState(rawNextSorting, previousMetadata, stage.effectiveSortOptions)" in component_source
     assert "Update Priority" in component_source
     assert "mergeSortSpecifierMetadata" in sorting_source
     assert "updatedExisting = true" in sorting_source

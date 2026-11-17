@@ -142,7 +142,7 @@ export function useRuntimeChartModels({
       }
       return chartPanelLockedModel || (chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel);
     }
-    if (chartPanelSource === 'pivot' && overlayChartData && Array.isArray(overlayChartData.rows)) {
+    if (chartPanelSource === 'pivot' && overlayChartData && Array.isArray(overlayChartData.rows) && (overlayChartData.rows.length > 0 || !serverSide || !Array.isArray(loadedRows) || loadedRows.length === 0)) {
       /** @type {any} */
       const overlayModelColumns = resolveChartModelColumns(overlayChartData, visibleLeafColumns);
       return chartPanelType === 'combo' ? buildComboPivotChartModel(overlayChartData.rows, overlayModelColumns, {
@@ -225,7 +225,8 @@ export function useRuntimeChartModels({
         return;
       }
       /** @type {any} */
-      const paneRows = serverSide && chartPaneDataById[pane.id] && Array.isArray(chartPaneDataById[pane.id].rows) ? chartPaneDataById[pane.id].rows : serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows;
+      const hasPaneServerRows = serverSide && chartPaneDataById[pane.id] && Array.isArray(chartPaneDataById[pane.id].rows) && chartPaneDataById[pane.id].rows.length > 0;
+      const paneRows = hasPaneServerRows ? chartPaneDataById[pane.id].rows : serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : serverSide && chartPaneDataById[pane.id] && Array.isArray(chartPaneDataById[pane.id].rows) ? chartPaneDataById[pane.id].rows : chartDisplayRows;
       /** @type {any} */
       const paneModelColumns = resolveChartModelColumns(chartPaneDataById[pane.id], visibleLeafColumns);
       nextModels[pane.id] = pane.chartType === 'combo' ? buildComboPivotChartModel(paneRows, paneModelColumns, {

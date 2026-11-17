@@ -94,11 +94,15 @@ export function mergeFieldPanelSize(currentSizes, panelId, nextPartialSize) {
         return base;
     }
 
+    /** @type {Record<string, any>} */
+    const nextMerged = { ...base[panelId] };
+    if (nextPartialSize && typeof nextPartialSize === 'object') {
+        if (nextPartialSize.width !== undefined) nextMerged.width = nextPartialSize.width;
+        if (nextPartialSize.height !== undefined) nextMerged.height = nextPartialSize.height;
+    }
+
     return {
         ...base,
-        [panelId]: sanitizeFieldPanelSizeEntry(panelId, {
-            ...base[panelId],
-            ...(nextPartialSize && typeof nextPartialSize === 'object' ? nextPartialSize : {}),
-        }),
+        [panelId]: sanitizeFieldPanelSizeEntry(panelId, nextMerged),
     };
 }

@@ -243,13 +243,12 @@ class RuntimeHttpGateway:
     ) -> PivotViewState:
         snapshot = _object(request.get("state"))
         payload = _object(request.get("payload"))
-        if request.get("kind") == "export" and payload.get("action") == "start":
+        override = payload.get("state_override") or payload.get("stateOverride")
+        if isinstance(override, dict):
             # Shared frontend commands attach the current UI snapshot here.
             # Dataset row scope is applied below, after the override, so a
             # browser cannot replace server-owned security filters.
-            override = payload.get("state_override") or payload.get("stateOverride")
-            if isinstance(override, dict):
-                snapshot = {**snapshot, **override}
+            snapshot = {**snapshot, **override}
         filters = _object(snapshot.get("filters"))
 
         # Bind only policy-declared row claims before a request reaches the
@@ -510,6 +509,11 @@ class RuntimeHttpGateway:
                 "editOverlay": result.edit_overlay,
                 "formulaErrors": result.formula_errors,
                 "colorScaleStats": result.color_scale_stats,
+                **(
+                    {"availableFields": result.available_fields}
+                    if result.available_fields is not None
+                    else {}
+                ),
             }
             payload = self._externalize_payload(
                 payload, context=context, request_id=request.get("requestId")

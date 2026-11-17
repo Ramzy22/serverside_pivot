@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icons from '../../utils/Icons';
+import ThemedSelect from '../ThemedSelect';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
 import { formatCustomAwareFieldLabel, isCustomCategoryField } from '../../hooks/usePivotNormalization';
 import { applySavedReport, captureReportLayout } from '../../utils/savedReports';
@@ -997,13 +998,29 @@ function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLab
         }));
     }, []);
 
+    useEffect(() => {
+        if (typeof onClose !== 'function') return undefined;
+        /** @param {any} [event] @returns {any} */
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape' && !event.defaultPrevented) {
+                event.preventDefault();
+                onClose();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
     return (
         <div
+            className="sp-dialog-backdrop"
             style={{
                 position: 'fixed',
                 inset: 0,
                 zIndex: 9999,
-                background: 'rgba(15, 23, 42, 0.45)',
+                background: 'rgba(15, 23, 42, 0.38)',
+                backdropFilter: 'blur(6px)',
+                WebkitBackdropFilter: 'blur(6px)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1011,24 +1028,27 @@ function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLab
             onClick={onClose}
         >
             <div
+                className="sp-dialog-surface"
+                role="dialog"
+                aria-modal="true"
                 style={{
                     ...panelCardStyle(theme),
                     width: '520px',
                     maxWidth: '95vw',
                     maxHeight: '85vh',
                     overflowY: 'auto',
-                    boxShadow: '0 24px 64px rgba(15, 23, 42, 0.22)',
+                    boxShadow: theme.shadow || '0 24px 64px rgba(15, 23, 42, 0.26)',
                 }}
                 onClick={(event) => event.stopPropagation()}
             >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                     <div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>{title || 'Edit row override rule'}</div>
+                        <div style={{ fontSize: '14px', fontWeight: 800, letterSpacing: '-0.01em', color: theme.text }}>{title || 'Edit row override rule'}</div>
                         <div style={{ fontSize: '12px', color: theme.textSec, marginTop: '2px' }}>
                             {description || 'Add one or more clauses to decide when this row override should be used.'}
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec }}>
+                    <button type="button" className="sp-btn sp-btn-ghost" onClick={onClose} style={{ background: 'transparent', border: 'none', borderRadius: '6px', cursor: 'pointer', color: theme.textSec, padding: '4px', display: 'inline-flex', alignItems: 'center' }}>
                         <Icons.Close />
                     </button>
                 </div>
@@ -1084,18 +1104,22 @@ function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLab
 
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                    <select
+                                    <ThemedSelect
+                                        size="sm"
+                                        aria-label="Filter field"
                                         value={clause.field}
-                                        onChange={(event) => updateClause(index, { field: event.target.value })}
+                                        onChange={(/** @type {any} */ event) => updateClause(index, { field: event.target.value })}
                                         style={{ ...inputStyle, flex: 1, minWidth: '140px' }}
                                     >
                                         {allFields.map(/** @param {any} [field] @returns {any} */ (field) => (
                                             <option key={field} value={field}>{getFieldLabel(field)}</option>
                                         ))}
-                                    </select>
-                                    <select
+                                    </ThemedSelect>
+                                    <ThemedSelect
+                                        size="sm"
+                                        aria-label="Filter operator"
                                         value={clause.operator}
-                                        onChange={(event) => {
+                                        onChange={(/** @type {any} */ event) => {
                                             const next = event.target.value;
                                             /** @type {any} */
                                             const nextIsList = LIST_OPS.has(next);
@@ -1116,7 +1140,7 @@ function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLab
                                         {OPERATORS.map((operator) => (
                                             <option key={operator.value} value={operator.value}>{operator.label}</option>
                                         ))}
-                                    </select>
+                                    </ThemedSelect>
                                 </div>
 
                                 {LIST_OPS.has(clause.operator) ? (
@@ -1254,11 +1278,11 @@ function ReportFormatEditor({ value, onChange, theme }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
                     Border
-                    <select value={format.borderStyle} onChange={(event) => updateFormat({ borderStyle: event.target.value })} style={inputStyle}>
+                    <ThemedSelect size="sm" aria-label="Border" value={format.borderStyle} onChange={(/** @type {any} */ event) => updateFormat({ borderStyle: event.target.value })} style={{ ...inputStyle, width: '100%' }}>
                         {BORDER_STYLES.map((style) => (
                             <option key={style || 'none'} value={style}>{style || 'None'}</option>
                         ))}
-                    </select>
+                    </ThemedSelect>
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
                     Border color
@@ -1605,16 +1629,18 @@ function NodeInspector({
             >
                 <div>
                     <div style={sectionLabelStyle(theme)}>Break Down By</div>
-                    <select
+                    <ThemedSelect
+                        size="sm"
+                        aria-label="Break down by"
                         value={node.field}
-                        onChange={(event) => onUpdate({ ...node, field: event.target.value })}
-                        style={inputStyle}
+                        onChange={(/** @type {any} */ event) => onUpdate({ ...node, field: event.target.value })}
+                        style={{ ...inputStyle, width: '100%' }}
                     >
                         <option value="">Select field...</option>
                         {allFields.map(/** @param {any} [field] @returns {any} */ (field) => (
                             <option key={field} value={field}>{getFieldLabel(field)}</option>
                         ))}
-                    </select>
+                    </ThemedSelect>
                 </div>
 
                 <div>
@@ -1642,15 +1668,17 @@ function NodeInspector({
                             placeholder="All"
                             style={{ ...inputStyle, textAlign: 'center' }}
                         />
-                        <select
+                        <ThemedSelect
+                            size="sm"
+                            aria-label="Sort by"
                             value={node.sortBy || ''}
-                            onChange={(event) => onUpdate({ ...node, sortBy: event.target.value || null })}
-                            style={inputStyle}
+                            onChange={(/** @type {any} */ event) => onUpdate({ ...node, sortBy: event.target.value || null })}
+                            style={{ ...inputStyle, width: '100%' }}
                         >
                             {sortByOptions.map(/** @param {any} [option] @returns {any} */ (option) => (
                                 <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
-                        </select>
+                        </ThemedSelect>
                         <button
                             type="button"
                             onClick={() => onUpdate({ ...node, sortAbs: !node.sortAbs })}
@@ -1929,16 +1957,18 @@ function RowOverrideInspector({
 
                 <div>
                     <div style={sectionLabelStyle(theme)}>Break Down By</div>
-                    <select
+                    <ThemedSelect
+                        size="sm"
+                        aria-label="Break down by"
                         value={selectedNode.field}
-                        onChange={(event) => updateSelectedNode({ ...selectedNode, field: event.target.value })}
-                        style={inputStyle}
+                        onChange={(/** @type {any} */ event) => updateSelectedNode({ ...selectedNode, field: event.target.value })}
+                        style={{ ...inputStyle, width: '100%' }}
                     >
                         <option value="">Select field...</option>
                         {allFields.map(/** @param {any} [field] @returns {any} */ (field) => (
                             <option key={field} value={field}>{getFieldLabel(field)}</option>
                         ))}
-                    </select>
+                    </ThemedSelect>
                 </div>
 
                 <div>
@@ -1956,15 +1986,17 @@ function RowOverrideInspector({
                             placeholder="All"
                             style={{ ...inputStyle, textAlign: 'center' }}
                         />
-                        <select
+                        <ThemedSelect
+                            size="sm"
+                            aria-label="Sort by"
                             value={selectedNode.sortBy || ''}
-                            onChange={(event) => updateSelectedNode({ ...selectedNode, sortBy: event.target.value || null })}
-                            style={inputStyle}
+                            onChange={(/** @type {any} */ event) => updateSelectedNode({ ...selectedNode, sortBy: event.target.value || null })}
+                            style={{ ...inputStyle, width: '100%' }}
                         >
                             {sortByOptions.map(/** @param {any} [option] @returns {any} */ (option) => (
                                 <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
-                        </select>
+                        </ThemedSelect>
                         <button
                             type="button"
                             onClick={() => updateSelectedNode({ ...selectedNode, sortAbs: !selectedNode.sortAbs })}
@@ -2723,18 +2755,20 @@ export function ReportEditor({
                         <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>Level 1</div>
                         <div>
                             <div style={sectionLabelStyle(theme)}>Break Down By</div>
-                            <select
+                            <ThemedSelect
+                                size="sm"
+                                aria-label="Level 1 field"
                                 value=""
-                                onChange={(event) => {
+                                onChange={(/** @type {any} */ event) => {
                                     if (event.target.value) addRoot(event.target.value);
                                 }}
-                                style={inp(theme)}
+                                style={{ ...inp(theme), width: '100%' }}
                             >
                                 <option value="">Select field...</option>
                                 {allFields.map(/** @param {any} [field] @returns {any} */ (field) => (
                                     <option key={field} value={field}>{getFieldLabel(field)}</option>
                                 ))}
-                            </select>
+                            </ThemedSelect>
                         </div>
                     </div>
                 ) : (

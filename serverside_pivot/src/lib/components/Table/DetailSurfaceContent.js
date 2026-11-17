@@ -163,8 +163,14 @@ function DetailSurfaceContent({
                                             whiteSpace: 'nowrap',
                                         }}
                                     >
-                                        {columnId}
-                                        {sortCol === columnId ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                            <span>{columnId}</span>
+                                            {sortCol === columnId ? (
+                                                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                                    {sortDir === 'asc' ? <Icons.SortAsc /> : <Icons.SortDesc />}
+                                                </span>
+                                            ) : null}
+                                        </span>
                                     </th>
                                 ))}
                             </tr>

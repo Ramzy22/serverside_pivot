@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo } from 'react';
 import { injectThemeCssVars } from '../utils/styles';
 
-const PivotThemeContext = createContext(/** @type {any} */ (null));
+export const PivotThemeContext = createContext(/** @type {any} */ (null));
 
 function injectCssBaseline() {
     if (typeof document === 'undefined' || document.getElementById('sp-css-baseline')) return;

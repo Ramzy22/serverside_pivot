@@ -6,23 +6,21 @@ import Icons from '../../utils/Icons';
 const ToolPanelSection = ({ title, children, items, renderItem, theme, styles, initialExpanded = true, count, onDrop, sectionId }) => {
     /** @type {[any, (...args: any[]) => any]} */
     const [expanded, setExpanded] = useState(initialExpanded);
-    /** @type {[any, (...args: any[]) => any]} */
-    const [height, setHeight] = useState(initialExpanded ? 200 : 0);
-    /** @type {[any, (...args: any[]) => any]} */
+    const [renderItemsWhileClosing, setRenderItemsWhileClosing] = useState(initialExpanded);
+    const [scrollSettled, setScrollSettled] = useState(initialExpanded);
     const [isOver, setIsOver] = useState(false);
-    /** @type {any} */
     const contentRef = useRef(null);
-    /** @type {any} */
-    const parentRef = useRef(null);
 
     useEffect(() => {
-        if (expanded && contentRef.current) {
-            const contentHeight = contentRef.current.scrollHeight;
-            setHeight(Math.min(contentHeight, 300)); // Cap at 300px
-        } else {
-            setHeight(0);
+        if (expanded) {
+            setRenderItemsWhileClosing(true);
+            const openTimer = setTimeout(() => setScrollSettled(true), 220);
+            return () => clearTimeout(openTimer);
         }
-    }, [expanded, items, count]);
+        setScrollSettled(false);
+        const closeTimer = setTimeout(() => setRenderItemsWhileClosing(false), 220);
+        return () => clearTimeout(closeTimer);
+    }, [expanded]);
 
     /** @type {any} */
     const rowVirtualizer = useVirtualizer({
@@ -30,7 +28,7 @@ const ToolPanelSection = ({ title, children, items, renderItem, theme, styles, i
         getScrollElement: () => contentRef.current,
         estimateSize: () => 32,
         overscan: 10,
-        enabled: !!items && expanded
+        enabled: !!items && (expanded || renderItemsWhileClosing)
     });
 
     /** @param {any} [e] @returns {any} */
@@ -55,34 +53,66 @@ const ToolPanelSection = ({ title, children, items, renderItem, theme, styles, i
         }
     };
 
+    /** @param {any} [e] @returns {any} */
+    const handleHeaderKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded(/** @param {any} [prev] @returns {any} */ (prev) => !prev);
+        }
+    };
+
     return (
         <div
+            data-is-over={isOver ? 'true' : undefined}
             style={{
                 ...styles.toolPanelSection,
                 flex: expanded ? '0 1 auto' : '0 0 auto',
                 minHeight: expanded ? '40px' : '32px',
-                overflow: 'hidden' // Prevent overlap
+                overflow: 'hidden', // Prevent overlap
+                borderRadius: isOver ? '8px' : undefined,
+                background: isOver ? (theme.select || 'rgba(37,99,235,0.08)') : undefined,
+                boxShadow: isOver ? `inset 0 0 0 1.5px ${theme.primary}` : undefined,
+                transition: 'background-color 140ms ease, box-shadow 140ms ease',
             }}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
         >
-            <div style={styles.toolPanelSectionHeader} onClick={() => setExpanded(!expanded)}>
-                <span style={{ marginRight: '8px', opacity: 0.7, display: 'flex' }}>
-                    {expanded ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
+            <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded}
+                className="sp-btn sp-btn-ghost"
+                style={{ ...styles.toolPanelSectionHeader, borderRadius: '6px' }}
+                onClick={() => setExpanded(!expanded)}
+                onKeyDown={handleHeaderKeyDown}
+            >
+                <span style={{
+                    marginRight: '8px',
+                    opacity: 0.72,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                    transition: 'transform 160ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                }}>
+                    <Icons.ChevronRight />
                 </span>
                 <span style={{ flex: 1 }}>{title}</span>
-                {count !== undefined && <span style={{ fontSize: '10px', opacity: 0.5, background: theme.hover, padding: '2px 6px', borderRadius: '10px' }}>{count}</span>}
+                {count !== undefined && <span style={{ fontSize: '10px', opacity: 0.7, background: theme.hover, padding: '2px 7px', borderRadius: '10px', fontVariantNumeric: 'tabular-nums' }}>{count}</span>}
             </div>
 
             <div
+                className="sp-disclosure-grid"
+                data-expanded={expanded ? 'true' : 'false'}
+                style={{ pointerEvents: expanded ? 'auto' : 'none' }}
+            >
+            <div
                 ref={contentRef}
+                className="sp-disclosure-inner"
                 style={{
                     ...styles.toolPanelList,
-                    height: `${height}px`,
-                    overflowY: expanded ? 'auto' : 'hidden',
-                    transition: 'height 0.3s ease',
-                    opacity: expanded ? 1 : 0
+                    maxHeight: '300px',
+                    overflowY: expanded && scrollSettled ? 'auto' : 'hidden',
                 }}
             >
                 {items ? (
@@ -108,6 +138,7 @@ const ToolPanelSection = ({ title, children, items, renderItem, theme, styles, i
                         ))}
                     </div>
                 ) : children}
+            </div>
             </div>
         </div>
     );

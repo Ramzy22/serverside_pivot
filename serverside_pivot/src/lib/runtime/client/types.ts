@@ -15,8 +15,10 @@ export interface ClientRuntimeConfig {
     duckdbWasmCdnUrl?: string;
     duckdbBundleUrl?: string;
     duckdbWasmInstance?: unknown;
+    duckdbLoader?: () => Promise<unknown>;
     legacyClientTable?: boolean;
     tableName?: string;
+    showGrandTotal?: boolean;
     xlsxLoader?: () => Promise<unknown>;
 }
 
@@ -36,6 +38,7 @@ export interface NormalizedValConfig {
     agg: string;
     id: string;
     label: string;
+    shortLabel?: string;
     weightField?: string;
     windowFn?: string;
     formula?: string;
@@ -104,6 +107,7 @@ export interface LogicalPivotPlan {
         nulls?: string;
         naturalSort?: boolean;
         fieldOptions?: { [key: string]: { sortType?: string; sortKeyField?: string; absoluteSort?: boolean } };
+        columnOptions?: { [key: string]: { sortType?: string; sortKeyField?: string; absoluteSort?: boolean } };
     };
     expandedAll: boolean;
     expandedPaths: string[][];
@@ -159,6 +163,7 @@ export interface AggregatedCellMetrics {
 export interface ClientExecutedDataset {
     filteredRows: Array<{ [key: string]: unknown }>;
     allRows: Array<{ [key: string]: unknown }>;
+    availableFields?: string[];
     colCombinations: string[];
     engineUsed: 'duckdb-wasm' | 'memory';
     executionMs: number;
@@ -190,6 +195,7 @@ export interface DrillThroughResult {
 
 export interface ClientPivotTransportInterface extends PivotTransport {
     setData: (rows: Array<{ [key: string]: unknown }>) => void;
+    getAvailableFields?: () => string[];
     updateConfig: (config: Partial<ClientRuntimeConfig>) => void;
     getTelemetry: () => ClientEngineTelemetry;
     queryDrillThrough: (query: DrillThroughQuery) => Promise<DrillThroughResult>;

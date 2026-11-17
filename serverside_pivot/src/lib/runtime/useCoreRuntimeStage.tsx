@@ -55,6 +55,7 @@ import { usePivotFieldInteractions } from '../hooks/usePivotFieldInteractions';
 import { getSparklineValueConfigIdentity, normalizeSparklineValConfigsForView } from '../utils/sparklines';
 import { formatLocaleTextTemplate } from '../utils/pivotLayoutUtils';
 import { ClientPivotTransport, resolveExecutionMode } from './client/index';
+import ShimmerFallback from '../components/ShimmerFallback';
 // Editing and transaction mutation are deliberately outside the public
 // component contract. Legacy edit inputs remain accepted by Dash metadata but
 // are ignored so an existing layout can upgrade without a prop-validation
@@ -66,7 +67,7 @@ const LazyPivotChartModal = React.lazy(() => import(/* webpackChunkName: "pivot-
 const LazyPivotChartPanel = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
   default: module.PivotChartPanel
 })));
-const PivotChartFallback = () => null;
+const PivotChartFallback = () => <ShimmerFallback variant="chart" />;
 const PivotChartModal = props => <React.Suspense fallback={<PivotChartFallback />}>
         <LazyPivotChartModal {...props} />
     </React.Suspense>;
@@ -385,6 +386,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   stage.data = stage.transportDataState.data;
   stage.rowCount = stage.transportDataState.rowCount;
   stage.responseColumns = stage.transportDataState.columns;
+  stage.responseAvailableFields = stage.transportDataState.availableFields;
   stage.responseColSchema = stage.transportDataState.colSchema;
   stage.dataOffset = stage.transportDataState.dataOffset;
   stage.dataVersion = stage.transportDataState.dataVersion;
@@ -426,13 +428,6 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       }
     });
   }, [stage.setProps]);
-  stage.availableFields = useMemo(() => {
-    if (stage.availableFieldList && stage.availableFieldList.length > 0) return stage.availableFieldList;
-    if (stage.serverSide && stage.responseColumns) {
-      return stage.responseColumns.map(c => c && typeof c === 'object' ? c.id : c).filter(isAutoDataFieldId);
-    }
-    return collectDataFieldIds(stage.data);
-  }, [stage.data, stage.responseColumns, stage.serverSide, stage.availableFieldList]);
   const externalThemeSelection = stage.externalTheme || stage.externalDefaultTheme;
   const prevExternalThemeRef = useRef(externalThemeSelection);
   [stage.themeName, stage.setThemeName] = useState(() => themes[stage.defaultTheme] ? stage.defaultTheme : 'flash');
@@ -489,7 +484,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
         '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(35,53,82,0.88) 0%, rgba(49,74,112,0.95) 50%, rgba(35,53,82,0.88) 100%)',
         '--pivot-loading-border': 'rgba(130, 165, 215, 0.45)',
         '--pivot-loading-progress-gradient': 'linear-gradient(90deg, rgba(120,170,240,0) 0%, rgba(140,190,255,0.92) 45%, rgba(120,170,240,0) 100%)',
-        '--pivot-loading-shimmer-duration': '2.8s'
+        '--pivot-loading-shimmer-duration': '1.6s'
       };
     }
     return {
@@ -498,7 +493,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%)',
       '--pivot-loading-border': 'rgba(153, 187, 238, 0.5)',
       '--pivot-loading-progress-gradient': 'linear-gradient(90deg, rgba(75,139,245,0) 0%, rgba(75,139,245,0.9) 45%, rgba(75,139,245,0) 100%)',
-      '--pivot-loading-shimmer-duration': '2.8s'
+      '--pivot-loading-shimmer-duration': '1.6s'
     };
   }, [stage.theme]);
   [stage.rowFields, stage.setRowFields] = useState(stage.initialRowFields);
@@ -509,7 +504,6 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   [stage.customDimensions, stage.setCustomDimensions] = useState(() => stage.hasExternalCustomDimensions ? stage.normalizedInitialCustomDimensions : normalizeCustomDimensionsValue(stage.loadPersistedState('customDimensions', stage.normalizedInitialCustomDimensions)));
   [stage.measureAxis, stage.setMeasureAxis] = useState(() => stage.hasExternalMeasureAxis ? stage.normalizedInitialMeasureAxis : normalizeMeasureAxisValue(stage.loadPersistedState('measureAxis', stage.normalizedInitialMeasureAxis), stage.normalizedInitialMeasureAxis));
   stage.runtimeMeasureAxis = useMemo(() => buildMeasureAxisRuntimeConfig(stage.measureAxis, stage.valConfigs), [stage.measureAxis, stage.valConfigs]);
-  stage.availableFieldsWithCustomDimensions = useMemo(() => decorateAvailableFieldsWithCustomDimensions(stage.availableFields, stage.customDimensions), [stage.availableFields, stage.customDimensions]);
   useEffect(() => {
     const normalized = normalizeMeasureAxisValue(stage.measureAxis);
     const labelField = normalized.labelField;
@@ -520,12 +514,12 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     // correct index). Silently appending to the end corrupts hierarchy order when the
     // measure dimension is intended to sit between other row dimensions.
     if (normalized.placement === 'rows') {
-      stage.setColFields(previous => (previous || []).filter(field => field !== labelField));
+      stage.setColFields(previous => Array.isArray(previous) && previous.includes(labelField) ? previous.filter(field => field !== labelField) : previous);
     } else if (normalized.placement === 'columns') {
-      stage.setRowFields(previous => (previous || []).filter(field => field !== labelField));
+      stage.setRowFields(previous => Array.isArray(previous) && previous.includes(labelField) ? previous.filter(field => field !== labelField) : previous);
     } else {
-      stage.setRowFields(previous => (previous || []).filter(field => field !== labelField));
-      stage.setColFields(previous => (previous || []).filter(field => field !== labelField));
+      stage.setRowFields(previous => Array.isArray(previous) && previous.includes(labelField) ? previous.filter(field => field !== labelField) : previous);
+      stage.setColFields(previous => Array.isArray(previous) && previous.includes(labelField) ? previous.filter(field => field !== labelField) : previous);
     }
   }, [stage.measureAxis]);
   useEffect(() => {
@@ -538,6 +532,31 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     });
   }, [stage.hasExternalMeasureAxis, stage.valConfigs]);
   [stage.filters, stage.setFilters] = useState(stage.initialFilters);
+  stage.availableFields = useMemo(() => {
+    if (stage.availableFieldList && stage.availableFieldList.length > 0) return stage.availableFieldList;
+    if (Array.isArray(stage.responseAvailableFields) && stage.responseAvailableFields.length > 0) {
+      return stage.responseAvailableFields;
+    }
+    if (stage.clientRuntimeActive) {
+      const transportFields = stage.clientTransportRef.current && typeof stage.clientTransportRef.current.getAvailableFields === 'function'
+        ? stage.clientTransportRef.current.getAvailableFields()
+        : null;
+      if (Array.isArray(transportFields) && transportFields.length > 0) return transportFields;
+    }
+    if (stage.serverSide && stage.responseColumns) {
+      return stage.responseColumns.map(c => c && typeof c === 'object' ? c.id : c).filter(isAutoDataFieldId);
+    }
+    return collectDataFieldIds(stage.data);
+  }, [
+    stage.data,
+    stage.inputData,
+    stage.responseAvailableFields,
+    stage.responseColumns,
+    stage.serverSide,
+    stage.clientRuntimeActive,
+    stage.availableFieldList,
+  ]);
+  stage.availableFieldsWithCustomDimensions = useMemo(() => decorateAvailableFieldsWithCustomDimensions(stage.availableFields, stage.customDimensions), [stage.availableFields, stage.customDimensions]);
   [stage.sorting, stage.setSorting] = useState(stage.initialSorting);
   [stage.expanded, stage.setExpanded] = useState(stage.initialExpanded);
   [stage.columnPinning, stage.setColumnPinning] = useState(() => stage.loadPersistedState('columnPinning', stage.initialColumnPinning));
@@ -639,7 +658,8 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   stage.reportDefRef = useRef(stage.reportDef);
   stage.reportDefRef.current = stage.reportDef;
   stage.didPublishDecimalPlacesRef = useRef(false);
-  stage.didPublishFieldPanelSizesRef = useRef(false);
+  stage.lastSyncedFieldPanelSizesJsonRef = useRef(null);
+  stage.pendingPublishedFieldPanelSizesJsonRef = useRef([]);
   stage.didPublishDefaultValueFormatRef = useRef(false);
   stage.didPublishNumberGroupSeparatorRef = useRef(false);
   stage.didPublishReportStateRef = useRef(false);
@@ -665,11 +685,12 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   stage.effectiveSortOptions = useMemo(() => {
     const baseOptions = stage.sortOptions && typeof stage.sortOptions === 'object' ? stage.sortOptions : {};
     const baseColumnOptions = baseOptions.columnOptions && typeof baseOptions.columnOptions === 'object' ? baseOptions.columnOptions : {};
+    const activeColFields = new Set(Array.isArray(stage.colFields) ? stage.colFields : []);
     const mergedColumnOptions = {
       ...baseColumnOptions
     };
     Object.entries(stage.pivotColumnSorting || {}).forEach(([field, sortState]) => {
-      if (!field || !sortState || typeof sortState !== 'object') return;
+      if (!field || !activeColFields.has(field) || !sortState || typeof sortState !== 'object') return;
       const direction = sortState.pivotDirection;
       const mode = sortState.pivotSortMode;
       const existing = mergedColumnOptions[field] && typeof mergedColumnOptions[field] === 'object' ? mergedColumnOptions[field] : {};
@@ -692,7 +713,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       ...baseOptions,
       columnOptions: mergedColumnOptions
     };
-  }, [stage.sortOptions, stage.pivotColumnSorting]);
+  }, [stage.sortOptions, stage.pivotColumnSorting, stage.colFields]);
   stage.getDisplayRows = useCallback(() => {
     if (stage.displayRowsRef.current.length > 0) return stage.displayRowsRef.current;
     if (stage.tableRef.current && stage.tableRef.current.getRowModel) {
@@ -771,6 +792,10 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       stage.setTableCanvasSize(DEFAULT_TABLE_CANVAS_SIZE);
       stage.setChartPaneDataById({});
       stage.setSidebarWidth(288);
+      const resetFieldPanelSizesJson = JSON.stringify(sanitizeFieldPanelSizes(stage.normalizedInitialFieldPanelSizes));
+      stage.lastSyncedFieldPanelSizesJsonRef.current = resetFieldPanelSizesJson;
+      stage.lastFieldPanelSizesPropRef.current = resetFieldPanelSizesJson;
+      stage.pendingPublishedFieldPanelSizesJsonRef.current = stage.setPropsRef.current ? [resetFieldPanelSizesJson] : [];
       stage.setFieldPanelSizes(stage.normalizedInitialFieldPanelSizes);
       stage.setDecimalPlaces(stage.normalizedInitialDecimalPlaces);
       stage.setDefaultValueFormat(stage.normalizedInitialDefaultValueFormat);
@@ -890,7 +915,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   }, [stage.persistence, stage.savePersistedState, stage.showReportConfigColumn]);
   const effectiveShowTotal = stage.viewMode === 'tree'
     ? Boolean(stage.showGrandTotal ?? stage.treeConfig?.showGrandTotal)
-    : stage.showColTotals;
+    : (stage.showGrandTotal !== undefined ? Boolean(stage.showGrandTotal) : stage.showColTotals);
   stage.effectiveGrandTotalPinState = useMemo(() => resolveGrandTotalPinState(effectiveShowTotal, stage.grandTotalPosition, stage.grandTotalPinOverride), [effectiveShowTotal, stage.grandTotalPosition, stage.grandTotalPinOverride]);
   stage.serverSidePinsGrandTotal = stage.serverSide && effectiveShowTotal && (stage.effectiveGrandTotalPinState === 'top' || stage.effectiveGrandTotalPinState === 'bottom');
   [stage.showRowNumbers, stage.setShowRowNumbers] = useState(false);
@@ -925,6 +950,8 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     sanitizeFieldPanelSizes,
     DEFAULT_FIELD_PANEL_SIZES
   }));
+  stage.fieldPanelSizesRef = useRef(stage.fieldPanelSizes);
+  stage.fieldPanelSizesRef.current = stage.fieldPanelSizes;
   [stage.hoveredHeaderId, stage.setHoveredHeaderId] = useState(null);
   [stage.focusedHeaderId, stage.setFocusedHeaderId] = useState(null);
   stage.hoveredHeaderIdRef = useRef(null);
@@ -960,8 +987,10 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     setColorPalette: stage.setColorPalette,
     dataBarsColumns: stage.dataBarsColumns,
     dataBarMaximums: stage.dataBarMaximums,
+    dataBarVariant: stage.dataBarVariant,
     setDataBarsColumns: stage.setDataBarsColumns,
     setDataBarMaximums: stage.setDataBarMaximums,
+    setDataBarVariant: stage.setDataBarVariant,
     fontFamily: stage.fontFamily,
     setFontFamily: stage.setFontFamily,
     fontSize: stage.fontSize,
@@ -1291,28 +1320,39 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       }
       const previousJson = JSON.stringify(existingDefinitions);
       const nextJson = JSON.stringify(nextDefinitions);
-      if (previousJson === nextJson) return previousDefinitions;
-      if (stage.setPropsRef.current) {
-        // PivotWorkspace mirrors setProps locally for host-neutral usage.
-        // Remember this write before it comes back through props so a chart
-        // panel width drag is not reset by its own echoed definition.
-        stage.lastChartDefinitionsPropRef.current = nextJson;
-        stage.setPropsRef.current({
-          chartDefinitions: nextDefinitions
-        });
-      }
-      return nextDefinitions;
+      return previousJson === nextJson ? previousDefinitions : nextDefinitions;
     });
   }, [stage.currentChartDefinition]);
+  stage.lastSyncedChartDefsJsonRef = useRef(null);
+  useEffect(() => {
+    const nextJson = JSON.stringify(stage.managedChartDefinitions || []);
+    if (stage.lastSyncedChartDefsJsonRef.current === null) {
+      stage.lastSyncedChartDefsJsonRef.current = nextJson;
+      return;
+    }
+    if (nextJson === stage.lastSyncedChartDefsJsonRef.current) return;
+    stage.lastSyncedChartDefsJsonRef.current = nextJson;
+    if (!stage.setPropsRef.current || nextJson === stage.lastChartDefinitionsPropRef.current) return;
+    stage.lastChartDefinitionsPropRef.current = nextJson;
+    stage.setPropsRef.current({
+      chartDefinitions: stage.managedChartDefinitions
+    });
+  }, [stage.managedChartDefinitions]);
+  stage.lastSyncedCanvasLayoutJsonRef = useRef(null);
   useEffect(() => {
     if (!stage.setPropsRef.current) return;
     const nextChartCanvasPanes = stage.chartCanvasPanes.map(pane => ({
         ...pane
     }));
-    // A pane resize is local state. The public prop write is retained for
-    // Dash and controlled React hosts, but must not be reapplied when the
-    // host-neutral PivotWorkspace mirrors it into runtimeProps.
+    const serializedChartCanvasPanes = JSON.stringify(nextChartCanvasPanes);
+    const nextLayoutKey = `${serializedChartCanvasPanes}|${stage.tableCanvasSize}`;
     stage.lastChartCanvasPanesPropRef.current = JSON.stringify(nextChartCanvasPanes);
+    if (stage.lastSyncedCanvasLayoutJsonRef.current === null) {
+      stage.lastSyncedCanvasLayoutJsonRef.current = nextLayoutKey;
+      return;
+    }
+    if (stage.lastSyncedCanvasLayoutJsonRef.current === nextLayoutKey) return;
+    stage.lastSyncedCanvasLayoutJsonRef.current = nextLayoutKey;
     stage.lastTableCanvasSizePropRef.current = stage.tableCanvasSize;
     stage.setPropsRef.current({
       chartCanvasPanes: nextChartCanvasPanes,
@@ -1349,18 +1389,47 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     stage.setDecimalPlaces(normalizedExternal);
   }, [stage.externalDecimalPlaces]);
   useEffect(() => {
-    const serializedExternal = stage.externalFieldPanelSizes && typeof stage.externalFieldPanelSizes === 'object' ? JSON.stringify(stage.normalizedInitialFieldPanelSizes) : null;
+    const hasExternalObject = Boolean(stage.externalFieldPanelSizes && typeof stage.externalFieldPanelSizes === 'object');
+    const serializedExternal = hasExternalObject ? JSON.stringify(stage.normalizedInitialFieldPanelSizes) : null;
+    if (hasExternalObject) {
+      const pendingQueue = stage.pendingPublishedFieldPanelSizesJsonRef.current;
+      const matchedIdx = pendingQueue.indexOf(serializedExternal);
+      if (matchedIdx !== -1) {
+        const remainingQueue = pendingQueue.slice(matchedIdx + 1);
+        stage.pendingPublishedFieldPanelSizesJsonRef.current = remainingQueue;
+        if (remainingQueue.length > 0) {
+          return;
+        }
+        stage.lastFieldPanelSizesPropRef.current = serializedExternal;
+        if (serializedExternal === JSON.stringify(sanitizeFieldPanelSizes(stage.fieldPanelSizesRef.current))) {
+          return;
+        }
+      }
+    }
     if (serializedExternal === stage.lastFieldPanelSizesPropRef.current) return;
     stage.lastFieldPanelSizesPropRef.current = serializedExternal;
-    if (!stage.externalFieldPanelSizes || typeof stage.externalFieldPanelSizes !== 'object') return;
+    if (!hasExternalObject) return;
+    if (serializedExternal === JSON.stringify(sanitizeFieldPanelSizes(stage.fieldPanelSizesRef.current))) {
+      stage.lastSyncedFieldPanelSizesJsonRef.current = serializedExternal;
+      return;
+    }
+    stage.pendingPublishedFieldPanelSizesJsonRef.current = [];
+    stage.lastSyncedFieldPanelSizesJsonRef.current = serializedExternal;
     stage.setFieldPanelSizes(stage.normalizedInitialFieldPanelSizes);
   }, [stage.externalFieldPanelSizes, stage.normalizedInitialFieldPanelSizes]);
   useEffect(() => {
-    if (!stage.setPropsRef.current) return;
-    if (!stage.didPublishFieldPanelSizesRef.current) {
-      stage.didPublishFieldPanelSizesRef.current = true;
+    const nextJson = JSON.stringify(sanitizeFieldPanelSizes(stage.fieldPanelSizes));
+    if (stage.lastSyncedFieldPanelSizesJsonRef.current === null) {
+      stage.lastSyncedFieldPanelSizesJsonRef.current = nextJson;
       return;
     }
+    if (nextJson === stage.lastSyncedFieldPanelSizesJsonRef.current) return;
+    stage.lastSyncedFieldPanelSizesJsonRef.current = nextJson;
+    if (!stage.setPropsRef.current || nextJson === stage.lastFieldPanelSizesPropRef.current) return;
+    stage.lastFieldPanelSizesPropRef.current = nextJson;
+    const nextPending = stage.pendingPublishedFieldPanelSizesJsonRef.current.slice(-23);
+    nextPending.push(nextJson);
+    stage.pendingPublishedFieldPanelSizesJsonRef.current = nextPending;
     stage.setPropsRef.current({
       fieldPanelSizes: stage.fieldPanelSizes
     });
@@ -1481,6 +1550,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
     if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));
     stage.setDataBarMaximums(restored.dataBarMaximums);
+    if (typeof restored.dataBarVariant === 'string') stage.setDataBarVariant(restored.dataBarVariant);
     if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') stage.setPivotColumnSorting(restored.pivotColumnSorting);
     if (restored.columnPinning && typeof restored.columnPinning === 'object') stage.setColumnPinning(restored.columnPinning);
     const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object' ? restored.rowPinning : null;

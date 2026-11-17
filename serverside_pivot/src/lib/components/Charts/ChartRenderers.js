@@ -761,7 +761,7 @@ export const SvgChart = ({
     /** @type {any} */
     const zoomBadge = zoomScale > 1.05 ? (
         <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 12, background: theme.surfaceBg || '#fff', border: `1px solid ${theme.border}`, borderRadius: theme.radiusSm || '8px', padding: '2px 7px', fontSize: '10px', fontWeight: 700, color: theme.textSec, pointerEvents: 'auto', cursor: 'pointer' }} onClick={handleDblClick} title="Reset zoom (or double-click chart)">
-            {Math.round(zoomScale * 100)}% ✕
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span>{Math.round(zoomScale * 100)}%</span><span style={{ display: 'inline-flex', alignItems: 'center', transform: 'scale(0.75)' }}><Icons.Close /></span></span>
         </div>
     ) : null;
     /** @type {[any, (...args: any[]) => any]} */
@@ -3514,7 +3514,7 @@ export const SvgChart = ({
                     let positiveOffset = 0;
                     let negativeOffset = 0;
                     return (
-                        <g key={`bar-group-${category}`}>
+                        <g key={`bar-group-${category}-${categoryIndex}`}>
                             {model.series.map(/** @param {any} [series] @param {any} [seriesIndex] @returns {any} */ (series, seriesIndex) => {
                                 if (hiddenSeries.has(series.name)) return null;
                                 const value = series.values[categoryIndex];
@@ -3545,7 +3545,7 @@ export const SvgChart = ({
                                         const x2 = geometry.scaleX(endValue);
                                         return (
                                             <rect
-                                                key={`${series.name}-${category}`}
+                                                key={`${series.name}-${seriesIndex}-${category}-${categoryIndex}`}
                                                 x={Math.min(x1, x2)}
                                                 y={slotStart}
                                                 width={Math.max(1, Math.abs(x2 - x1))}
@@ -3564,7 +3564,7 @@ export const SvgChart = ({
                                     const y2 = geometry.scaleY(endValue);
                                     return (
                                         <rect
-                                            key={`${series.name}-${category}`}
+                                            key={`${series.name}-${seriesIndex}-${category}-${categoryIndex}`}
                                             x={slotStart}
                                             y={Math.min(y1, y2)}
                                             width={barThickness}
@@ -3583,7 +3583,7 @@ export const SvgChart = ({
                                     /** @type {any} */
                                     const y = slotStart + seriesIndex * (barThickness + 4);
                                     return (
-                                        <React.Fragment key={`${series.name}-${category}`}>
+                                        <React.Fragment key={`${series.name}-${seriesIndex}-${category}-${categoryIndex}`}>
                                             <rect
                                                 x={Math.min(x, geometry.baselineX)}
                                                 y={y}
@@ -3621,7 +3621,7 @@ export const SvgChart = ({
                                 /** @type {any} */
                                 const x = slotStart + seriesIndex * (barThickness + 4);
                                 return (
-                                    <React.Fragment key={`${series.name}-${category}`}>
+                                    <React.Fragment key={`${series.name}-${seriesIndex}-${category}-${categoryIndex}`}>
                                         <rect
                                             x={x}
                                             y={Math.min(y, geometry.baselineY)}

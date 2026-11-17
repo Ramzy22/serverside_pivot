@@ -1,3 +1,4 @@
+include README_PYPI.md
 include serverside_pivot/*.js
 include serverside_pivot/*.txt
 include serverside_pivot/package-info.json

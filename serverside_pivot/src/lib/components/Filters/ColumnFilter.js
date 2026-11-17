@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icons from '../../utils/Icons';
 import { getStyles } from '../../utils/styles';
+import ThemedSelect from '../ThemedSelect';
 import DateRangeFilter from './DateRangeFilter';
 import NumericRangeFilter from './NumericRangeFilter';
 import MultiSelectFilter from './MultiSelectFilter';
@@ -208,7 +209,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                                     <label style={{fontSize:'11px', color: '#666'}}>Condition {index + 1}</label>
                                     {conditions.length > 1 && <span onClick={() => removeCondition(index)} style={{cursor: 'pointer'}}><Icons.Close/></span>}
                                 </div>
-                                <select value={cond.type} onChange={e => updateCondition(index, 'type', e.target.value)} style={{padding:'4px', borderRadius:'2px', border:'1px solid #ddd'}}>
+                                <ThemedSelect size="sm" aria-label={`Condition ${index + 1} operator`} value={cond.type} onChange={(/** @type {any} */ e) => updateCondition(index, 'type', e.target.value)} style={{padding:'4px 6px', borderRadius:'4px', width: '100%'}}>
                                     <option value="eq">Equals</option>
                                     <option value="ne">Not Equals</option>
                                     <option value="contains">Contains</option>
@@ -218,7 +219,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                                     <option value="lt">Less Than</option>
                                     <option value="between">Between (Range)</option>
                                     <option value="in">In List</option>
-                                </select>
+                                </ThemedSelect>
                                 
                                 {cond.type === 'between' ? (
                                     <div style={{display: 'flex', gap: '4px'}}>

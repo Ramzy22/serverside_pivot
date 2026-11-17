@@ -1,4 +1,5 @@
 import React from 'react';
+import ShimmerFallback from '../ShimmerFallback';
 import SkeletonRow from '../SkeletonRow';
 import StatusBar from './StatusBar';
 import { usePivotTheme } from '../../contexts/PivotThemeContext';
@@ -7,7 +8,7 @@ import { buildRowSpanPlan, collectRowSpanColumns } from '../../utils/rowSpanning
 import { getPivotPerformanceNow, recordPivotMeasure } from '../../utils/pivotProfiler';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { isGrandTotalRow } from '../../hooks/usePivotNormalization';
-import { resolveDepthToken, resolveGridLineBorders } from '../../utils/styles';
+import { resolveDepthToken, resolveGridLineBorders, withAlpha } from '../../utils/styles';
 
 /** @type {any} */
 const LazyInlineDetailPanel = React.lazy(() => import(/* webpackChunkName: "pivot-detail-inline" */ './InlineDetailPanel'));
@@ -254,6 +255,123 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         return lookup;
     }, [effectiveCenterRows]);
 
+    const knownVisibleChildRowIdsRef = React.useRef(new Set());
+    const newlyRevealedUntilByKeyRef = React.useRef(/** @type {Map<string, { delayMs: number, expiresAt: number }>} */ (new Map()));
+    const revealClearTimerRef = React.useRef(/** @type {any} */ (null));
+    const wasScrollingRef = React.useRef(false);
+    const hasMountedCenterRowsRef = React.useRef(false);
+    const [exitingRowSnapshots, setExitingRowSnapshots] = React.useState(/** @type {any[]} */ ([]));
+    const prevCommittedRowsRef = React.useRef(/** @type {any[]} */ ([]));
+    const prevScrollTopRef = React.useRef(0);
+    const prevModelRowCountRef = React.useRef(0);
+    const exitUnderlayTimerRef = React.useRef(/** @type {any} */ (null));
+    /** @type {any[]} */
+    const committedRowsCollector = [];
+
+    React.useEffect(() => () => {
+        if (exitUnderlayTimerRef.current) {
+            clearTimeout(exitUnderlayTimerRef.current);
+            exitUnderlayTimerRef.current = null;
+        }
+        if (revealClearTimerRef.current) {
+            clearTimeout(revealClearTimerRef.current);
+            revealClearTimerRef.current = null;
+        }
+    }, []);
+
+    // Run pre-paint (useLayoutEffect) so exiting collapse snapshots mount BEFORE
+    // the browser paints the next frame — avoiding a 1-frame empty flash — and
+    // staggered child reveals retain their timing across mid-flight re-renders.
+    React.useLayoutEffect(() => {
+        const isScrollingNow = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
+        const currentScrollTop = parentRef && parentRef.current ? parentRef.current.scrollTop : 0;
+        const currentModelCount = serverSide
+            ? Number(rowCount || effectiveCenterRows.length || 0)
+            : effectiveCenterRows.length;
+        const scrollDelta = Math.abs(currentScrollTop - prevScrollTopRef.current);
+        const activeSnapshotKeys = new Set(committedRowsCollector.map(/** @param {any} [item] @returns {any} */ (item) => item.rowKey));
+
+        // Cancel exiting underlay for any rows that came back (rapid re-expand)
+        setExitingRowSnapshots(/** @param {any} [prev] @returns {any} */ (prev) => {
+            if (!Array.isArray(prev) || prev.length === 0) return prev;
+            const remaining = prev.filter(/** @param {any} [snap] @returns {any} */ (snap) => !centerRowLookup.has(snap.rowKey) && !activeSnapshotKeys.has(snap.rowKey));
+            return remaining.length === prev.length ? prev : remaining;
+        });
+
+        // Capture collapsing child rows cleanly as an underlay behind sliding siblings (AG Grid FLIP)
+        if (
+            !isScrollingNow
+            && !wasScrollingRef.current
+            && hasMountedCenterRowsRef.current
+            && scrollDelta < Math.max(12, rowHeight)
+            && currentModelCount < prevModelRowCountRef.current
+            && prevCommittedRowsRef.current.length > 0
+        ) {
+            const vanished = prevCommittedRowsRef.current
+                .filter(/** @param {any} [snap] @returns {any} */ (snap) => (
+                    snap
+                    && snap.depth > 0
+                    && !centerRowLookup.has(snap.rowKey)
+                    && !activeSnapshotKeys.has(snap.rowKey)
+                ))
+                .slice(0, 24);
+            if (vanished.length > 0) {
+                if (exitUnderlayTimerRef.current) clearTimeout(exitUnderlayTimerRef.current);
+                setExitingRowSnapshots(vanished);
+                exitUnderlayTimerRef.current = setTimeout(() => {
+                    exitUnderlayTimerRef.current = null;
+                    setExitingRowSnapshots([]);
+                }, 215);
+            }
+        }
+
+        prevCommittedRowsRef.current = committedRowsCollector.slice();
+        prevScrollTopRef.current = currentScrollTop;
+        prevModelRowCountRef.current = currentModelCount;
+
+        wasScrollingRef.current = isScrollingNow;
+        if (effectiveCenterRows.length > 0) {
+            hasMountedCenterRowsRef.current = true;
+        }
+        // Prune rows that were collapsed or removed so re-expanding them later
+        // plays the reveal animation cleanly.
+        knownVisibleChildRowIdsRef.current.forEach((rowKey) => {
+            if (!centerRowLookup.has(rowKey)) {
+                knownVisibleChildRowIdsRef.current.delete(rowKey);
+                newlyRevealedUntilByKeyRef.current.delete(rowKey);
+            }
+        });
+        if (isScrollingNow) {
+            newlyRevealedUntilByKeyRef.current.clear();
+            if (revealClearTimerRef.current) {
+                clearTimeout(revealClearTimerRef.current);
+                revealClearTimerRef.current = null;
+            }
+            return;
+        }
+        const now = Date.now();
+        let maxExpiresAt = 0;
+        newlyRevealedUntilByKeyRef.current.forEach((meta, rowKey) => {
+            if (!meta || meta.expiresAt <= now) {
+                newlyRevealedUntilByKeyRef.current.delete(rowKey);
+            } else if (meta.expiresAt > maxExpiresAt) {
+                maxExpiresAt = meta.expiresAt;
+            }
+        });
+        if (maxExpiresAt > now) {
+            if (revealClearTimerRef.current) clearTimeout(revealClearTimerRef.current);
+            revealClearTimerRef.current = setTimeout(() => {
+                revealClearTimerRef.current = null;
+                const cutoff = Date.now();
+                newlyRevealedUntilByKeyRef.current.forEach((meta, key) => {
+                    if (!meta || meta.expiresAt <= cutoff) {
+                        newlyRevealedUntilByKeyRef.current.delete(key);
+                    }
+                });
+            }, Math.max(16, maxExpiresAt - now + 20));
+        }
+    }, [rowVirtualizer && rowVirtualizer.isScrolling, effectiveCenterRows, virtualRows, rowCount, centerRowLookup, rowHeight, serverSide, parentRef]);
+
     /** @type {any} */
     const leftPinnedWidth = React.useMemo(
         () => leftCols.reduce(/** @param {any} [sum] @param {any} [column] @returns {any} */ (sum, column) => sum + column.getSize(), 0),
@@ -429,6 +547,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     const skeletonRowStyle = React.useMemo(() => ({
         ...baseRowStyle,
         position: 'absolute',
+        top: 0,
         display: 'flex',
         alignItems: 'center',
         zIndex: 90,
@@ -439,20 +558,24 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     const transitionLoaderStyle = React.useMemo(() => ({
         ...styles.row,
         pointerEvents: 'none',
-        height: rowHeight,
+        height: 30,
         width: `${totalLayoutWidth}px`,
         position: 'absolute',
-        background: 'var(--pivot-loading-row-gradient, linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%))',
-        backgroundSize: '220% 100%',
-        borderBottom: `1px dashed ${theme.border}`,
+        top: 0,
+        left: 0,
+        background: theme.surfaceMuted || theme.headerSubtleBg || '#F8FAFC',
+        borderBottom: `1px solid ${theme.border}`,
         display: 'flex',
         alignItems: 'center',
+        gap: '10px',
         overflow: 'hidden',
-        opacity: 0.95,
-        zIndex: 90,
-        boxShadow: `0 4px 12px -8px ${theme.border}`,
-        animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite',
-    }), [styles.row, rowHeight, totalLayoutWidth, theme.border]);
+        zIndex: 88,
+        boxShadow: `0 4px 12px -6px ${theme.border}`,
+        animation: 'pivot-band-enter 160ms cubic-bezier(0.22, 1, 0.36, 1) both',
+    }), [styles.row, totalLayoutWidth, theme.surfaceMuted, theme.headerSubtleBg, theme.border]);
+
+    const isScrollingNowForMotion = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
+    const disableRowMotion = !hasMountedCenterRowsRef.current || isScrollingNowForMotion || wasScrollingRef.current;
 
     /** @type {any} */
     const defaultRowBg = theme.leafBg || theme.surfaceBg || theme.background;
@@ -848,24 +971,6 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
 
     return (
         <div style={styles.main}>
-            {isRequestPending && (
-                <div
-                    aria-hidden="true"
-                    data-pivot-loading-indicator="global"
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: '3px',
-                        zIndex: 120,
-                        pointerEvents: 'none',
-                        background: 'var(--pivot-loading-progress-gradient, linear-gradient(90deg, rgba(75,139,245,0) 0%, rgba(75,139,245,0.9) 45%, rgba(75,139,245,0) 100%))',
-                        backgroundSize: '220% 100%',
-                        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
-                    }}
-                />
-            )}
             <div
                 ref={parentRef}
                 data-pivot-scroll-container="true"
@@ -882,7 +987,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                      height: `${virtualBodyHeight + effectiveStickyHeaderHeight + (effectiveTopRows.length + effectiveBottomRows.length) * rowHeight}px`,
                      position: 'relative',
                      borderRadius: `0 0 ${theme.radius || '16px'} ${theme.radius || '16px'}`,
-                     overflow: 'visible'
+                     overflow: 'visible',
+                     transition: disableRowMotion ? 'none' : 'height 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))'
                  }}>
                      {/* Sticky Header */}
                      <div
@@ -1133,8 +1239,53 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                          </div>
                      )}
 
+                     {/* Exiting Collapsed Underlay Rows (AG Grid FLIP GPU slot) */}
+                     {exitingRowSnapshots.map(/** @param {any} [snap] @returns {any} */ (snap) => {
+                         if (!snap || !snap.row || typeof snap.row.getValue !== 'function') return null;
+                         return (
+                             <div
+                                 key={`exit_${snap.rowKey}`}
+                                 aria-hidden="true"
+                                 style={{
+                                     position: 'absolute',
+                                     top: 0,
+                                     left: 0,
+                                     width: `${totalLayoutWidth}px`,
+                                     height: snap.size,
+                                     transform: `translate3d(0, ${snap.top}px, 0)`,
+                                     zIndex: 1,
+                                     pointerEvents: 'none',
+                                 }}
+                             >
+                                 <div
+                                     className="pivot-row-animated"
+                                     style={{
+                                         ...baseRowStyle,
+                                         position: 'relative',
+                                         top: undefined,
+                                         left: undefined,
+                                         width: '100%',
+                                         height: '100%',
+                                         '--sp-row-current-bg': snap.rowBg,
+                                         background: 'var(--sp-row-current-bg)',
+                                         animation: 'pivot-row-exit 200ms cubic-bezier(0.22, 1, 0.36, 1) forwards',
+                                     }}
+                                 >
+                                     {renderRowSections(snap.row, snap.displayRowIndex, true, {
+                                         rowBackground: snap.rowBg,
+                                         rowSpanByColumnId: snap.rowSpanByColumnId,
+                                         disablePinnedColumnStickiness: true,
+                                     })}
+                                 </div>
+                             </div>
+                         );
+                     })}
+
                      {/* Center Virtualized Rows */}
-                     {virtualRows.map(/** @param {any} [virtualRow] @returns {any} */ virtualRow => {
+                     {(() => {
+                         const nowMs = Date.now();
+                         let revealBatchIndex = 0;
+                         return virtualRows.map(/** @param {any} [virtualRow] @returns {any} */ virtualRow => {
                           const topOffset = effectiveBodyRowsTopOffset;
                           /** @type {any} */
                           const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + topOffset;
@@ -1159,7 +1310,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                         style={{
                                             ...skeletonRowStyle,
                                             height: virtualRow.size,
-                                            top: `${adjustedTop}px`,
+                                            transform: `translate3d(0, ${adjustedTop}px, 0)`,
                                             background: defaultRowBg,
                                         }}>
                                             {renderSkeletonSections(defaultRowBg)}
@@ -1216,7 +1367,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                     style={{
                                      ...skeletonRowStyle,
                                      height: virtualRow.size,
-                                     top: `${adjustedTop}px`,
+                                     transform: `translate3d(0, ${adjustedTop}px, 0)`,
                                      background: skelBg,
                                  }}>
                                      {renderSkeletonSections(skelBg)}
@@ -1229,16 +1380,35 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                              return null;
                          }
 
+                          // Stable key: use row path/id for loaded rows in both server-side and
+                          // client-side modes so expand/collapse does not remount rows that merely shifted index.
                           /** @type {any} */
-                          const pendingTransitionMode = pendingRowTransitions.get(row.id);
-                          const showRowTransitionLoader = !!pendingTransitionMode;
-
-                          // Stable key: use row path/id for loaded rows so expand/collapse
-                          // does not remount rows that merely shifted index (AG Grid getRowId pattern).
-                          /** @type {any} */
-                          const stableRowKey = serverSide
-                              ? (row.id || String(virtualRow.index))
+                          const stableRowKey = (row && row.id)
+                              ? String(row.id)
                               : String(virtualRow.index);
+                          /** @type {any} */
+                          const isChildRow = Boolean((row.original && row.original.depth > 0) || row.depth > 0);
+                          if (isChildRow) {
+                              if (isScrollingNowForMotion || wasScrollingRef.current || !hasMountedCenterRowsRef.current) {
+                                  knownVisibleChildRowIdsRef.current.add(stableRowKey);
+                                  newlyRevealedUntilByKeyRef.current.delete(stableRowKey);
+                              } else if (!knownVisibleChildRowIdsRef.current.has(stableRowKey)) {
+                                  knownVisibleChildRowIdsRef.current.add(stableRowKey);
+                                  const delayMs = Math.min(revealBatchIndex * 18, 90);
+                                  revealBatchIndex += 1;
+                                  newlyRevealedUntilByKeyRef.current.set(stableRowKey, { delayMs, expiresAt: nowMs + 340 });
+                              }
+                          }
+                          const revealMeta = newlyRevealedUntilByKeyRef.current.get(stableRowKey);
+                          /** @type {any} */
+                          const shouldAnimateRowReveal = Boolean(
+                              isChildRow &&
+                              !isScrollingNowForMotion &&
+                              !wasScrollingRef.current &&
+                              revealMeta &&
+                              nowMs < revealMeta.expiresAt
+                          );
+                          const revealDelayMs = revealMeta ? revealMeta.delayMs : 0;
                           /** @type {any} */
                           const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
 
@@ -1250,31 +1420,127 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                           const rowSpanByColumnId = rowSpanEnabled && row.id != null
                               ? (rowSpanPlan.get(String(row.id)) || null)
                               : null;
+                          const rowDepthValue = Number((row.original && row.original.depth !== undefined) ? row.original.depth : (row.depth || 0));
+                          committedRowsCollector.push({
+                              rowKey: stableRowKey,
+                              row,
+                              top: adjustedTop,
+                              size: virtualRow.size,
+                              displayRowIndex,
+                              rowBg,
+                              rowSpanByColumnId,
+                              depth: rowDepthValue,
+                          });
+                          const transitionRowPath = (row.original && row.original._path) ? String(row.original._path) : stableRowKey;
+                          const transitionPhase = (pendingRowTransitions && typeof pendingRowTransitions.get === 'function')
+                              ? pendingRowTransitions.get(transitionRowPath)
+                              : null;
 
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
+                                      style={{
+                                          position: 'absolute',
+                                          top: 0,
+                                          left: 0,
+                                          width: `${totalLayoutWidth}px`,
+                                          height: virtualRow.size,
+                                          transform: `translate3d(0, ${adjustedTop}px, 0)`,
+                                          zIndex: shouldAnimateRowReveal ? 2 : 4,
+                                          transition: disableRowMotion ? 'none' : 'transform 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                      }}
+                                  >
+                                  <div
                                      role="row"
                                      aria-rowindex={virtualRow.index + 1}
+                                     className="pivot-row-animated"
                                      {...getRowDataAttributes(row)}
                                      style={{
                                       ...baseRowStyle,
-                                      height: virtualRow.size,
-                                      top: `${adjustedTop}px`,
+                                      position: 'relative',
+                                      top: undefined,
+                                      left: undefined,
+                                      width: '100%',
+                                      height: '100%',
                                       '--sp-row-current-bg': rowBg,
                                       background: 'var(--sp-row-current-bg)',
                                       ...(isTotalVirtualRow && theme.totalBorder ? {
                                           borderBottom: String(theme.totalBorder).includes(' ') ? theme.totalBorder : `1px solid ${theme.totalBorder}`,
                                       } : {}),
-                                      transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
+                                      transition: disableRowMotion ? 'none' : 'background-color 160ms ease',
+                                      animation: shouldAnimateRowReveal ? `pivot-row-reveal 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) ${revealDelayMs}ms both` : undefined
                                    }}>
                                       {renderRowSections(row, displayRowIndex, true, {
                                           rowBackground: rowBg,
                                           rowSpanByColumnId,
                                       })}
+                                      {(transitionPhase === 'hairline' || transitionPhase === 'band') && (
+                                          <div
+                                              aria-hidden="true"
+                                              data-row-loader="hairline"
+                                              style={{
+                                                  position: 'absolute',
+                                                  left: 0,
+                                                  right: 0,
+                                                  bottom: 0,
+                                                  height: '2px',
+                                                  overflow: 'hidden',
+                                                  pointerEvents: 'none',
+                                                  zIndex: 85,
+                                                  background: withAlpha(theme.primary, 0.14, 'rgba(79,70,229,0.14)'),
+                                              }}
+                                          >
+                                              <div
+                                                  style={{
+                                                      width: '36%',
+                                                      height: '100%',
+                                                      background: `linear-gradient(90deg, transparent, ${theme.primary || '#4F46E5'}, transparent)`,
+                                                      animation: 'pivot-hairline-sweep 900ms cubic-bezier(0.4, 0, 0.2, 1) infinite',
+                                                  }}
+                                              />
+                                          </div>
+                                      )}
                                   </div>
+                                  </div>
+                                  {transitionPhase === 'band' && (
+                                      <div
+                                          aria-hidden="true"
+                                          data-row-loader="band"
+                                          style={{
+                                              ...transitionLoaderStyle,
+                                              transform: `translate3d(0, ${adjustedTop + virtualRow.size}px, 0)`,
+                                              paddingLeft: `${28 + ((rowDepthValue + 1) * 18)}px`,
+                                          }}
+                                      >
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: theme.primary || '#4F46E5' }}>
+                                              <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out infinite' }} />
+                                              <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out 140ms infinite' }} />
+                                              <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out 280ms infinite' }} />
+                                          </span>
+                                          <span style={{ fontSize: '11.5px', fontWeight: 600, color: theme.primary || '#4F46E5' }}>
+                                              Loading breakdown…
+                                          </span>
+                                          <span style={{
+                                              width: '140px',
+                                              height: '3px',
+                                              borderRadius: '999px',
+                                              background: withAlpha(theme.primary, 0.14, 'rgba(79,70,229,0.14)'),
+                                              overflow: 'hidden',
+                                              position: 'relative',
+                                          }}>
+                                              <span style={{
+                                                  position: 'absolute',
+                                                  inset: 0,
+                                                  width: '45%',
+                                                  borderRadius: '999px',
+                                                  background: theme.primary || '#4F46E5',
+                                                  animation: 'pivot-hairline-sweep 950ms ease-in-out infinite',
+                                              }} />
+                                          </span>
+                                      </div>
+                                  )}
                                   {detailMode === 'inline' && detailState && detailState.anchorRowId === row.id && (
-                                      <React.Suspense fallback={null}>
+                                      <React.Suspense fallback={<ShimmerFallback variant="inline" height={detailInlineHeight} />}>
                                       <LazyInlineDetailPanel
                                           detailState={detailState}
                                           onClose={onDetailClose}
@@ -1288,55 +1554,20 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                       />
                                       </React.Suspense>
                                   )}
-                                  {showRowTransitionLoader && (
-                                      <div
-                                         role="row"
-                                         aria-hidden="true"
-                                         style={{
-                                          ...transitionLoaderStyle,
-                                          top: `${adjustedTop + virtualRow.size}px`,
-                                      }}>
-                                          {renderSkeletonSections(
-                                              'var(--pivot-loading-row-gradient, linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%))',
-                                              { opacity: 0.45 }
-                                          )}
-                                          <div
-                                             style={{
-                                              position: 'absolute',
-                                              zIndex: 2,
-                                              paddingLeft: `${((row.original && typeof row.original.depth === 'number' ? row.original.depth : row.depth || 0) + 1) * (Number(theme.treeIndent) || 24) + 8}px`,
-                                              fontSize: '12px',
-                                              color: theme.textSec,
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              gap: '8px',
-                                              fontWeight: 500
-                                          }}
-                                          >
-                                              <span
-                                                 aria-hidden="true"
-                                                 style={{
-                                                  width: '11px',
-                                                  height: '11px',
-                                                  border: `2px solid ${theme.primary}`,
-                                                  borderTopColor: 'transparent',
-                                                  borderRadius: '50%',
-                                                  animation: 'pivot-spinner-rotate 0.75s linear infinite'
-                                              }}
-                                              />
-                                              {pendingTransitionMode === 'collapse' ? 'Collapsing...' : 'Loading children...'}
-                                          </div>
-                                      </div>
-                                  )}
                               </React.Fragment>
-                          )
-                      })}
+                          );
+                      });
+                     })()}
 
                      {/* Spacer for all bottom-pinned rows.
                           Virtual rows use position:absolute (out of flow), so without this spacer
                           bottom sticky rows never reach their sticky activation point. */}
                      {effectiveBottomRows.length > 0 && (
-                         <div style={{ height: `${virtualBodyHeight}px`, flexShrink: 0 }} />
+                         <div style={{
+                             height: `${virtualBodyHeight}px`,
+                             flexShrink: 0,
+                             transition: disableRowMotion ? 'none' : 'height 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))'
+                         }} />
                      )}
                     {/* Bottom Pinned Rows */}
                     {renderPinnedRowGroup(effectiveBottomRows, 'bottom')}
@@ -1348,7 +1579,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                         selection: { selectedCells },
                         data: {
                             rowCount,
-                            visibleRowsCount: rows.length,
+                            visibleRowsCount: serverSide ? virtualRows.length : rows.length,
                             totalCenterColumns,
                             columnAdvisory,
                         },
@@ -1359,6 +1590,24 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                     statusActions={statusActions}
                     theme={theme}
                     numberGroupSeparator={numberGroupSeparator}
+                />
+            )}
+            {isRequestPending && (
+                <div
+                    aria-hidden="true"
+                    data-pivot-loading-indicator="global"
+                    style={{
+                        position: 'absolute',
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        height: '3px',
+                        zIndex: 120,
+                        pointerEvents: 'none',
+                        background: 'var(--pivot-loading-progress-gradient, linear-gradient(90deg, rgba(75,139,245,0) 0%, rgba(75,139,245,0.9) 45%, rgba(75,139,245,0) 100%))',
+                        backgroundSize: '220% 100%',
+                        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
+                    }}
                 />
             )}
         </div>

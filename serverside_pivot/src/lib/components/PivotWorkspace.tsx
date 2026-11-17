@@ -38,6 +38,7 @@ const DURABLE_HOST_STATE_KEYS = new Set<keyof PivotRuntimeProps>([
     'showRowTotals',
     'showColTotals',
     'showSubtotals',
+    'showGrandTotal',
     'viewMode',
     'detailMode',
     'treeConfig',
@@ -145,14 +146,32 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
     const transportRef = useRef(activeTransport);
     const mountedRef = useRef(true);
     const pendingRequestsRef = useRef(new Set<AbortController>());
-    // The public host props are JSON-shaped.  A stable serialization lets a
-    // host update controlled configuration without feeding local runtime
-    // mutations back into this effect after every response.
-    const initialPropsSignature = JSON.stringify(initialProps);
+    // Track external controlled props without running JSON.stringify(initialProps) on every internal render.
+    const previousExternalPropsRef = useRef<{ snapshot: PivotRuntimeProps; signature: string } | null>(null);
 
     useEffect(() => {
+        if (!previousExternalPropsRef.current) {
+            previousExternalPropsRef.current = {
+                snapshot: initialProps,
+                signature: JSON.stringify(initialProps),
+            };
+            return;
+        }
+        const prevSnapshot = previousExternalPropsRef.current.snapshot;
+        const keysA = Object.keys(prevSnapshot);
+        const keysB = Object.keys(initialProps);
+        const prevRec = prevSnapshot as unknown as Record<string, unknown>;
+        const nextRec = initialProps as unknown as Record<string, unknown>;
+        const shallowEqual = keysA.length === keysB.length
+            && keysB.every(key => Object.is(prevRec[key], nextRec[key]));
+        if (shallowEqual) return;
+        const nextSignature = JSON.stringify(initialProps);
+        const signatureChanged = nextSignature !== previousExternalPropsRef.current.signature
+            || prevSnapshot.rowHeaderLabel !== initialProps.rowHeaderLabel;
+        previousExternalPropsRef.current = { snapshot: initialProps, signature: nextSignature };
+        if (!signatureChanged) return;
         setRuntimeProps(previous => ({ ...previous, ...initialProps }));
-    }, [initialPropsSignature, initialProps.rowHeaderLabel]); // eslint-disable-line react-hooks/exhaustive-deps
+    }); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         transportRef.current = activeTransport;

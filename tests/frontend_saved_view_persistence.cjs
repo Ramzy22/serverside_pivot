@@ -54,15 +54,19 @@ storage.clear();
 useRuntimeViewSnapshot({...opts,savePersistedState:usePersistence('first',false,'local').save}).handleSaveView();
 assert.equal(storage.size,0,'persistence opt-out must not write the snapshot');
 
+const {sanitizeFieldPanelSizes} = load('utils/fieldPanelLayout.js');
 const core = fs.readFileSync(path.join(root,'src/lib/runtime/useCoreRuntimeStage.tsx'),'utf8').replace(/\r\n/g,'\n');
 const resetCode = core.slice(core.indexOf('  // Reset Effect'),core.indexOf('  // Save Persistence'));
 persistence.save('savedView',saved);
 const resetStage = new Proxy({reset:true,valConfigsRef:{current:[]},setPropsRef:{current:null},layoutRevisionRef:{current:null},
- chartPanelOrientationAutoRef:{current:false},initialChartDefinition:{},initialChartDefinitions:[],normalizedInitialValConfigs:[],
+ chartPanelOrientationAutoRef:{current:false},lastFieldPanelSizesPropRef:{current:null},lastSyncedFieldPanelSizesJsonRef:{current:null},
+ pendingPublishedFieldPanelSizesJsonRef:{current:[]},fieldPanelSizesRef:{current:{}},
+ initialChartDefinition:{},initialChartDefinitions:[],normalizedInitialValConfigs:[],
  savePersistedState:persistence.save},{get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
 new Function('stage','useEffect','normalizeMeasureAxisValue','normalizeSparklineValConfigsForView','getPinnedSideForRow',
- 'GRAND_TOTAL_ROW_ID','clampFloatingChartRect','DEFAULT_FLOATING_CHART_PANEL_HEIGHT','DEFAULT_TABLE_CANVAS_SIZE',resetCode)(
- resetStage,fn=>fn(),()=>null,x=>x,()=>null,'Grand Total',x=>x,300,{});
+ 'GRAND_TOTAL_ROW_ID','clampFloatingChartRect','DEFAULT_FLOATING_CHART_PANEL_HEIGHT','DEFAULT_TABLE_CANVAS_SIZE',
+ 'sanitizeFieldPanelSizes',resetCode)(
+ resetStage,fn=>fn(),()=>null,x=>x,()=>null,'Grand Total',x=>x,300,{},sanitizeFieldPanelSizes);
 assert.equal(persistence.load('savedView',null),null,'explicit reset must clear the saved full view');
 
 

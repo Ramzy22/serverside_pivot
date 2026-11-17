@@ -11,6 +11,7 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
+import ThemedSelect from './ThemedSelect';
 
 /** @type {any[]} */
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
@@ -51,17 +52,19 @@ export const PaginationBar = React.memo(/** @param {any} p0 @returns {any} */ fu
         }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ color: theme.textSec }}>Rows per page</span>
-                <select
+                <ThemedSelect
+                    size="sm"
+                    aria-label="Rows per page"
                     value={pageSize}
-                    onChange={(e) => onPageSizeChange(Number(e.target.value))}
+                    onChange={(/** @type {any} */ e) => onPageSizeChange(Number(e.target.value))}
                     style={{
                         border: `1px solid ${theme.border}`, borderRadius: '4px',
                         background: theme.surfaceBg || theme.background, color: theme.text,
-                        padding: '2px 4px', fontSize: '11px',
+                        padding: '2px 6px', fontSize: '11px',
                     }}
                 >
                     {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+                </ThemedSelect>
             </div>
             <span style={{ color: theme.textSec }}>
                 {totalRows > 0 ? `${rangeStart}–${rangeEnd} of ${totalRows}` : '0 rows'}

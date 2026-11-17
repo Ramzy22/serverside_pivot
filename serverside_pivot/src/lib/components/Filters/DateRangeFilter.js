@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Icons from '../../utils/Icons';
 import { getStyles } from '../../utils/styles';
+import ThemedSelect from '../ThemedSelect';
 
 /** @returns {any} */
 const createDefaultDateCondition = () => ({ type: 'between', value: '', value2: '' });
@@ -110,12 +111,12 @@ const DateRangeFilter = ({ onFilter, currentFilter, theme, onClose }) => {
                 {conditions.map(/** @param {any} [cond] @param {any} [index] @returns {any} */ (cond, index) => (
                     <div key={index} style={{display: 'flex', flexDirection: 'column', gap: '4px', border: '1px solid #f0f0f0', padding: '8px', borderRadius: '4px'}}>
                         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                            <select value={cond.type} onChange={e => updateCondition(index, 'type', e.target.value)} style={{padding:'2px', borderRadius:'2px', border:'1px solid #ddd', fontSize: '11px', width: '100px'}}>
+                            <ThemedSelect size="sm" aria-label={`Date condition ${index + 1} operator`} value={cond.type} onChange={(/** @type {any} */ e) => updateCondition(index, 'type', e.target.value)} style={{padding:'2px 6px', borderRadius:'4px', fontSize: '11px', width: '110px'}}>
                                 <option value="between">Between</option>
                                 <option value="eq">Equals</option>
                                 <option value="gt">After</option>
                                 <option value="lt">Before</option>
-                            </select>
+                            </ThemedSelect>
                             {conditions.length > 1 && <span onClick={() => removeCondition(index)} style={{cursor: 'pointer'}}><Icons.Close/></span>}
                         </div>
                         <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>

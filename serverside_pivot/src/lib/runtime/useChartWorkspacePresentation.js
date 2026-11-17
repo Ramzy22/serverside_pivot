@@ -8,6 +8,7 @@ import {
   resolveChartAvailableColumns
 } from '../hooks/usePivotNormalization';
 import { groupChartWorkspacePanes } from '../components/Charts/ChartWorkspace';
+import ShimmerFallback from '../components/ShimmerFallback';
 
 /** @type {any} */
 const LazyPivotChartModal = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
@@ -18,7 +19,7 @@ const LazyPivotChartPanel = React.lazy(() => import(/* webpackChunkName: "pivot-
   default: module.PivotChartPanel
 })));
 /** @returns {any} */
-const PivotChartFallback = () => null;
+const PivotChartFallback = () => <ShimmerFallback variant="chart" />;
 /** @param {any} [props] @returns {any} */
 const PivotChartModal = props => <React.Suspense fallback={<PivotChartFallback />}>
   <LazyPivotChartModal {...props} />

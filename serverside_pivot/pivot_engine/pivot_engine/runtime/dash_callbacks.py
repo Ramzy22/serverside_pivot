@@ -1765,6 +1765,11 @@ def register_dash_pivot_transport_callback(
                 "transaction": result.transaction_result,
                 "editOverlay": result.edit_overlay,
                 "formulaErrors": result.formula_errors or None,
+                **(
+                    {"availableFields": result.available_fields}
+                    if result.available_fields is not None
+                    else {}
+                ),
             }
             payload_profile: Optional[Dict[str, Any]] = {} if profiling_enabled else None
             account_token = current_workload_account.set(context.accounting_account)

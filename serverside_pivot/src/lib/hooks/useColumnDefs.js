@@ -10,8 +10,9 @@ import {
     getKey,
     isDisplayNegative,
     resolveNumericDisplayValue,
+    unwrapNumericDisplayFormat,
 } from '../utils/helpers';
-import { CELL_CONTENT_RESET_STYLE } from '../utils/styles';
+import { CELL_CONTENT_RESET_STYLE, isDarkTheme } from '../utils/styles';
 import { resolveColumnSortOptions, shouldUseAbsoluteSort } from '../utils/sorting';
 import {
     buildPivotSparklinePoints,
@@ -148,6 +149,7 @@ export function useColumnDefs({
     isColExpanded,
     toggleCol,
     pendingRowTransitions,
+    pendingRowTransitionsRef,
     decimalPlaces,
     defaultValueFormat,
     numberGroupSeparator,
@@ -403,7 +405,17 @@ export function useColumnDefs({
             const byAgg = valConfigs.find(config => matchesValueConfigColumnId(columnId, config));
             if (byAgg) return byAgg;
             // Field-source sparklines: match by exact field name (no agg suffix)
-            return fieldSparklineConfigs.find(/** @param {any} [c] @returns {any} */ c => c.field === columnId) || null;
+            /** @type {any} */
+            const sparkMatch = fieldSparklineConfigs.find(/** @param {any} [c] @returns {any} */ c => c.field === columnId);
+            if (sparkMatch) return sparkMatch;
+            if (typeof columnId === 'string') {
+                /** @type {any} */
+                const normalized = columnId.toLowerCase();
+                /** @type {any} */
+                const fieldMatches = valConfigs.filter(/** @param {any} [c] @returns {any} */ c => c && c.field && String(c.field).toLowerCase() === normalized);
+                if (fieldMatches.length === 1) return fieldMatches[0];
+            }
+            return null;
         };
         /** @param {any} [rowData] @returns {any} */
         const getMeasureAxisRowValueConfig = (rowData) => {
@@ -819,6 +831,10 @@ export function useColumnDefs({
             const effectiveFormat = colId !== undefined && columnFormatOverrides && Object.prototype.hasOwnProperty.call(columnFormatOverrides, colId)
                 ? columnFormatOverrides[colId]
                 : (reportNumberFormat || fmt || defaultValueFormat || null);
+            const unwrappedFormat = unwrapNumericDisplayFormat(effectiveFormat);
+            const isPillVariant = Boolean(
+                (matchedColConfig && matchedColConfig.displayVariant === 'pill') || unwrappedFormat.isPill
+            );
             /** @type {any} */
             const effectiveScale = matchedColConfig && matchedColConfig.valueScale !== undefined
                 ? matchedColConfig.valueScale
@@ -868,7 +884,53 @@ export function useColumnDefs({
             const contentStyle = colorOverride
                 ? { ...CELL_CONTENT_RESET_STYLE, color: colorOverride }
                 : CELL_CONTENT_RESET_STYLE;
-            return { formatted, contentStyle };
+            const hasNumericValue = typeof value === 'number' && Number.isFinite(value) && formatted !== '';
+            if (isPillVariant && hasNumericValue && !(rowData && rowData._isTotal)) {
+                const darkMode = isDarkTheme(t);
+                const innerFmtStr = unwrappedFormat.innerFormat || '';
+                const isPercentLike = innerFmtStr.includes('percent');
+                const isStrongPositive = !isNegative && isPositive && (isPercentLike ? displayNumeric >= 0.2 : true);
+                let pillBg = darkMode ? 'rgba(148, 163, 184, 0.14)' : 'rgba(100, 116, 139, 0.10)';
+                let pillFg = t.textSec || '#475569';
+                let pillBorder = darkMode ? 'rgba(148, 163, 184, 0.25)' : 'rgba(100, 116, 139, 0.20)';
+                if (isNegative) {
+                    pillBg = darkMode ? 'rgba(244, 63, 94, 0.18)' : 'rgba(220, 38, 38, 0.10)';
+                    pillFg = t.negativeText || (darkMode ? '#FDA4AF' : '#DC2626');
+                    pillBorder = darkMode ? 'rgba(244, 63, 94, 0.32)' : 'rgba(220, 38, 38, 0.22)';
+                } else if (isStrongPositive) {
+                    pillBg = darkMode ? 'rgba(52, 211, 153, 0.16)' : 'rgba(5, 150, 105, 0.11)';
+                    pillFg = darkMode ? '#34D399' : '#059669';
+                    pillBorder = darkMode ? 'rgba(52, 211, 153, 0.30)' : 'rgba(5, 150, 105, 0.24)';
+                } else if (isPositive) {
+                    pillBg = darkMode ? 'rgba(96, 165, 250, 0.16)' : (t.select || 'rgba(79, 70, 229, 0.10)');
+                    pillFg = darkMode ? '#93C5FD' : (t.primary || '#4F46E5');
+                    pillBorder = darkMode ? 'rgba(96, 165, 250, 0.30)' : 'rgba(79, 70, 229, 0.22)';
+                }
+                const renderedNode = (
+                    <span
+                        data-pivot-pill="true"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            fontSize: '0.88em',
+                            fontWeight: 600,
+                            lineHeight: 1.35,
+                            letterSpacing: '-0.01em',
+                            background: pillBg,
+                            color: (cellFmt && cellFmt.color) ? cellFmt.color : pillFg,
+                            border: `1px solid ${pillBorder}`,
+                            fontVariantNumeric: 'tabular-nums',
+                        }}
+                    >
+                        {formatted}
+                    </span>
+                );
+                return { formatted, contentStyle, renderedNode };
+            }
+            return { formatted, contentStyle, renderedNode: formatted };
         };
 
         /** @param {any} p0 @returns {any} */
@@ -887,7 +949,7 @@ export function useColumnDefs({
             /** @type {any} */
             const rowPath = getCellRowId(info);
             /** @type {any} */
-            const { formatted, contentStyle } = renderNumericCell(metricValue, getConfigDisplayFormat(config), rowPath, columnId, info.row && info.row.original, config);
+            const { contentStyle, renderedNode } = renderNumericCell(metricValue, getConfigDisplayFormat(config), rowPath, columnId, info.row && info.row.original, config);
             /** @type {any} */
             const headerLabel = buildSparklineHeader(config, config && config.field ? config.field : columnId);
             return (
@@ -904,7 +966,7 @@ export function useColumnDefs({
                         formatSparklineMetricValue(deltaMetric, config, columnId),
                     )}
                 >
-                    {formatted}
+                    {renderedNode}
                 </div>
             );
         };
@@ -1134,6 +1196,7 @@ export function useColumnDefs({
                             {isConfigurable ? (
                                 <button
                                     type="button"
+                                    className="sp-btn sp-btn-ghost"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onConfigureReportLine(rowData);
@@ -1164,6 +1227,53 @@ export function useColumnDefs({
                 },
             });
         }
+
+        /** @param {any} [row] @param {string} [modeLabel] @returns {any} */
+        const renderExpanderButton = (row, modeLabel) => {
+            const expanded = row.getIsExpanded();
+            const rowPath = (row.original && row.original._path) || row.id;
+            const activeTransitions = (pendingRowTransitionsRef && pendingRowTransitionsRef.current) || pendingRowTransitions;
+            const transitionPhase = activeTransitions && typeof activeTransitions.get === 'function'
+                ? activeTransitions.get(rowPath)
+                : null;
+            const isFetching = Boolean(transitionPhase);
+            return (
+                <button
+                    type="button"
+                    className={`sp-expander-btn${isFetching ? ' sp-expander-fetching' : ''}`}
+                    aria-expanded={expanded}
+                    data-row-transition-phase={transitionPhase || undefined}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        debugLog(`Toggling expansion (${modeLabel}) for`, row.id);
+                        row.toggleExpanded(!expanded);
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        marginRight: '4px',
+                        color: getChevronColor(),
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                    }}
+                >
+                    <span
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                            transition: 'transform 180ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                        }}
+                    >
+                        <Icons.ChevronRight />
+                    </span>
+                </button>
+            );
+        };
 
         if (viewMode === 'tree' && treeDisplayMode === 'multipleColumns') {
             Array.from({ length: Math.max(maxTreeDepth + 1, 1) }).forEach((_, level) => {
@@ -1200,22 +1310,7 @@ export function useColumnDefs({
                                     fontWeight: reportFormat && reportFormat.bold ? 700 : resolveDepthFontWeight(row),
                                 }}
                             >
-                                {showExpander ? (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            debugLog('Toggling expansion (tree-multi) for', row.id);
-                                            row.toggleExpanded(!row.getIsExpanded());
-                                        }}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:getChevronColor(),display:'flex'}}
-                                    >
-                                        {row.getIsExpanded() ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}
-                                        {pendingRowTransitions.has(row.id) && (
-                                            <span style={{fontSize: '10px', opacity: 0.75, marginLeft: '3px'}}>...</span>
-                                        )}
-                                    </button>
-                                ) : <span style={{width:'18px', flexShrink: 0}}/>}
+                                {showExpander ? renderExpanderButton(row, 'tree-multi') : <span style={{width:'18px', flexShrink: 0}}/>}
                                 {showValue ? getReportRowDisplayLabel(row.original) : ''}
                                 {showValue && renderDetailToggle(row)}
                                 {showValue && typeof renderRowEditActions === 'function' ? renderRowEditActions(row) : null}
@@ -1267,22 +1362,9 @@ export function useColumnDefs({
                                     // isSelected styling will be applied in renderCell
                                 }}
                             >
-                                 {row.getCanExpand() && !(row.original && row.original._isTotal) ? (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            debugLog('Toggling expansion (hierarchy) for', row.id);
-                                            row.toggleExpanded(!row.getIsExpanded());
-                                        }}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:getChevronColor(),display:'flex'}}
-                                    >
-                                        {row.getIsExpanded() ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}
-                                        {pendingRowTransitions.has(row.id) && (
-                                            <span style={{fontSize: '10px', opacity: 0.75, marginLeft: '3px'}}>...</span>
-                                        )}
-                                    </button>
-                                ) : <span style={{width:'18px'}}/>}
+                                 {row.getCanExpand() && !(row.original && row.original._isTotal)
+                                    ? renderExpanderButton(row, 'hierarchy')
+                                    : <span style={{width:'18px'}}/>}
                                 <span style={{ fontWeight: reportFormat && reportFormat.bold ? 700 : resolveDepthFontWeight(row) }}>
                                     {getReportRowDisplayLabel(row.original)}
                                 </span>
@@ -1377,22 +1459,7 @@ export function useColumnDefs({
                                     // isSelected styling will be applied in renderCell
                                 }}
                             >
-                                {showExpander && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            debugLog('Toggling expansion (mode) for', row.id);
-                                            row.toggleExpanded(!row.getIsExpanded());
-                                        }}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:getChevronColor(),display:'flex'}}
-                                    >
-                                        {row.getIsExpanded() ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}
-                                        {pendingRowTransitions.has(row.id) && (
-                                            <span style={{fontSize: '10px', opacity: 0.75, marginLeft: '3px'}}>...</span>
-                                        )}
-                                    </button>
-                                )}
+                                {showExpander && renderExpanderButton(row, 'mode')}
                                 {showValue ? displayValue : ''}
                                 {/* Report mode: Top N indicator */}
                                 {pivotMode === 'report' && showValue && row.original && row.original._levelTopN && (
@@ -1486,6 +1553,7 @@ export function useColumnDefs({
                         preserveHeaderLabel: Boolean(matchedCfg && matchedCfg.label),
                         shortLabel: matchedCfg && matchedCfg.shortLabel ? String(matchedCfg.shortLabel) : null,
                         headerGroup: resolveMeasureHeaderGroupLabel(matchedCfg, columnId),
+                        dataBars: Boolean(matchedCfg && matchedCfg.dataBars),
                     },
                     /** @param {any} [info] @returns {any} */
                     cell: (info) => {
@@ -1508,10 +1576,10 @@ export function useColumnDefs({
                                 return <div style={{ width:'100%', height:'100%' }} />;
                             }
                             /** @type {any} */
-                            const { formatted, contentStyle } = renderNumericCell(value, matchedCfg ? getConfigDisplayFormat(matchedCfg) : null, rowPath, info.column.id, info.row && info.row.original, matchedCfg);
+                            const { contentStyle, renderedNode } = renderNumericCell(value, matchedCfg ? getConfigDisplayFormat(matchedCfg) : null, rowPath, info.column.id, info.row && info.row.original, matchedCfg);
                             return (
                                 <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:getNumericPaddingRight(), ...contentStyle }}>
-                                    {formatted}
+                                    {renderedNode}
                                 </div>
                             );
                         }
@@ -1548,10 +1616,10 @@ export function useColumnDefs({
                         /** @type {any} */
                         const rowPath = getCellRowId(info);
                         /** @type {any} */
-                        const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(rowConfig), rowPath, info.column.id, info.row && info.row.original);
+                        const { contentStyle, renderedNode } = renderNumericCell(value, getConfigDisplayFormat(rowConfig), rowPath, info.column.id, info.row && info.row.original, rowConfig);
                         return (
                             <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:getNumericPaddingRight(), ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
-                                {formatted}
+                                {renderedNode}
                             </div>
                         );
                     }
@@ -1599,6 +1667,7 @@ export function useColumnDefs({
                         preserveHeaderLabel: Boolean(c.label),
                         shortLabel: c.shortLabel ? String(c.shortLabel) : null,
                         headerGroup: resolveMeasureHeaderGroupLabel(c, colId),
+                        dataBars: Boolean(c && c.dataBars),
                     },
                     /** @param {any} [info] @returns {any} */
                     cell: info => {
@@ -1660,10 +1729,10 @@ export function useColumnDefs({
                         /** @type {any} */
                         const rowPath = getCellRowId(info);
                         /** @type {any} */
-                        const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(c), rowPath, info.column.id, info.row && info.row.original, c);
+                        const { contentStyle, renderedNode } = renderNumericCell(value, getConfigDisplayFormat(c), rowPath, info.column.id, info.row && info.row.original, c);
                         return (
                             <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:getNumericPaddingRight(), ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
-                                {formatted}
+                                {renderedNode}
                             </div>
                         );
                     }
@@ -1725,6 +1794,7 @@ export function useColumnDefs({
                         preserveHeaderLabel: Boolean(columnConfig && columnConfig.label),
                         shortLabel: columnConfig && columnConfig.shortLabel ? String(columnConfig.shortLabel) : null,
                         headerGroup: resolveMeasureHeaderGroupLabel(columnConfig, columnId),
+                        dataBars: Boolean(columnConfig && columnConfig.dataBars),
                     },
                     /** @param {any} [info] @returns {any} */
                     cell: info => {
@@ -1801,10 +1871,10 @@ export function useColumnDefs({
                         /** @type {any} */
                         const rowPath = getCellRowId(info);
                         /** @type {any} */
-                        const { formatted, contentStyle } = renderNumericCell(value, fmt, rowPath, info.column.id, info.row && info.row.original, matchedConfig);
+                        const { contentStyle, renderedNode } = renderNumericCell(value, fmt, rowPath, info.column.id, info.row && info.row.original, matchedConfig);
                         return (
                             <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:getNumericPaddingRight(), ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
-                                {formatted}
+                                {renderedNode}
                             </div>
                         );
                     }
@@ -1995,10 +2065,10 @@ export function useColumnDefs({
                     /** @type {any} */
                     const rowPath = getCellRowId(info);
                     /** @type {any} */
-                    const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(config), rowPath, info.column.id, info.row && info.row.original, config);
+                    const { contentStyle, renderedNode } = renderNumericCell(value, getConfigDisplayFormat(config), rowPath, info.column.id, info.row && info.row.original, config);
                     return (
                         <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:getNumericPaddingRight(), fontWeight:'bold', ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
-                            {formatted}
+                            {renderedNode}
                         </div>
                     );
                 };
@@ -2422,7 +2492,7 @@ export function useColumnDefs({
         renderedOffset,
         isColExpanded,
         toggleCol,
-        pendingRowTransitions,
+        pendingRowTransitionsRef,
         decimalPlaces,
         defaultValueFormat,
         numberGroupSeparator,

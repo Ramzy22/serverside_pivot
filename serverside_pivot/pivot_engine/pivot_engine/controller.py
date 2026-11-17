@@ -607,9 +607,23 @@ class PivotController:
         # Compiling to SQL here might be expensive just for caching, but ensures uniqueness
         # Alternatively, use a structural hash of the Ibis expression object if Ibis provides one
         try:
-            # Attempt to compile the expression to SQL for a unique string representation
-            # This is a robust way to get a unique key for the query itself
-            compiled_sql = str(self.planner.con.compile(ibis_expr))
+            op_node = ibis_expr.op() if hasattr(ibis_expr, "op") else None
+            compiled_sql = None
+            sql_cache = getattr(self, "_compiled_sql_cache", None)
+            if sql_cache is None:
+                sql_cache = {}
+                self._compiled_sql_cache = sql_cache
+            if op_node is not None:
+                try:
+                    compiled_sql = sql_cache.get(op_node)
+                except TypeError:
+                    op_node = None
+            if compiled_sql is None:
+                compiled_sql = str(self.planner.con.compile(ibis_expr))
+                if op_node is not None:
+                    if len(sql_cache) >= 512:
+                        sql_cache.clear()
+                    sql_cache[op_node] = compiled_sql
             # Include the spec hash as well to ensure filter/sort context is captured
             spec_dict = spec.to_dict()
             spec_hash = hashlib.sha256(json.dumps(spec_dict, sort_keys=True, default=str).encode()).hexdigest()[:16]

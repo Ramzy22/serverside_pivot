@@ -336,3 +336,57 @@ def test_flagship_client_duckdb_wasm_demo_smoke():
             break
 
     assert callback_found, "Expected _update_hybrid_execution_mode callback to be registered"
+
+
+def test_runtime_response_available_fields_separated_from_projection_columns():
+    """Server PivotRuntimeService must emit full dataset schema in available_fields independently of active rowFields."""
+    from pivot_engine.runtime.contracts import build_runtime_response, validate_runtime_response_v1
+
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("sales", pa.Table.from_pylist(SAMPLE_RECORDS))
+    service = PivotRuntimeService(adapter_getter=lambda: adapter)
+
+    expected_schema = list(SAMPLE_RECORDS[0].keys())
+    for row_fields in (["region", "country"], ["country"], []):
+        view_state = PivotViewState(
+            row_fields=row_fields,
+            col_fields=["year"],
+            val_configs=[{"field": "revenue", "agg": "sum"}],
+            show_row_totals=True,
+            show_col_totals=True,
+            view_mode="pivot",
+            layout_mode="hierarchy",
+        )
+        context = PivotRequestContext(
+            table="sales",
+            trigger_prop="pivot.viewport",
+            intent="structural",
+            start_row=0,
+            end_row=20,
+            needs_col_schema=True,
+            include_grand_total=True,
+            viewport_active=True,
+        )
+        res = service.process(view_state, context)
+        assert res.status == "data"
+        assert res.available_fields == expected_schema
+        col_ids = [col.get("id") for col in (res.columns or []) if isinstance(col, dict)]
+        for dropped in set(["region", "country"]) - set(row_fields):
+            assert dropped not in col_ids
+            assert dropped in (res.available_fields or [])
+
+        envelope = build_runtime_response(
+            kind="data",
+            request_id=f"schema-{len(row_fields)}",
+            status="data",
+            payload={
+                "data": list(res.data or []),
+                "rowCount": res.total_rows or 0,
+                "columns": res.columns,
+                "availableFields": res.available_fields,
+                "colSchema": res.col_schema,
+            },
+            table="sales",
+        )
+        validated = validate_runtime_response_v1(envelope)
+        assert validated["payload"]["availableFields"] == expected_schema
