@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.96] - 2026-11-18
+
+### Changed
+- Added a dedicated Python/Dash/Streamlit README (`serverside_pivot/README_PYPI.md`) for PyPI while keeping `serverside_pivot/README.md` focused on the React/npm package.
+- Updated workspace components, client-side runtime, and frontend bundles.
+
+### Fixed
+- Allowed explicit viewport error recovery retries during pending structural transitions in `useServerSideRowModel.js`.
+
 ## [0.0.95] - 2026-11-14
 
 ### Fixed
