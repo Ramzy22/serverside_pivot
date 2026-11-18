@@ -215,10 +215,10 @@ def _click_button(driver, text, root=None):
     from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
     from selenium.webdriver.support.ui import WebDriverWait
 
-    scrolled, last_geometry = False, None
+    scroll_step, last_geometry = 0, None
 
     def attempt(current):
-        nonlocal scrolled, last_geometry
+        nonlocal scroll_step, last_geometry
         try:
             button = current.execute_script(_MODEL_ELEMENTS, "button", root, " ".join(text.split()))
             if not button:
@@ -228,17 +228,20 @@ def _click_button(driver, text, root=None):
                 button.click()
                 return True
             if wheel := last_geometry.get("wheel"):
-                if not scrolled:
-                    current.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});", button)
-                    scrolled = True
-                else:
+                if scroll_step == 0:
+                    ActionChains(current).scroll_to_element(button).perform()
+                    scroll_step = 1
+                elif scroll_step == 1:
                     ActionChains(current).scroll_from_origin(
                         ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
+                    scroll_step = 2
+                else:
+                    current.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});", button)
                 return False
             return False
         except (StaleElementReferenceException, ElementClickInterceptedException):
             # Reacquire only the intended control after a host rerender.
-            scrolled = False
+            scroll_step = 0
             return False
 
     try:
