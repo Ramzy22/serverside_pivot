@@ -320,11 +320,12 @@ def _run(driver, host, requirement, state, wait, observation):
         assert_density(before, before, 44)
         observation["densityStates"] = []
         for label, height in (("Loose", 56), ("Compact", 36), ("Normal", 44)):
-            _section(driver, "view", '[title="Cycle row density"]').click()
+            _section(driver, "view", '[role="group"][aria-label="Row density"] button')
+            next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button') if btn.is_displayed() and btn.text.strip() == label).click()
             wait.until(lambda current: all(abs(cell["rowHeight"] - height) <= 1 for cell in cells(current)))
             after = cells(driver)
             assert_density(before, after, height)
-            assert _element(driver, '[title="Cycle row density"]').text.strip() == label
+            assert _element(driver, '[role="group"][aria-label="Row density"] button[aria-pressed="true"]').text.strip() == label
             observation["densityStates"].append({"name": label, "height": height, "cells": after})
     elif requirement == "number-format.decimals":
         observation["scopes"] = []
@@ -381,9 +382,9 @@ def _run(driver, host, requirement, state, wait, observation):
         _select(driver, [(row, "scale_value_sum") for row in ids])
         before = cells(driver)
         if requirement == "color-scales.scale":
-            Select(_section(driver, "format", 'select[title="Color scale"]')).select_by_value("col")
-            palette = next(el for el in _workspace_elements(driver, "select") if el.is_displayed() and any(option.get_attribute("value") == "redGreen" for option in el.find_elements("css selector", "option")))
-            Select(palette).select_by_value("redGreen")
+            support._select_option(driver, _section(driver, "format", 'select[title="Color scale"], [role="combobox"][title="Color scale"]'), "col")
+            palette = _element(driver, '[role="combobox"][aria-label="Color palette"], select[aria-label="Color palette"]')
+            support._select_option(driver, palette, "redGreen")
             clear = _element(driver, '[data-pivot-status-action="clear-selection"]')
             driver.execute_script("arguments[0].scrollIntoView({block:'center'})", clear)
             clear.click()
@@ -416,11 +417,11 @@ def _run(driver, host, requirement, state, wait, observation):
                                negativePolicy="Absolute value uses red tint: -100 fills 50%", clampingPolicy="Magnitude / explicit maximum 200, clamped to 100%; 300 fills 100%")
     elif requirement == "themes.select-override":
         _section(driver, "theme", '[title="Edit theme colors"]')
-        theme_select = next(el for el in _workspace_elements(driver, "select") if el.is_displayed() and any(option.get_attribute("value") == "dark" for option in el.find_elements("css selector", "option")))
+        theme_select = _element(driver, '[role="combobox"][aria-label="Theme"], select[aria-label="Theme"]')
         root = _element(driver, f'[id="flagship-{host}-pivot"]')
         appearance = lambda: driver.execute_script("const s=getComputedStyle(arguments[0]);return {background:s.backgroundColor,color:s.color}", root)
         light = appearance()
-        Select(theme_select).select_by_value("dark")
+        support._select_option(driver, theme_select, "dark")
         wait.until(lambda current: appearance() == {"background": "rgb(10, 12, 16)", "color": "rgb(248, 250, 252)"})
         dark = appearance()
         assert light != dark

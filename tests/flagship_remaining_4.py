@@ -580,12 +580,13 @@ def _analysis(driver, host, wait, observation, downloads):
     def agg_select():
         return next((select for chip in _workspace_elements(driver, '[data-sidebar-field-chip="zone"]')
                      if chip.is_displayed() and 'ventes' in chip.text.lower()
-                     for select in chip.find_elements('css selector', 'select[title="Aggregation"]') if select.is_displayed()), None)
+                     for select in chip.find_elements('css selector', 'select[title="Aggregation"], [role="combobox"][title="Aggregation"]')
+                     if select.is_displayed()), None)
     observation['displayPrecondition'] = _analysis_two_decimal_display(driver, wait)
     if agg_select() is None:
         element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
     checkpoint = driver.execute_script('return performance.now()')
-    Select(wait.until(lambda _: agg_select())).select_by_value('avg')
+    s._select_option(driver, wait.until(lambda _: agg_select()), 'avg')
     wait.until(lambda d: any(any(r.get('_id') == 'Grand Total' and r.get('Q1_ventes_€_avg') == 75 for r in reply['payload'].get('data', []))
         for req, reply in _responses(d, checkpoint)))
     wait.until(lambda d: analysis_cells_match(_analysis_cells(d), {

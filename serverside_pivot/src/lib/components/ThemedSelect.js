@@ -347,6 +347,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
                         type="button"
                         role="option"
                         aria-selected={isSelected}
+                        data-value={opt.value}
                         data-highlighted={isHighlighted ? 'true' : undefined}
                         disabled={opt.disabled}
                         title={opt.title}

@@ -229,7 +229,7 @@ def _click_button(driver, text, root=None):
                 return True
             if wheel := last_geometry.get("wheel"):
                 if not scrolled:
-                    ActionChains(current).scroll_to_element(button).perform()
+                    current.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});", button)
                     scrolled = True
                 else:
                     ActionChains(current).scroll_from_origin(
@@ -379,22 +379,23 @@ def _formula(driver, wait, observation):
 
 
 def _custom(driver, wait, observation):
-    from selenium.webdriver.support.ui import Select
+    from tests import flagship_browser_support as support
     _click_button(driver, "+ Category")
     dialog = _element(driver, '[role="dialog"][aria-label="Add custom category"]')
     _type(dialog.find_element("css selector", 'input[placeholder="Example: Priority Segment"]'), "IncludedGroup")
     _type(dialog.find_element("css selector", 'input[placeholder="Category value"]'), "Included cities")
-    selects = dialog.find_elements("css selector", "select")
-    field = next(element for element in selects if any(option.get_attribute("value") == "region" for option in element.find_elements("css selector", "option")))
-    Select(field).select_by_value("region")
+    selects = dialog.find_elements("css selector", 'select, [role="combobox"]')
+    field = next(element for element in selects if (element.get_attribute("data-value") or element.get_attribute("value")) not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty"))
+    support._select_option(driver, field, "region")
     # Two native Equals clauses avoid the list editor's immediate delimiter
     # normalization swallowing a comma while WebDriver types one key at a time.
-    condition = next(element for element in selects if {option.get_attribute("value") for option in element.find_elements("css selector", "option")} == {"AND", "OR"})
-    Select(condition).select_by_value("OR")
+    condition = next(element for element in selects if (element.get_attribute("data-value") or element.get_attribute("value")) in ("AND", "OR"))
+    support._select_option(driver, condition, "OR")
     _type(dialog.find_element("css selector", 'input[placeholder="Value"]'), ECLAIR)
     _click_button(driver, "+ Condition", dialog)
-    fields = [element for element in dialog.find_elements("css selector", "select") if any(option.get_attribute("value") == "region" for option in element.find_elements("css selector", "option"))]
-    Select(fields[1]).select_by_value("region")
+    selects = dialog.find_elements("css selector", 'select, [role="combobox"]')
+    fields = [element for element in selects if element.get_attribute("data-value") not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty") and (element.get_attribute("value") or "") not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty")]
+    support._select_option(driver, fields[-2] if len(fields) >= 2 else fields[-1], "region")
     _type(dialog.find_elements("css selector", 'input[placeholder="Value"]')[1], MUNICH)
     _click_button(driver, "Apply Category", dialog)
     wait.until(lambda current: not _elements(current, '[role="dialog"][aria-label="Add custom category"]'))
@@ -429,12 +430,12 @@ def _custom(driver, wait, observation):
 
 
 def _report(driver, host, wait, observation):
-    from selenium.webdriver.support.ui import Select
+    from tests import flagship_browser_support as support
     support._click_totals_control(driver, "Report")
     levels = _element(driver, '[data-report-section="report-levels"]')
-    choices = levels.find_elements("css selector", "select")
+    choices = levels.find_elements("css selector", 'select, [role="combobox"]')
     if choices:
-        Select(choices[0]).select_by_value("region")
+        support._select_option(driver, choices[0], "region")
     wait.until(lambda current: snapshot(current, -1, expected_sales(), col_fields=["period"], view_mode="report", report_root="region"))
     _type(_element(driver, 'input[placeholder="Report name..."]'), "Complete207 Sales")
     _click_button(driver, "Save", _element(driver, '[data-report-section="save-report"]'))
@@ -449,9 +450,9 @@ def _report(driver, host, wait, observation):
     levels.find_element("css selector", 'button[draggable="true"]').click()
     inspector = _element(driver, '[data-report-section="selected-level"]')
     inspector.find_element("css selector", '[data-report-level-collapsible] > button').click()
-    field = next(element for element in inspector.find_elements("css selector", "select") if any(option.get_attribute("value") == "account" for option in element.find_elements("css selector", "option")))
+    field = inspector.find_elements("css selector", 'select, [role="combobox"]')[0]
     checkpoint = driver.execute_script("return performance.now()")
-    Select(field).select_by_value("account")
+    support._select_option(driver, field, "account")
     _click_button(driver, "Apply", inspector)
     observation["changed"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales("accounts"),
         col_fields=["period"], view_mode="report", report_root="account"))

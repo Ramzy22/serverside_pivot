@@ -27,7 +27,7 @@ def persistence_geometry(driver, column):
     assert all(abs(bound["width"] - width) <= 1 for bound in bounds)
     assert max(bound["rowHeight"] for bound in bounds) - min(bound["rowHeight"] for bound in bounds) <= 1
     assert all(abs(bound["height"] - bound["rowHeight"]) <= 1 for bound in bounds)
-    density = _workspace_elements(driver, '[title="Cycle row density"]')
+    density = _workspace_elements(driver, '[role="group"][aria-label="Row density"] button[aria-pressed="true"]')
     assert len(density) == 1
     return {"width": width, "height": bounds[0]["rowHeight"], "density": density[0].text.strip(), "bounds": bounds}
 

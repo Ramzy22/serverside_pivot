@@ -393,6 +393,37 @@ def assert_pinned_clipboard_order(rows, order):
         assert float(row[order.index("Q1_ventes_€_sum")]) == q1, "Unpinned Q1 sales shifted or changed in clipboard"
 
 
+def _select_option(driver, element, value):
+    """Select an option by value on either a native <select> or ThemedSelect combobox."""
+    from selenium.webdriver.support.ui import Select, WebDriverWait
+    if element.tag_name.lower() == "select":
+        Select(element).select_by_value(value)
+        return
+    driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});", element)
+    listbox_id = element.get_attribute("aria-controls")
+    if element.get_attribute("aria-expanded") != "true":
+        element.click()
+        listbox_id = element.get_attribute("aria-controls") or listbox_id
+    def find_option(current):
+        from tests.test_flagship_certification import _workspace_elements
+        selector = f'#{listbox_id} [role="option"][data-value="{value}"]' if listbox_id else f'[role="option"][data-value="{value}"]'
+        for option in _workspace_elements(current, selector) + current.find_elements("css selector", selector):
+            if option.is_displayed():
+                return option
+        return False
+    option = WebDriverWait(driver, 5).until(find_option)
+    driver.execute_script("arguments[0].scrollIntoView({block:'nearest'});", option)
+    option.click()
+
+
+def _selected_option_value(element):
+    """Return the selected value for either a native <select> or ThemedSelect combobox."""
+    from selenium.webdriver.support.ui import Select
+    if element.tag_name.lower() == "select":
+        return Select(element).first_selected_option.get_attribute("value")
+    return element.get_attribute("data-value") or element.get_attribute("value")
+
+
 def _selection_ids(driver):
     from tests.test_flagship_certification import _workspace_elements
 
@@ -2885,7 +2916,7 @@ def qualify_aggregation_round_trip(host: str) -> None:
     def aggregation_select():
         return next((select for chip in _workspace_elements(driver, '[data-sidebar-field-chip="zone"]')
                      if chip.is_displayed() and "ventes" in chip.text.lower()
-                     for select in chip.find_elements("css selector", 'select[title="Aggregation"]')
+                     for select in chip.find_elements("css selector", 'select[title="Aggregation"], [role="combobox"][title="Aggregation"]')
                      if select.is_displayed()), None)
 
     def observed_state(aggregation, checkpoint):
@@ -2929,16 +2960,16 @@ def qualify_aggregation_round_trip(host: str) -> None:
         observation["states"].append(initial)
 
         checkpoint = driver.execute_script("return performance.now()")
-        Select(aggregation_select()).select_by_value("avg")
+        _select_option(driver, aggregation_select(), "avg")
         average = wait.until(lambda _: observed_state("avg", checkpoint))
         observation["states"].append(average)
-        assert Select(aggregation_select()).first_selected_option.get_attribute("value") == "avg"
+        assert _selected_option_value(aggregation_select()) == "avg"
 
         checkpoint = driver.execute_script("return performance.now()")
-        Select(aggregation_select()).select_by_value("sum")
+        _select_option(driver, aggregation_select(), "sum")
         restored = wait.until(lambda _: observed_state("sum", checkpoint))
         observation["states"].append(restored)
-        assert Select(aggregation_select()).first_selected_option.get_attribute("value") == "sum"
+        assert _selected_option_value(aggregation_select()) == "sum"
         assert aggregation_round_trip_matches(observation["states"]), observation["states"]
         result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
                       v1RequestsCorrelated=True)

@@ -191,9 +191,9 @@ def qualify_layout_modes(host):
         expand.click()
         _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
         observation["states"].append(wait.until(lambda current: layout_snapshot(current, "hierarchy", -1)))
-        for previous, mode in (("Hierarchy", "outline"), ("Outline", "tabular"), ("Tabular", "hierarchy")):
+        for mode_label, mode in (("Outline", "outline"), ("Tabular", "tabular"), ("Hierarchy", "hierarchy")):
             checkpoint = driver.execute_script("return performance.now()")
-            support._click_totals_control(driver, previous)
+            support._click_totals_control(driver, mode_label)
             observation["states"].append(wait.until(lambda current: layout_snapshot(current, mode, checkpoint)))
             screenshot = directory / f"{mode}.png"
             driver.save_screenshot(str(screenshot))
