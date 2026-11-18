@@ -438,14 +438,23 @@ def _run(driver, host, requirement, state, wait, observation):
         wait.until(lambda current: appearance()["background"] == "rgb(10, 12, 15)")
         events = driver.execute_script("return window.__pivotThemeColorInputs")
         assert events and events[-1] == {"value": "#0a0c0f", "trusted": True}
+        from selenium.common.exceptions import StaleElementReferenceException
         # The popover can cover its anchor. Use its own real Done control.
-        done = next(button for button in _workspace_elements(driver, 'button') if button.is_displayed() and button.text == 'Done')
+        def find_done(current):
+            try:
+                return next((btn for btn in _workspace_elements(current, '.sp-menu-surface button, button')
+                             if btn.is_displayed() and btn.text.strip() == 'Done'), False)
+            except StaleElementReferenceException:
+                return False
+        done = wait.until(find_done)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'})", done)
         done.click()
         from selenium.webdriver.support import expected_conditions as EC
         wait.until(EC.staleness_of(field))
         _select(driver, [target])
-        _section(driver, "view", '[title="Cycle row density"]').click()
+        _section(driver, "view", '[role="group"][aria-label="Row density"] button')
+        next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button')
+             if btn.is_displayed() and btn.text.strip() == "Loose").click()
         wait.until(lambda current: all(abs(cell["height"] - 56) <= 1 for cell in cells(current)))
         assert logical_values(before) == logical_values(cells(driver))
         observation.update(light=light, dark=dark, override=appearance(), chosenOverride="#0a0c0f", nativeColorInputs=events)
