@@ -140,13 +140,15 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
         setHighlightedIndex(idx >= 0 ? idx : parsedOptions.findIndex(/** @param {any} opt */ (opt) => !opt.disabled));
         /** @param {any} event */
         const handleOutside = (event) => {
-            if (triggerRef.current && triggerRef.current.contains(event.target)) return;
-            if (menuRef.current && menuRef.current.contains(event.target)) return;
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+            if (triggerRef.current && (triggerRef.current.contains(event.target) || (path && path.includes(triggerRef.current)))) return;
+            if (menuRef.current && (menuRef.current.contains(event.target) || (path && path.includes(menuRef.current)))) return;
             setOpen(false);
         };
         /** @param {any} [event] */
         const handleViewportChange = (event) => {
-            if (event && event.target && menuRef.current && typeof menuRef.current.contains === 'function' && menuRef.current.contains(event.target)) {
+            const path = event && typeof event.composedPath === 'function' ? event.composedPath() : null;
+            if (menuRef.current && ((event && event.target && typeof menuRef.current.contains === 'function' && menuRef.current.contains(event.target)) || (path && path.includes(menuRef.current)))) {
                 return;
             }
             updateMenuPosition();

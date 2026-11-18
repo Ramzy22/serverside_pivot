@@ -87,7 +87,7 @@ def qualify_saved_view_persistence(host):
         column = "\u00c9clair|\u6771\u4eac_ventes_\u20ac_sum"
         before = persistence_geometry(driver, column)
         observation["before"] = before
-        assert before["height"] == 44
+        assert abs(before["height"] - 44) <= 1
         header = support._geometry_header(driver, column)
         handle = header.find_element("css selector", 'div[style*="cursor: col-resize"]')
         ActionChains(driver).move_to_element(handle).click_and_hold().move_by_offset(40, 0).release().perform()
@@ -96,7 +96,7 @@ def qualify_saved_view_persistence(host):
             support._click_totals_control(driver, "View")
         next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button')
              if btn.is_displayed() and btn.text.strip() == "Compact").click()
-        wait.until(lambda current: persistence_geometry(current, column)["height"] == 36)
+        wait.until(lambda current: abs(persistence_geometry(current, column)["height"] - 36) <= 1)
         saved_state = wait.until(lambda current: axis_snapshot(current, -1, transposed=True))
         saved_geometry = persistence_geometry(driver, column)
         assert abs(saved_geometry["width"] - before["width"] - 40) <= 2

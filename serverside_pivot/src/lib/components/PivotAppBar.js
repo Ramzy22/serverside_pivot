@@ -993,12 +993,12 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
         </div>
     );
 
-    return (
+    const popoverNode = (
         <div ref={popoverRef} className="sp-menu-surface" style={{
             position: 'fixed',
             top: `${popoverLayout.top}px`,
             left: `${popoverLayout.left}px`,
-            zIndex: 9999,
+            zIndex: 10050,
             background: `var(--sp-glass-bg, ${theme.surfaceBg || '#fff'})`,
             backdropFilter: 'blur(18px) saturate(180%)',
             WebkitBackdropFilter: 'blur(18px) saturate(180%)',
@@ -1124,6 +1124,10 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
             </div>
         </div>
     );
+    const portalTarget = typeof document !== 'undefined'
+        ? (anchorRef.current?.closest?.('[data-pivot-workspace-root]') || document.body)
+        : null;
+    return portalTarget ? ReactDOM.createPortal(popoverNode, portalTarget) : popoverNode;
 }
 
 /** @param {any} p0 @returns {any} */

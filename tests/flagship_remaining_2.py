@@ -384,18 +384,16 @@ def _custom(driver, wait, observation):
     dialog = _element(driver, '[role="dialog"][aria-label="Add custom category"]')
     _type(dialog.find_element("css selector", 'input[placeholder="Example: Priority Segment"]'), "IncludedGroup")
     _type(dialog.find_element("css selector", 'input[placeholder="Category value"]'), "Included cities")
-    selects = dialog.find_elements("css selector", 'select, [role="combobox"]')
-    field = next(element for element in selects if (element.get_attribute("data-value") or element.get_attribute("value")) not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty"))
+    field = dialog.find_element("css selector", '[aria-label="Clause field"]')
     support._select_option(driver, field, "region")
     # Two native Equals clauses avoid the list editor's immediate delimiter
     # normalization swallowing a comma while WebDriver types one key at a time.
-    condition = next(element for element in selects if (element.get_attribute("data-value") or element.get_attribute("value")) in ("AND", "OR"))
+    condition = dialog.find_element("css selector", '[aria-label="Rule condition combiner"]')
     support._select_option(driver, condition, "OR")
     _type(dialog.find_element("css selector", 'input[placeholder="Value"]'), ECLAIR)
     _click_button(driver, "+ Condition", dialog)
-    selects = dialog.find_elements("css selector", 'select, [role="combobox"]')
-    fields = [element for element in selects if element.get_attribute("data-value") not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty") and (element.get_attribute("value") or "") not in ("AND", "OR", "eq", "neq", "contains", "not_contains", "gt", "gte", "lt", "lte", "in", "not_in", "is_empty", "not_empty")]
-    support._select_option(driver, fields[-2] if len(fields) >= 2 else fields[-1], "region")
+    fields = dialog.find_elements("css selector", '[aria-label="Clause field"]')
+    support._select_option(driver, fields[1], "region")
     _type(dialog.find_elements("css selector", 'input[placeholder="Value"]')[1], MUNICH)
     _click_button(driver, "Apply Category", dialog)
     wait.until(lambda current: not _elements(current, '[role="dialog"][aria-label="Add custom category"]'))
