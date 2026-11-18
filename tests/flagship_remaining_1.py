@@ -322,7 +322,7 @@ def _run(driver, host, requirement, state, wait, observation):
         for label, height in (("Loose", 56), ("Compact", 36), ("Normal", 44)):
             _section(driver, "view", '[role="group"][aria-label="Row density"] button')
             next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button') if btn.is_displayed() and btn.text.strip() == label).click()
-            wait.until(lambda current: all(abs(cell["rowHeight"] - height) <= 1 for cell in cells(current)))
+            wait.until(lambda current: all(abs(cell["rowHeight"] - height) <= 1 and abs(cell["height"] - height) <= 1 for cell in cells(current)))
             after = cells(driver)
             assert_density(before, after, height)
             assert _element(driver, '[role="group"][aria-label="Row density"] button[aria-pressed="true"]').text.strip() == label

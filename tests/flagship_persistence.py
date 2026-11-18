@@ -92,8 +92,10 @@ def qualify_saved_view_persistence(host):
         handle = header.find_element("css selector", 'div[style*="cursor: col-resize"]')
         ActionChains(driver).move_to_element(handle).click_and_hold().move_by_offset(40, 0).release().perform()
         wait.until(lambda current: abs(persistence_geometry(current, column)["width"] - before["width"] - 40) <= 2)
-        for _ in range(2):
-            _wait_for_visible_workspace_element(driver, '[title="Cycle row density"]').click()
+        if not _workspace_elements(driver, '[role="group"][aria-label="Row density"] button'):
+            support._click_totals_control(driver, "View")
+        next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button')
+             if btn.is_displayed() and btn.text.strip() == "Compact").click()
         wait.until(lambda current: persistence_geometry(current, column)["height"] == 36)
         saved_state = wait.until(lambda current: axis_snapshot(current, -1, transposed=True))
         saved_geometry = persistence_geometry(driver, column)

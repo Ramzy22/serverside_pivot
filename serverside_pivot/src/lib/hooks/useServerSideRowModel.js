@@ -1251,7 +1251,7 @@ export const useServerSideRowModel = ({
 
     /** @type {(...args: any[]) => any} */
     const requestUrgentColumnViewport = useCallback((overrideColStart, overrideColEnd) => {
-        if (!serverSide || !parentRef.current || hasPendingStructuralTransition()) return false;
+        if (!serverSide || !parentRef.current) return false;
 
         const scrollEl = parentRef.current;
         /** @type {any} */
@@ -1268,6 +1268,17 @@ export const useServerSideRowModel = ({
                 estimatedFirstRow + estimatedVisibleRows + urgentJumpOverscanRows
             )
         );
+
+        if (hasPendingStructuralTransition()) {
+            const existingPending = pendingViewportRef.current;
+            pendingViewportRef.current = existingPending
+                ? {
+                    firstRow: Math.min(existingPending.firstRow, estimatedFirstRow),
+                    lastRow: Math.max(existingPending.lastRow, estimatedLastRow),
+                }
+                : { firstRow: estimatedFirstRow, lastRow: estimatedLastRow };
+            return false;
+        }
 
         /** @type {any} */
         const { blocksNeeded } = collectBlocksNeeded(

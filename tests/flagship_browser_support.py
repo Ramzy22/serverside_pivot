@@ -406,7 +406,7 @@ def _select_option(driver, element, value):
         listbox_id = element.get_attribute("aria-controls") or listbox_id
     def find_option(current):
         from tests.test_flagship_certification import _workspace_elements
-        selector = f'#{listbox_id} [role="option"][data-value="{value}"]' if listbox_id else f'[role="option"][data-value="{value}"]'
+        selector = f'[id="{listbox_id}"] [role="option"][data-value="{value}"]' if listbox_id else f'[role="option"][data-value="{value}"]'
         for option in _workspace_elements(current, selector) + current.find_elements("css selector", selector):
             if option.is_displayed():
                 return option
