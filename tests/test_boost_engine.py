@@ -263,3 +263,94 @@ def test_export_style_helpers_tolerate_missing_profile_and_state():
     header_style = RuntimeExportService._export_header_style("sales_sum", "Sales", None, None)
     assert cell_style["textAlign"] == "right"
     assert header_style["textAlign"] == "center"
+
+
+def test_connection_pool_health_check_runs_after_interval_under_active_load(monkeypatch):
+    from pivot_engine.backends import duckdb_backend
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(duckdb_backend.time, "monotonic", lambda: clock["now"])
+
+    class FakeConn:
+        def __init__(self):
+            self.checks = 0
+            self.alive = True
+            self.closed = False
+
+        def execute(self, sql):
+            self.checks += 1
+            if not self.alive:
+                raise RuntimeError("broken connection")
+            return self
+
+        def close(self):
+            self.closed = True
+
+    created = []
+
+    def factory():
+        c = FakeConn()
+        created.append(c)
+        return c
+
+    pool = duckdb_backend.ConnectionPool(factory, max_size=1, health_check_interval=30.0)
+    assert len(created) == 1
+    first = created[0]
+
+    # Active traffic every 10s must NOT slide _last_healthy_ts forward without running _is_healthy.
+    for step in (110.0, 120.0):
+        clock["now"] = step
+        con = pool.checkout()
+        assert con is first
+        assert first.checks == 0
+        assert pool.checkin(con) is True
+        assert first.checks == 0
+
+    # Once 30s have elapsed since creation/last real probe, a broken connection must be detected & replaced.
+    first.alive = False
+    clock["now"] = 131.0
+    replacement = pool.checkout()
+    assert first.checks == 1
+    assert first.closed is True
+    assert replacement is not first
+    assert len(created) == 2
+
+
+def test_unbalanced_duplicate_node_merge_preserves_pivoted_min_max_avg():
+    import asyncio
+    import pyarrow as pa
+    from pivot_engine.scalable_pivot_controller import ScalablePivotController
+
+    controller = ScalablePivotController(backend_uri=":memory:")
+    table = pa.table({
+        "l1": ["Alpha", None, None],
+        "l2": [None, "Alpha", "Alpha"],
+        "period": ["Q1", "Q1", "Q1"],
+        "val": [10.0, 40.0, 40.0],
+        "w": [1.0, 3.0, 1.0],
+    })
+    controller.load_data_from_arrow("unbal_agg_merge", table)
+
+    spec_dict = {
+        "table": "unbal_agg_merge",
+        "rows": ["l1", "l2"],
+        "columns": ["period"],
+        "pivot_config": {"enabled": True},
+        "measures": [
+            {"field": "val", "agg": "min", "alias": "val_min"},
+            {"field": "val", "agg": "max", "alias": "val_max"},
+            {"field": "val", "agg": "avg", "alias": "val_avg"},
+            {"field": "val", "agg": "weighted_avg", "weighted_field": "w", "alias": "val_wavg"},
+        ],
+        "totals": False,
+        "group_allow_unbalanced": True,
+    }
+    res = asyncio.run(controller.run_hierarchical_pivot_batch_load(spec_dict, [["__ALL__"]]))
+    alpha = next(row for row in res[""] if row["_id"] == "Alpha")
+    assert alpha["Q1_val_min"] == 10.0
+    assert alpha["Q1_val_max"] == 40.0
+    # True average of [10, 40, 40] = 30.0
+    assert abs(alpha["Q1_val_avg"] - 30.0) < 1e-6
+    # True weighted avg: (10*1 + 40*3 + 40*1) / (1 + 3 + 1) = 170 / 5 = 34.0
+    assert abs(alpha["Q1_val_wavg"] - 34.0) < 1e-6
+    assert not any("__unbal_w_" in k for k in alpha.keys())

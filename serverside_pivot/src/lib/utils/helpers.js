@@ -53,6 +53,19 @@ export const formatAggLabel = (agg, weightField = null) => {
     return baseLabel;
 };
 
+const KNOWN_AGG_LABEL_SUFFIX_RE = /\s*\((?:sum|avg|average|mean|cnt|count|count distinct|distinct|min|max|first|last|median|stddev|std|var|variance|percentile|p\d{1,2}|array agg|formula|fx|weighted avg(?:\s+by\s+[^)]+)?)\)$/i;
+
+/**
+ * Strip only a trailing aggregation suffix (e.g. " (Sum)", " (Weighted Avg by Qty)")
+ * while preserving unit/currency suffixes such as " (€)", " ($M)", or " (%)".
+ * @param {any} [label]
+ * @returns {string}
+ */
+export const stripAggLabelSuffix = (label) => {
+    const text = label === null || label === undefined ? '' : String(label);
+    return text.replace(KNOWN_AGG_LABEL_SUFFIX_RE, '');
+};
+
 export const DEFAULT_NUMBER_GROUP_SEPARATOR = 'thin_space';
 export const DEFAULT_CURRENCY_SYMBOL = '$';
 

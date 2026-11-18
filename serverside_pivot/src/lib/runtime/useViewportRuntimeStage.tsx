@@ -32,7 +32,7 @@ const debugLog = (...args) => {
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
 import { useColumnVirtualizer } from '../hooks/useColumnVirtualizer';
-import { formatDisplayLabel, formatValue, getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
+import { formatDisplayLabel, formatValue, getAllLeafIdsFromColumn, isGroupColumn, stripAggLabelSuffix } from '../utils/helpers';
 import { useColumnDefs } from '../hooks/useColumnDefs';
 import { findSortSpecifier, isAbsoluteSortSpecifier, normalizeSortingState, resolveColumnSortOptions, updateSortingForColumn } from '../utils/sorting';
 import { useRuntimeChartModels } from '../runtime/useRuntimeChartModels';
@@ -549,12 +549,13 @@ export function useViewportRuntimeStage(input, transport) {
           if (!mergedHeaders) {
             return typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id;
           }
-          // Merge all ancestor labels into one; strip agg suffix (e.g. " (Sum)") from leaf
+          // Merge all ancestor labels into one; strip only known agg suffixes (e.g. " (Sum)")
+          // while preserving unit/currency suffixes such as " (€)".
           const stack = stage.getDisplayHeaderTextStackForColumn(c);
           if (stack.length <= 1) {
             return stack[0] || (typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id);
           }
-          const leafLabel = (stack[stack.length - 1] || '').replace(/\s*\([^)]+\)$/, '');
+          const leafLabel = stripAggLabelSuffix(stack[stack.length - 1] || '');
           return [...stack.slice(0, -1), leafLabel].filter(Boolean).join(stage.mergedHeaderSeparator);
         });
         tsv += headerRow.join('\t') + '\n';
@@ -2091,7 +2092,11 @@ export function useViewportRuntimeStage(input, transport) {
       return changed ? next : prev;
     });
   }, [fitLayoutSpec, fitContainerWidth]);
-  if (fitToWidthEnabled && fitLayoutSpec && Number.isFinite(fitLayoutSpec.fontSize) && fitLayoutSpec.fontSize < parsedFitBaseFontSize) {
+  const baseThemeCssVars = stage.themeCssVars;
+  const fittedThemeBundle = useMemo(() => {
+    if (!fitToWidthEnabled || !fitLayoutSpec || !Number.isFinite(fitLayoutSpec.fontSize) || fitLayoutSpec.fontSize >= parsedFitBaseFontSize) {
+      return null;
+    }
     const fittedCss = `${fitLayoutSpec.fontSize}px`;
     const fitScale = parsedFitBaseFontSize > 0 ? (fitLayoutSpec.fontSize / parsedFitBaseFontSize) : 1;
     const compactOverrides = computeCompactFitThemeOverrides(fitBaseTheme, fitScale, fitLayoutSpec.fontSize, fitMinFontSize);
@@ -2099,17 +2104,26 @@ export function useViewportRuntimeStage(input, transport) {
       ...fitBaseTheme,
       ...compactOverrides,
     };
-    stage.effectiveFontSize = fittedCss;
-    stage.theme = fittedTheme;
+    const fittedStyles = getStyles(fittedTheme);
+    const fittedThemeCssVars = baseThemeCssVars
+      ? { ...baseThemeCssVars, ...buildThemeCssVars(fittedTheme) }
+      : baseThemeCssVars;
+    return {
+      effectiveFontSize: fittedCss,
+      theme: fittedTheme,
+      styles: fittedStyles,
+      themeCssVars: fittedThemeCssVars,
+    };
+  }, [fitToWidthEnabled, fitLayoutSpec, parsedFitBaseFontSize, fitBaseTheme, fitMinFontSize, baseThemeCssVars]);
+  if (fittedThemeBundle) {
+    stage.effectiveFontSize = fittedThemeBundle.effectiveFontSize;
+    stage.theme = fittedThemeBundle.theme;
     if (stage.themeRef) {
-      stage.themeRef.current = fittedTheme;
+      stage.themeRef.current = fittedThemeBundle.theme;
     }
-    stage.styles = getStyles(fittedTheme);
-    if (stage.themeCssVars) {
-      stage.themeCssVars = {
-        ...stage.themeCssVars,
-        ...buildThemeCssVars(fittedTheme),
-      };
+    stage.styles = fittedThemeBundle.styles;
+    if (fittedThemeBundle.themeCssVars) {
+      stage.themeCssVars = fittedThemeBundle.themeCssVars;
     }
   }
   const columnAutoSizing = useRuntimeColumnAutoSizing({

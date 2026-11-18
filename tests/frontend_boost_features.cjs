@@ -1682,3 +1682,28 @@ test('End-to-end fitToWidth preserves explicit fontSize on 1500px desktop and sc
         else delete globalThis.ResizeObserver;
     }
 });
+
+test('Regression: stripAggLabelSuffix preserves currency/unit parentheses while stripping agg suffixes', () => {
+    const { stripAggLabelSuffix } = loader.load('src/lib/utils/helpers.js');
+    assert.equal(stripAggLabelSuffix('Ventes (€)'), 'Ventes (€)');
+    assert.equal(stripAggLabelSuffix('Revenue ($M)'), 'Revenue ($M)');
+    assert.equal(stripAggLabelSuffix('Margin (%)'), 'Margin (%)');
+    assert.equal(stripAggLabelSuffix('Ventes (€) (Sum)'), 'Ventes (€)');
+    assert.equal(stripAggLabelSuffix('Sales (Avg)'), 'Sales');
+    assert.equal(stripAggLabelSuffix('Price (Weighted Avg by Qty)'), 'Price');
+    assert.equal(stripAggLabelSuffix('Latency (P95)'), 'Latency');
+});
+
+test('Regression: isEventInsideSelector detects portaled ThemedSelect menus via composedPath', () => {
+    const { isEventInsideSelector } = loader.load('src/lib/utils/domEvents.js');
+    const menuNode = {
+        matches: (sel) => sel === '[data-themed-select-menu="true"]',
+    };
+    const optionNode = { matches: () => false };
+    const shadowEvent = {
+        target: { closest: () => null },
+        composedPath: () => [optionNode, menuNode],
+    };
+    assert.equal(isEventInsideSelector(shadowEvent, '[data-themed-select-menu="true"]'), true);
+    assert.equal(isEventInsideSelector({ target: { closest: () => null }, composedPath: () => [optionNode] }, '[data-themed-select-menu="true"]'), false);
+});

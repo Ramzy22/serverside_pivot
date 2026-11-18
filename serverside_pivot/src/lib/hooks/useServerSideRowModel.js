@@ -1271,12 +1271,25 @@ export const useServerSideRowModel = ({
 
         if (hasPendingStructuralTransition()) {
             const existingPending = pendingViewportRef.current;
+            const nextColStart = overrideColStart !== undefined
+                ? overrideColStart
+                : existingPending?.colStart;
+            const nextColEnd = overrideColEnd !== undefined
+                ? overrideColEnd
+                : existingPending?.colEnd;
             pendingViewportRef.current = existingPending
                 ? {
                     firstRow: Math.min(existingPending.firstRow, estimatedFirstRow),
                     lastRow: Math.max(existingPending.lastRow, estimatedLastRow),
+                    ...(nextColStart !== undefined ? { colStart: nextColStart } : {}),
+                    ...(nextColEnd !== undefined ? { colEnd: nextColEnd } : {}),
                 }
-                : { firstRow: estimatedFirstRow, lastRow: estimatedLastRow };
+                : {
+                    firstRow: estimatedFirstRow,
+                    lastRow: estimatedLastRow,
+                    ...(nextColStart !== undefined ? { colStart: nextColStart } : {}),
+                    ...(nextColEnd !== undefined ? { colEnd: nextColEnd } : {}),
+                };
             return false;
         }
 
@@ -1606,17 +1619,29 @@ export const useServerSideRowModel = ({
         pendingViewportRef.current = null;
         /** @type {any} */
         const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
+        const pendingColStart = pending.colStart !== undefined ? pending.colStart : colStart;
+        const pendingColEnd = pending.colEnd !== undefined ? pending.colEnd : colEnd;
 
         /** @type {any} */
-        const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(pending.firstRow, pending.lastRow);
+        const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(
+            pending.firstRow,
+            pending.lastRow,
+            inflightRequestRef.current,
+            pendingColStart,
+            pendingColEnd
+        );
 
         setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
         pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
 
         if (blocksNeeded.length > 0) {
-            enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, { immediate: true });
+            enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, {
+                immediate: true,
+                overrideColStart: pendingColStart,
+                overrideColEnd: pendingColEnd,
+            });
         }
-    }, [viewportSchedulingEnabled, serverSide, structuralInFlight, cacheKeyChangedThisRender, virtualRows, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange, hasPendingStructuralTransition]);
+    }, [viewportSchedulingEnabled, serverSide, structuralInFlight, cacheKeyChangedThisRender, virtualRows, pruneToRange, stateEpoch, colStart, colEnd, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange, hasPendingStructuralTransition]);
 
     // 4. Check Viewport & Trigger Fetch (with Debounce)
     useEffect(() => {
@@ -1724,6 +1749,8 @@ export const useServerSideRowModel = ({
 
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
+        const pendingColStart = pending.colStart !== undefined ? pending.colStart : colStart;
+        const pendingColEnd = pending.colEnd !== undefined ? pending.colEnd : colEnd;
 
         /** @type {any} */
         const startBlock = Math.floor(pending.firstRow / blockSize);
@@ -1757,13 +1784,13 @@ export const useServerSideRowModel = ({
                 currentInflight.end >= blockEnd
             );
             /** @type {any} */
-            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
+            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, pendingColStart, pendingColEnd);
             /** @type {any} */
             const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
                 currentInflight.colStart,
                 currentInflight.colEnd,
-                colStart,
-                colEnd
+                pendingColStart,
+                pendingColEnd
             );
             if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
                 blocksNeeded.push(b);
@@ -1784,9 +1811,9 @@ export const useServerSideRowModel = ({
                     blocksNeeded.push(b);
                 }
             }
-            requestViewport(pending.firstRow, pending.lastRow, blocksNeeded);
+            requestViewport(pending.firstRow, pending.lastRow, blocksNeeded, pendingColStart, pendingColEnd);
         }
-    }, [serverSide, structuralInFlight, virtualRows, blockSize, getBlock, pruneToRange, requestViewport, stateEpoch, colStart, colEnd, abortGeneration, resolveRetentionBufferBlocks]);
+    }, [serverSide, structuralInFlight, viewportSchedulingEnabled, hasPendingStructuralTransition, virtualRows, blockSize, getBlock, pruneToRange, requestViewport, stateEpoch, colStart, colEnd, abortGeneration, resolveRetentionBufferBlocks]);
 
     // 5. Cleanup Effect
     useEffect(() => {

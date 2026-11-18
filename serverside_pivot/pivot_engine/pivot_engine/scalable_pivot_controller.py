@@ -1,7 +1,7 @@
 """
 ScalablePivotController - Main controller for high-scale pivot operations
 """
-from typing import Optional, Any, Dict, List, Mapping, Union, Callable, Generator
+from typing import Optional, Any, Dict, List, Mapping, Tuple, Union, Callable, Generator
 import threading
 import time
 import decimal
@@ -36,7 +36,7 @@ from .cache.memory_cache import MemoryCache
 from .cache.redis_cache import RedisCache
 from .cache.generation_guard import GenerationGuard, GenerationGuardedCache
 from .resource_governor import ResourceGovernor, ResourceLimits, get_worker_resource_governor
-from .types.pivot_spec import PivotSpec
+from .types.pivot_spec import Measure, PivotSpec
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
 from pivot_engine.hierarchical_scroll_manager import HierarchicalVirtualScrollManager
 from pivot_engine.hierarchy_query_service import (
@@ -2010,10 +2010,28 @@ class ScalablePivotController(PivotController):
         results: Dict[str, List[Dict[str, Any]]] = {"": []}
         level_profiles: Dict[str, Any] = {}
 
+        aux_weight_aliases: Dict[str, str] = {}
+        aux_measures: List[Measure] = []
+        for idx_m, m in enumerate(spec.measures or []):
+            alias = str(getattr(m, "alias", "") or "")
+            agg = str(getattr(m, "agg", "sum") or "sum").strip().lower()
+            if not alias:
+                continue
+            if agg in {"avg", "mean"} and getattr(m, "field", None):
+                aux_alias = f"__unbal_w_{idx_m}__"
+                aux_weight_aliases[alias] = aux_alias
+                aux_measures.append(Measure(field=m.field, agg="count", alias=aux_alias))
+            elif agg in {"weighted_avg", "wavg", "weighted_mean"} and getattr(m, "weighted_field", None):
+                aux_alias = f"__unbal_w_{idx_m}__"
+                aux_weight_aliases[alias] = aux_alias
+                aux_measures.append(Measure(field=m.weighted_field, agg="sum", alias=aux_alias))
+
         level_specs: List[PivotSpec] = []
         for prefix_len in range(1, len(rows) + 1):
             level_spec = spec.copy()
             level_spec.rows = list(rows[:prefix_len])
+            if aux_measures:
+                level_spec.measures = list(level_spec.measures or []) + list(aux_measures)
             level_spec.totals = False
             level_spec.limit = max(int(getattr(spec, "limit", 1000) or 1000), 100000)
             level_spec.offset = 0
@@ -2061,12 +2079,49 @@ class ScalablePivotController(PivotController):
             level_results = await asyncio.gather(*level_coros)
 
         seen_entries_by_parent: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        seen_weights_by_entry: Dict[int, Dict[str, float]] = {}
         dim_fields_set = set(rows) | set(spec.columns or [])
-        measure_agg_by_alias = {
-            str(getattr(m, "alias", "")): str(getattr(m, "agg", "sum") or "sum").lower()
-            for m in (spec.measures or [])
-            if getattr(m, "alias", None)
-        }
+        measure_meta_sorted = sorted(
+            [
+                (
+                    str(getattr(m, "alias", "")),
+                    str(getattr(m, "agg", "sum") or "sum").strip().lower(),
+                )
+                for m in (spec.measures or [])
+                if getattr(m, "alias", None)
+            ],
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        aux_alias_set = set(aux_weight_aliases.values())
+
+        def _is_aux_weight_key(col_key: str) -> bool:
+            if col_key in aux_alias_set:
+                return True
+            return any(col_key.endswith(f"_{aux}") or col_key == f"__RowTotal__{aux}" for aux in aux_alias_set)
+
+        def _resolve_measure_info(col_key: str) -> Tuple[str, Optional[str]]:
+            for alias, agg_kind in measure_meta_sorted:
+                if col_key == alias:
+                    return agg_kind, aux_weight_aliases.get(alias)
+                if col_key == f"__RowTotal__{alias}":
+                    aux = aux_weight_aliases.get(alias)
+                    return agg_kind, (f"__RowTotal__{aux}" if aux else None)
+                suffix = f"_{alias}"
+                if col_key.endswith(suffix):
+                    aux = aux_weight_aliases.get(alias)
+                    prefix = col_key[:-len(suffix)]
+                    return agg_kind, (f"{prefix}_{aux}" if aux else None)
+            return "sum", None
+
+        def _extract_weight(source_row: Dict[str, Any], weight_key: Optional[str]) -> float:
+            if not weight_key:
+                return 1.0
+            raw_w = source_row.get(weight_key)
+            if isinstance(raw_w, (int, float)) and not isinstance(raw_w, bool) and not math.isnan(raw_w) and raw_w > 0:
+                return float(raw_w)
+            return 1.0
+
         for level_idx, level_rows in level_results:
             target_field = rows[level_idx]
             prefix_fields = rows[:level_idx]
@@ -2086,22 +2141,48 @@ class ScalablePivotController(PivotController):
                 seen_children = seen_entries_by_parent.setdefault(parent_key, {})
                 if child_label_key in seen_children:
                     existing_entry = seen_children[child_label_key]
+                    entry_weights = seen_weights_by_entry.setdefault(id(existing_entry), {})
                     for key, val in raw_row.items():
-                        if key in dim_fields_set or str(key).startswith("_") or not isinstance(val, (int, float)) or isinstance(val, bool) or math.isnan(val):
+                        if key in dim_fields_set or _is_aux_weight_key(str(key)) or (str(key).startswith("_") and not str(key).startswith("__RowTotal__")):
                             continue
+                        if not isinstance(val, (int, float)) or isinstance(val, bool) or math.isnan(val):
+                            continue
+                        agg_kind, weight_key = _resolve_measure_info(str(key))
+                        cur_w = _extract_weight(raw_row, weight_key)
                         prev_val = existing_entry.get(key)
                         if not isinstance(prev_val, (int, float)) or isinstance(prev_val, bool) or math.isnan(prev_val):
                             existing_entry[key] = val
+                            if weight_key:
+                                entry_weights[key] = cur_w
                             continue
-                        agg_kind = measure_agg_by_alias.get(key, "sum")
                         if agg_kind == "min":
                             existing_entry[key] = min(prev_val, val)
                         elif agg_kind == "max":
                             existing_entry[key] = max(prev_val, val)
+                        elif agg_kind in {"avg", "mean", "weighted_avg", "wavg", "weighted_mean"}:
+                            prev_w = entry_weights.get(key, 1.0)
+                            total_w = prev_w + cur_w
+                            if total_w > 0:
+                                existing_entry[key] = ((prev_val * prev_w) + (val * cur_w)) / total_w
+                                entry_weights[key] = total_w
                         elif agg_kind in {"sum", "count"}:
                             existing_entry[key] = prev_val + val
                     continue
-                row_entry = dict(raw_row)
+                row_entry = {
+                    k: v
+                    for k, v in raw_row.items()
+                    if not _is_aux_weight_key(str(k))
+                }
+                if aux_weight_aliases:
+                    entry_weights: Dict[str, float] = {}
+                    for key in row_entry.keys():
+                        if key in dim_fields_set or (str(key).startswith("_") and not str(key).startswith("__RowTotal__")):
+                            continue
+                        agg_kind, weight_key = _resolve_measure_info(str(key))
+                        if weight_key and agg_kind in {"avg", "mean", "weighted_avg", "wavg", "weighted_mean"}:
+                            entry_weights[key] = _extract_weight(raw_row, weight_key)
+                    if entry_weights:
+                        seen_weights_by_entry[id(row_entry)] = entry_weights
                 row_entry["_unbalanced_field"] = target_field
                 row_entry["_id"] = target_val
                 seen_children[child_label_key] = row_entry

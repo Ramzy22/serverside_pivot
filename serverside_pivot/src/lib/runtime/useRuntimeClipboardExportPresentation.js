@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 
 import { buildMergedHeaderRows, buildStyledHtmlTableExport, writeClipboardPayload } from '../utils/exportUtils';
-import { formatDisplayLabel, formatValue, isDisplayNegative, resolveNumericDisplayValue } from '../utils/helpers';
+import { formatDisplayLabel, formatValue, isDisplayNegative, resolveNumericDisplayValue, stripAggLabelSuffix } from '../utils/helpers';
 
 /** @type {any} */
 const EXPORT_SKIP_COL_IDS = new Set(['__row_number__', '__report_config__']);
@@ -190,7 +190,7 @@ export function useRuntimeClipboardExportPresentation({
     const stack = getDisplayHeaderTextStackForColumn(column);
     if (stack.length <= 1) return stack[0] || getDisplayHeaderTextForColumn(column) || column.id;
     /** @type {any} */
-    const leafLabel = (stack[stack.length - 1] || '').replace(/\s*\([^)]+\)$/, '');
+    const leafLabel = stripAggLabelSuffix(stack[stack.length - 1] || '');
     return [...stack.slice(0, -1), leafLabel].filter(Boolean).join(separator || ' ');
   }, [getDisplayHeaderTextForColumn, getDisplayHeaderTextStackForColumn, mergedHeaderSeparator]);
 

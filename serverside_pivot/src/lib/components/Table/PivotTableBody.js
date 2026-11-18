@@ -264,9 +264,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     const prevCommittedRowsRef = React.useRef(/** @type {any[]} */ ([]));
     const prevScrollTopRef = React.useRef(0);
     const prevModelRowCountRef = React.useRef(0);
+    const prevColumnSignatureRef = React.useRef('');
     const exitUnderlayTimerRef = React.useRef(/** @type {any} */ (null));
-    /** @type {any[]} */
-    const committedRowsCollector = [];
 
     React.useEffect(() => () => {
         if (exitUnderlayTimerRef.current) {
@@ -278,99 +277,6 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             revealClearTimerRef.current = null;
         }
     }, []);
-
-    // Run pre-paint (useLayoutEffect) so exiting collapse snapshots mount BEFORE
-    // the browser paints the next frame — avoiding a 1-frame empty flash — and
-    // staggered child reveals retain their timing across mid-flight re-renders.
-    React.useLayoutEffect(() => {
-        const isScrollingNow = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
-        const currentScrollTop = parentRef && parentRef.current ? parentRef.current.scrollTop : 0;
-        const currentModelCount = serverSide
-            ? Number(rowCount || effectiveCenterRows.length || 0)
-            : effectiveCenterRows.length;
-        const scrollDelta = Math.abs(currentScrollTop - prevScrollTopRef.current);
-        const activeSnapshotKeys = new Set(committedRowsCollector.map(/** @param {any} [item] @returns {any} */ (item) => item.rowKey));
-
-        // Cancel exiting underlay for any rows that came back (rapid re-expand)
-        setExitingRowSnapshots(/** @param {any} [prev] @returns {any} */ (prev) => {
-            if (!Array.isArray(prev) || prev.length === 0) return prev;
-            const remaining = prev.filter(/** @param {any} [snap] @returns {any} */ (snap) => !centerRowLookup.has(snap.rowKey) && !activeSnapshotKeys.has(snap.rowKey));
-            return remaining.length === prev.length ? prev : remaining;
-        });
-
-        // Capture collapsing child rows cleanly as an underlay behind sliding siblings (AG Grid FLIP)
-        if (
-            !isScrollingNow
-            && !wasScrollingRef.current
-            && hasMountedCenterRowsRef.current
-            && scrollDelta < Math.max(12, rowHeight)
-            && currentModelCount < prevModelRowCountRef.current
-            && prevCommittedRowsRef.current.length > 0
-        ) {
-            const vanished = prevCommittedRowsRef.current
-                .filter(/** @param {any} [snap] @returns {any} */ (snap) => (
-                    snap
-                    && snap.depth > 0
-                    && !centerRowLookup.has(snap.rowKey)
-                    && !activeSnapshotKeys.has(snap.rowKey)
-                ))
-                .slice(0, 24);
-            if (vanished.length > 0) {
-                if (exitUnderlayTimerRef.current) clearTimeout(exitUnderlayTimerRef.current);
-                setExitingRowSnapshots(vanished);
-                exitUnderlayTimerRef.current = setTimeout(() => {
-                    exitUnderlayTimerRef.current = null;
-                    setExitingRowSnapshots([]);
-                }, 215);
-            }
-        }
-
-        prevCommittedRowsRef.current = committedRowsCollector.slice();
-        prevScrollTopRef.current = currentScrollTop;
-        prevModelRowCountRef.current = currentModelCount;
-
-        wasScrollingRef.current = isScrollingNow;
-        if (effectiveCenterRows.length > 0) {
-            hasMountedCenterRowsRef.current = true;
-        }
-        // Prune rows that were collapsed or removed so re-expanding them later
-        // plays the reveal animation cleanly.
-        knownVisibleChildRowIdsRef.current.forEach((rowKey) => {
-            if (!centerRowLookup.has(rowKey)) {
-                knownVisibleChildRowIdsRef.current.delete(rowKey);
-                newlyRevealedUntilByKeyRef.current.delete(rowKey);
-            }
-        });
-        if (isScrollingNow) {
-            newlyRevealedUntilByKeyRef.current.clear();
-            if (revealClearTimerRef.current) {
-                clearTimeout(revealClearTimerRef.current);
-                revealClearTimerRef.current = null;
-            }
-            return;
-        }
-        const now = Date.now();
-        let maxExpiresAt = 0;
-        newlyRevealedUntilByKeyRef.current.forEach((meta, rowKey) => {
-            if (!meta || meta.expiresAt <= now) {
-                newlyRevealedUntilByKeyRef.current.delete(rowKey);
-            } else if (meta.expiresAt > maxExpiresAt) {
-                maxExpiresAt = meta.expiresAt;
-            }
-        });
-        if (maxExpiresAt > now) {
-            if (revealClearTimerRef.current) clearTimeout(revealClearTimerRef.current);
-            revealClearTimerRef.current = setTimeout(() => {
-                revealClearTimerRef.current = null;
-                const cutoff = Date.now();
-                newlyRevealedUntilByKeyRef.current.forEach((meta, key) => {
-                    if (!meta || meta.expiresAt <= cutoff) {
-                        newlyRevealedUntilByKeyRef.current.delete(key);
-                    }
-                });
-            }, Math.max(16, maxExpiresAt - now + 20));
-        }
-    }, [rowVirtualizer && rowVirtualizer.isScrolling, effectiveCenterRows, virtualRows, rowCount, centerRowLookup, rowHeight, serverSide, parentRef]);
 
     /** @type {any} */
     const leftPinnedWidth = React.useMemo(
@@ -780,6 +686,178 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         () => buildRowSpanPlan({ rowEntries: rowSpanRowEntries, rowSpanColumns }),
         [rowSpanRowEntries, rowSpanColumns]
     );
+    const columnStructureSignature = React.useMemo(
+        () => visibleLeafColumns.map(/** @param {any} [col] @returns {string} */ (col) => (col ? String(col.id) : '')).join('\u001f'),
+        [visibleLeafColumns]
+    );
+    /** @type {any[]} */
+    const committedRowSnapshots = React.useMemo(() => {
+        /** @type {any[]} */
+        const snapshots = [];
+        const topRowCount = effectiveTopRows.length;
+        for (let i = 0; i < virtualRows.length; i += 1) {
+            const virtualRow = virtualRows[i];
+            if (!virtualRow) continue;
+            if (serverSide && pinnedVirtualIndexSet.has(virtualRow.index)) continue;
+            const row = resolveVirtualRow(virtualRow.index);
+            if (!row || !row.original) continue;
+            if (!serverSide && pinnedRowIdSet.has(row.id)) continue;
+            if (serverSide && !showColTotals && isGrandTotalRow(row.original)) continue;
+            const stableRowKey = row.id ? String(row.id) : String(virtualRow.index);
+            const rowPath = (row.original && row.original._path) ? String(row.original._path) : stableRowKey;
+            const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + effectiveBodyRowsTopOffset;
+            const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
+            const rowBg = getRowLevelBackground(row);
+            const rowSpanByColumnId = rowSpanEnabled && row.id != null
+                ? (rowSpanPlan.get(String(row.id)) || null)
+                : null;
+            const rowDepthValue = Number((row.original && row.original.depth !== undefined) ? row.original.depth : (row.depth || 0));
+            snapshots.push({
+                rowKey: stableRowKey,
+                rowPath,
+                row,
+                top: adjustedTop,
+                size: virtualRow.size,
+                displayRowIndex,
+                rowBg,
+                rowSpanByColumnId,
+                depth: rowDepthValue,
+            });
+        }
+        return snapshots;
+    }, [
+        virtualRows,
+        effectiveTopRows.length,
+        serverSide,
+        pinnedVirtualIndexSet,
+        resolveVirtualRow,
+        pinnedRowIdSet,
+        showColTotals,
+        getPinnedRowsBefore,
+        rowHeight,
+        effectiveBodyRowsTopOffset,
+        centerDisplayIndexById,
+        getRowLevelBackground,
+        rowSpanEnabled,
+        rowSpanPlan,
+    ]);
+
+    // Run pre-paint (useLayoutEffect) so exiting collapse snapshots mount BEFORE
+    // the browser paints the next frame — avoiding a 1-frame empty flash — and
+    // staggered child reveals retain their timing across mid-flight re-renders.
+    React.useLayoutEffect(() => {
+        const isScrollingNow = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
+        const currentScrollTop = parentRef && parentRef.current ? parentRef.current.scrollTop : 0;
+        const currentModelCount = serverSide
+            ? Number(rowCount || effectiveCenterRows.length || 0)
+            : effectiveCenterRows.length;
+        const scrollDelta = Math.abs(currentScrollTop - prevScrollTopRef.current);
+        const columnsChanged = prevColumnSignatureRef.current !== '' && prevColumnSignatureRef.current !== columnStructureSignature;
+        const activeSnapshotKeys = new Set(committedRowSnapshots.map(/** @param {any} [item] @returns {any} */ (item) => item.rowKey));
+
+        // Cancel exiting underlay on column/schema change or for rows that came back (rapid re-expand)
+        setExitingRowSnapshots(/** @param {any} [prev] @returns {any} */ (prev) => {
+            if (!Array.isArray(prev) || prev.length === 0) return prev;
+            if (columnsChanged || rowSpanEnabled) return [];
+            const remaining = prev.filter(/** @param {any} [snap] @returns {any} */ (snap) => !centerRowLookup.has(snap.rowKey) && !activeSnapshotKeys.has(snap.rowKey));
+            return remaining.length === prev.length ? prev : remaining;
+        });
+
+        /** @param {string} childPath @returns {boolean} */
+        const hasCollapsedVisibleAncestor = (childPath) => {
+            if (!childPath || !childPath.includes('|||')) return false;
+            const parts = childPath.split('|||');
+            for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+                const ancestorKey = parts.slice(0, depth).join('|||');
+                const ancestorRow = centerRowLookup.get(ancestorKey);
+                if (ancestorRow) {
+                    const isExpanded = typeof ancestorRow.getIsExpanded === 'function'
+                        ? Boolean(ancestorRow.getIsExpanded())
+                        : Boolean(ancestorRow.original && ancestorRow.original._is_expanded);
+                    if (!isExpanded) return true;
+                }
+            }
+            return false;
+        };
+
+        // Capture genuinely collapsing child rows as an underlay behind sliding siblings (AG Grid FLIP).
+        // Require a collapsed visible ancestor so filtering, sorting, or dataset switches do not show stale ghosts.
+        if (
+            !isScrollingNow
+            && !wasScrollingRef.current
+            && !columnsChanged
+            && !rowSpanEnabled
+            && hasMountedCenterRowsRef.current
+            && scrollDelta < Math.max(12, rowHeight)
+            && currentModelCount < prevModelRowCountRef.current
+            && prevCommittedRowsRef.current.length > 0
+        ) {
+            const vanished = prevCommittedRowsRef.current
+                .filter(/** @param {any} [snap] @returns {any} */ (snap) => (
+                    snap
+                    && snap.depth > 0
+                    && !centerRowLookup.has(snap.rowKey)
+                    && !activeSnapshotKeys.has(snap.rowKey)
+                    && hasCollapsedVisibleAncestor(snap.rowPath)
+                ))
+                .slice(0, 24);
+            if (vanished.length > 0) {
+                if (exitUnderlayTimerRef.current) clearTimeout(exitUnderlayTimerRef.current);
+                setExitingRowSnapshots(vanished);
+                exitUnderlayTimerRef.current = setTimeout(() => {
+                    exitUnderlayTimerRef.current = null;
+                    setExitingRowSnapshots([]);
+                }, 215);
+            }
+        }
+
+        prevCommittedRowsRef.current = committedRowSnapshots;
+        prevColumnSignatureRef.current = columnStructureSignature;
+        prevScrollTopRef.current = currentScrollTop;
+        prevModelRowCountRef.current = currentModelCount;
+
+        wasScrollingRef.current = isScrollingNow;
+        if (effectiveCenterRows.length > 0) {
+            hasMountedCenterRowsRef.current = true;
+        }
+        // Prune rows that were collapsed or removed so re-expanding them later
+        // plays the reveal animation cleanly.
+        knownVisibleChildRowIdsRef.current.forEach((rowKey) => {
+            if (!centerRowLookup.has(rowKey)) {
+                knownVisibleChildRowIdsRef.current.delete(rowKey);
+                newlyRevealedUntilByKeyRef.current.delete(rowKey);
+            }
+        });
+        if (isScrollingNow) {
+            newlyRevealedUntilByKeyRef.current.clear();
+            if (revealClearTimerRef.current) {
+                clearTimeout(revealClearTimerRef.current);
+                revealClearTimerRef.current = null;
+            }
+            return;
+        }
+        const now = Date.now();
+        let maxExpiresAt = 0;
+        newlyRevealedUntilByKeyRef.current.forEach((meta, rowKey) => {
+            if (!meta || meta.expiresAt <= now) {
+                newlyRevealedUntilByKeyRef.current.delete(rowKey);
+            } else if (meta.expiresAt > maxExpiresAt) {
+                maxExpiresAt = meta.expiresAt;
+            }
+        });
+        if (maxExpiresAt > now) {
+            if (revealClearTimerRef.current) clearTimeout(revealClearTimerRef.current);
+            revealClearTimerRef.current = setTimeout(() => {
+                revealClearTimerRef.current = null;
+                const cutoff = Date.now();
+                newlyRevealedUntilByKeyRef.current.forEach((meta, key) => {
+                    if (!meta || meta.expiresAt <= cutoff) {
+                        newlyRevealedUntilByKeyRef.current.delete(key);
+                    }
+                });
+            }, Math.max(16, maxExpiresAt - now + 20));
+        }
+    }, [rowVirtualizer && rowVirtualizer.isScrolling, effectiveCenterRows, committedRowSnapshots, columnStructureSignature, rowSpanEnabled, rowCount, centerRowLookup, rowHeight, serverSide, parentRef]);
     /** @type {(...args: any[]) => any} */
     const getCellRenderOptions = React.useCallback((column, renderOptions = {}) => {
         /** @type {any} */
@@ -1421,16 +1499,6 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                               ? (rowSpanPlan.get(String(row.id)) || null)
                               : null;
                           const rowDepthValue = Number((row.original && row.original.depth !== undefined) ? row.original.depth : (row.depth || 0));
-                          committedRowsCollector.push({
-                              rowKey: stableRowKey,
-                              row,
-                              top: adjustedTop,
-                              size: virtualRow.size,
-                              displayRowIndex,
-                              rowBg,
-                              rowSpanByColumnId,
-                              depth: rowDepthValue,
-                          });
                           const transitionRowPath = (row.original && row.original._path) ? String(row.original._path) : stableRowKey;
                           const transitionPhase = (pendingRowTransitions && typeof pendingRowTransitions.get === 'function')
                               ? pendingRowTransitions.get(transitionRowPath)
@@ -1439,7 +1507,13 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
-                                      style={{
+                                      style={rowSpanEnabled ? {
+                                          position: 'absolute',
+                                          top: `${adjustedTop}px`,
+                                          left: 0,
+                                          width: `${totalLayoutWidth}px`,
+                                          height: virtualRow.size,
+                                      } : {
                                           position: 'absolute',
                                           top: 0,
                                           left: 0,

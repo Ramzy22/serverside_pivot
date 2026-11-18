@@ -607,23 +607,38 @@ class PivotController:
         # Compiling to SQL here might be expensive just for caching, but ensures uniqueness
         # Alternatively, use a structural hash of the Ibis expression object if Ibis provides one
         try:
+            import threading
+            from collections import OrderedDict
+
             op_node = ibis_expr.op() if hasattr(ibis_expr, "op") else None
             compiled_sql = None
+            sql_cache_lock = getattr(self, "_compiled_sql_cache_lock", None)
+            if sql_cache_lock is None:
+                sql_cache_lock = threading.Lock()
+                self._compiled_sql_cache_lock = sql_cache_lock
             sql_cache = getattr(self, "_compiled_sql_cache", None)
-            if sql_cache is None:
-                sql_cache = {}
+            if sql_cache is None or not isinstance(sql_cache, OrderedDict):
+                sql_cache = OrderedDict()
                 self._compiled_sql_cache = sql_cache
+            cache_key = None
             if op_node is not None:
+                candidate_key = (id(self.planner.con), op_node)
                 try:
-                    compiled_sql = sql_cache.get(op_node)
+                    with sql_cache_lock:
+                        compiled_sql = sql_cache.get(candidate_key)
+                        if compiled_sql is not None:
+                            sql_cache.move_to_end(candidate_key)
+                    cache_key = candidate_key
                 except TypeError:
-                    op_node = None
+                    cache_key = None
             if compiled_sql is None:
                 compiled_sql = str(self.planner.con.compile(ibis_expr))
-                if op_node is not None:
-                    if len(sql_cache) >= 512:
-                        sql_cache.clear()
-                    sql_cache[op_node] = compiled_sql
+                if cache_key is not None:
+                    with sql_cache_lock:
+                        sql_cache[cache_key] = compiled_sql
+                        sql_cache.move_to_end(cache_key)
+                        while len(sql_cache) > 128:
+                            sql_cache.popitem(last=False)
             # Include the spec hash as well to ensure filter/sort context is captured
             spec_dict = spec.to_dict()
             spec_hash = hashlib.sha256(json.dumps(spec_dict, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -691,11 +706,18 @@ class PivotController:
         """Clear all cached queries to force fresh data retrieval"""
         if hasattr(self, 'cache') and self.cache:
             self.cache.clear()
+        sql_cache = getattr(self, "_compiled_sql_cache", None)
+        sql_cache_lock = getattr(self, "_compiled_sql_cache_lock", None)
+        if sql_cache is not None:
+            if sql_cache_lock is not None:
+                with sql_cache_lock:
+                    sql_cache.clear()
+            else:
+                sql_cache.clear()
 
     def close(self):
         """Close any resources held by the controller"""
-        if hasattr(self, 'cache') and hasattr(self.cache, 'clear'):
-            self.cache.clear()
+        self.clear_cache()
         if hasattr(self, 'backend') and hasattr(self.backend, 'close'):
             self.backend.close()
 

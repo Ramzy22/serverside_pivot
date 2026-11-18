@@ -25,8 +25,6 @@ def write_document(path, kind, *, rows=None, bad_merge=False, strings=False, bad
     if bad_headers:
         headers[1], headers[2] = headers[2], headers[1]
     if kind == "csv":
-        headers = [headers[0], *[label.replace(" (\u20ac)", "") for label in headers[1:7]],
-                   *headers[7:]]
         with path.open("w", encoding="utf-8-sig", newline="") as stream:
             csv.writer(stream).writerows([headers, *rows])
     else:

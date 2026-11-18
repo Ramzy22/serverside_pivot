@@ -170,7 +170,7 @@ const baseAnimationStyles = `
 }
 @keyframes pivot-surface-enter {
     from { opacity: 0; transform: translateY(6px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 1; transform: none; }
 }
 @keyframes pivot-backdrop-enter {
     from { opacity: 0; }
@@ -178,7 +178,7 @@ const baseAnimationStyles = `
 }
 @keyframes pivot-menu-enter {
     from { opacity: 0; transform: scale(0.96) translateY(-3px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
+    to { opacity: 1; transform: none; }
 }
 @keyframes pivot-toast-enter {
     from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.97); }
@@ -186,7 +186,7 @@ const baseAnimationStyles = `
 }
 @keyframes pivot-row-loader-enter {
     from { opacity: 0; transform: translateY(-6px); }
-    to { opacity: 1; transform: translateY(0); }
+    to { opacity: 1; transform: none; }
 }
 @keyframes pivot-row-reveal {
     0% { opacity: 0; transform: translate3d(0, -10px, 0); }

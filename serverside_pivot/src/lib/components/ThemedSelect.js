@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
 import { PivotThemeContext } from '../contexts/PivotThemeContext';
 
+let nextThemedSelectId = 1;
+
 /** @param {any} children @param {any} [groupLabel] @returns {any[]} */
 const flattenSelectChildren = (children, groupLabel = null) => {
     /** @type {any[]} */
@@ -82,8 +84,11 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
     const typeaheadBufferRef = useRef('');
     /** @type {any} */
     const typeaheadTimerRef = useRef(null);
-    const reactId = typeof React.useId === 'function' ? React.useId() : 'sp-select';
-    const listboxId = `${id || reactId}-listbox`;
+    const generatedIdRef = useRef(/** @type {string | null} */ (null));
+    if (generatedIdRef.current === null) {
+        generatedIdRef.current = `sp-select-${nextThemedSelectId++}`;
+    }
+    const listboxId = `${id || generatedIdRef.current}-listbox`;
     const [open, setOpen] = useState(false);
     const [coords, setCoords] = useState({ top: 0, left: 0, minWidth: 120, maxHeight: 280 });
     const [internalValue, setInternalValue] = useState(defaultValue !== undefined ? String(defaultValue) : '');
@@ -133,11 +138,22 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
         setCoords({ top, left, minWidth, maxHeight });
     }, [parsedOptions.length]);
 
+    const parsedOptionsRef = useRef(parsedOptions);
+    parsedOptionsRef.current = parsedOptions;
+    const currentValueRef = useRef(currentValue);
+    currentValueRef.current = currentValue;
+
+    useEffect(() => {
+        if (!open) return;
+        const opts = parsedOptionsRef.current;
+        const cur = currentValueRef.current;
+        const idx = opts.findIndex(/** @param {any} opt */ (opt) => opt.value === cur && !opt.disabled);
+        setHighlightedIndex(idx >= 0 ? idx : opts.findIndex(/** @param {any} opt */ (opt) => !opt.disabled));
+    }, [open]);
+
     useEffect(() => {
         if (!open) return undefined;
         updateMenuPosition();
-        const idx = parsedOptions.findIndex(/** @param {any} opt */ (opt) => opt.value === currentValue && !opt.disabled);
-        setHighlightedIndex(idx >= 0 ? idx : parsedOptions.findIndex(/** @param {any} opt */ (opt) => !opt.disabled));
         /** @param {any} event */
         const handleOutside = (event) => {
             const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
@@ -161,7 +177,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
             window.removeEventListener('resize', handleViewportChange);
             window.removeEventListener('scroll', handleViewportChange, true);
         };
-    }, [open, updateMenuPosition, parsedOptions, currentValue]);
+    }, [open, updateMenuPosition]);
 
     useEffect(() => {
         if (!open || highlightedIndex < 0 || !menuRef.current) return;
@@ -261,7 +277,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
         }
     };
 
-    const surfaceBg = theme?.surface || (isDark ? '#181E29' : '#FFFFFF');
+    const surfaceBg = theme?.surfaceBg || theme?.background || (isDark ? '#181E29' : '#FFFFFF');
     const triggerBg = style?.background || style?.backgroundColor || theme?.headerSubtleBg || theme?.inputBg || (isDark ? 'rgba(255,255,255,0.06)' : '#F8FAFC');
     const borderColor = style?.borderColor || theme?.border || (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.14)');
     const textColor = style?.color || theme?.text || (isDark ? '#F1F5F9' : '#0F172A');
@@ -292,6 +308,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
             ref={menuRef}
             id={listboxId}
             role="listbox"
+            data-themed-select-menu="true"
             aria-label={ariaLabel || title || 'Options'}
             className="sp-menu-surface"
             onMouseDown={(e) => {
@@ -357,6 +374,9 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
                         onMouseEnter={() => setHighlightedIndex(idx)}
                         onMouseDown={(e) => {
                             e.preventDefault();
+                        }}
+                        onClick={(e) => {
+                            e.stopPropagation();
                             if (!opt.disabled) selectValue(opt.value);
                         }}
                         style={{

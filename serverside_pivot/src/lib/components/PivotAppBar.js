@@ -9,7 +9,7 @@ import { usePivotTheme } from '../contexts/PivotThemeContext';
 import { usePivotConfig } from '../contexts/PivotConfigContext';
 import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
 import { applySavedReport } from '../utils/savedReports';
-import { isEventInsideElement } from '../utils/domEvents';
+import { isEventInsideElement, isEventInsideSelector } from '../utils/domEvents';
 import { updateDataBarMaximums } from '../utils/dataBars';
 
 const SHOW_PIVOT_MODE_TOGGLE = true;
@@ -586,6 +586,7 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
     useEffect(() => {
         /** @param {any} [e] @returns {any} */
         const handleOutside = (e) => {
+            if (isEventInsideSelector(e, '[data-themed-select-menu="true"]')) return;
             if (popoverRef.current && anchorRef.current &&
                 !isEventInsideElement(e, popoverRef.current) && !isEventInsideElement(e, anchorRef.current)) {
                 onClose();
@@ -783,9 +784,10 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         </div>
     );
 
-    return typeof document !== 'undefined'
-        ? ReactDOM.createPortal(popover, document.body)
-        : popover;
+    const portalTarget = typeof document !== 'undefined'
+        ? (anchorRef.current?.closest?.('[data-pivot-workspace-root]') || document.body)
+        : null;
+    return portalTarget ? ReactDOM.createPortal(popover, portalTarget) : popover;
 }
 
 /** @param {any} p0 @returns {any} */
@@ -874,6 +876,7 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
     useEffect(() => {
         /** @param {any} [e] @returns {any} */
         const handleOutside = (e) => {
+            if (isEventInsideSelector(e, '[data-themed-select-menu="true"]')) return;
             if (popoverRef.current && anchorRef.current &&
                 !isEventInsideElement(e, popoverRef.current) && !isEventInsideElement(e, anchorRef.current)) {
                 onClose();

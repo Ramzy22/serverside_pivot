@@ -348,11 +348,12 @@ export class DuckDbWasmExecutor {
                     return true;
                 }
 
+                const customLoader = typeof this.config.duckdbLoader === 'function' ? this.config.duckdbLoader : null;
                 const globalScope = globalThis as { duckdb?: { AsyncDuckDB?: unknown } };
-                if (typeof window === 'undefined' && !globalScope.duckdb) {
+                if (!customLoader && typeof window === 'undefined' && !globalScope.duckdb) {
                     return false;
                 }
-                const hasExplicitBundle = Boolean(this.config.duckdbBundleUrl || this.config.duckdbWasmCdnUrl || globalScope.duckdb);
+                const hasExplicitBundle = Boolean(customLoader || this.config.duckdbBundleUrl || this.config.duckdbWasmCdnUrl || globalScope.duckdb);
                 const isFileOrigin = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
                 const isNavigatorOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
                 if (!hasExplicitBundle && (isFileOrigin || isNavigatorOffline)) {
@@ -371,7 +372,6 @@ export class DuckDbWasmExecutor {
                     };
                 }>;
 
-                const customLoader = typeof this.config.duckdbLoader === 'function' ? this.config.duckdbLoader : null;
                 const duckdbModule = customLoader
                     ? (await customLoader()) as Awaited<ReturnType<typeof dynamicImporter>>
                     : ((globalScope.duckdb as Awaited<ReturnType<typeof dynamicImporter>>) || (await dynamicImporter(cdnUrl)));
@@ -530,28 +530,31 @@ export class DuckDbWasmExecutor {
             || this.config.clientEngine === 'duckdb-wasm'
         );
 
-        // Only initialize or roundtrip through DuckDB-Wasm when explicitly configured,
-        // loading from dataUrl, or testing an injected Wasm instance. When `clientEngine`
-        // is 'auto' on already-loaded JS rows, avoid stalling up to 4.5s on CDN imports
-        // or running discarded worker SQL queries before computing the JS response.
-        if (
-            requiresWasmExecution
-            && (targetEngine === 'duckdb-wasm' || normalizeWasmWarmupRequested(this.config, this.rows.length))
-        ) {
+        const wasmRequested = targetEngine === 'duckdb-wasm' || normalizeWasmWarmupRequested(this.config, this.rows.length);
+
+        // When DuckDB-Wasm is explicitly required (explicit engine, dataUrl, or injected
+        // loader/instance), await initialization synchronously. In `auto` mode on already-loaded
+        // JS rows above the threshold, warm up WASM in the background without blocking the
+        // first render, and switch to WASM on subsequent queries once ready.
+        if (wasmRequested) {
             if (!this.wasmReady) {
-                const initialized = await this.tryInitializeWasm();
-                if (initialized && resolveClientEngineKind(this.config, this.rows.length, true) === 'duckdb-wasm') {
-                    const registered = await this.ensureTableRegistered(plan.table);
-                    if (registered && this.dbConn) {
-                        try {
-                            await this.dbConn.query(plan.sql.groupingSql);
-                            engineUsed = 'duckdb-wasm';
-                        } catch (_err) {
-                            engineUsed = 'memory';
+                if (requiresWasmExecution) {
+                    const initialized = await this.tryInitializeWasm();
+                    if (initialized && resolveClientEngineKind(this.config, this.rows.length, true) === 'duckdb-wasm') {
+                        const registered = await this.ensureTableRegistered(plan.table);
+                        if (registered && this.dbConn) {
+                            try {
+                                await this.dbConn.query(plan.sql.groupingSql);
+                                engineUsed = 'duckdb-wasm';
+                            } catch (_err) {
+                                engineUsed = 'memory';
+                            }
                         }
                     }
+                } else {
+                    void this.tryInitializeWasm();
                 }
-            } else if (this.dbConn) {
+            } else if (this.dbConn && resolveClientEngineKind(this.config, this.rows.length, true) === 'duckdb-wasm') {
                 const registered = await this.ensureTableRegistered(plan.table);
                 if (registered) {
                     try {

@@ -268,7 +268,9 @@ class ConnectionPool:
                 self._discard_connection(con)
                 raise RuntimeError("Connection pool is closed")
 
-            if (now - last_ok) < self.health_check_interval or self._is_healthy(con):
+            if (now - last_ok) < self.health_check_interval:
+                return con
+            if self._is_healthy(con):
                 with self.lock:
                     self._last_healthy_ts[id(con)] = time.monotonic()
                 return con
@@ -292,12 +294,16 @@ class ConnectionPool:
         now = time.monotonic()
         with self.lock:
             last_ok = self._last_healthy_ts.get(id(con), 0.0)
-        if (now - last_ok) >= self.health_check_interval and not self._is_healthy(con):
-            self._discard_connection(con)
-            return False
+        checked = False
+        if (now - last_ok) >= self.health_check_interval:
+            if not self._is_healthy(con):
+                self._discard_connection(con)
+                return False
+            checked = True
         with self.lock:
             if not self._closed:
-                self._last_healthy_ts[id(con)] = time.monotonic()
+                if checked:
+                    self._last_healthy_ts[id(con)] = time.monotonic()
                 self.pool.put_nowait(con)
                 return True
         self._discard_connection(con)

@@ -1024,7 +1024,8 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
     assert 'type="text"' in app_bar_source
     assert 'data-cell-format-popover="true"' in app_bar_source
     assert "anchor.getBoundingClientRect()" in app_bar_source
-    assert "ReactDOM.createPortal(popover, document.body)" in app_bar_source
+    assert "ReactDOM.createPortal(popover, portalTarget)" in app_bar_source
+    assert "isEventInsideSelector(e, '[data-themed-select-menu=\"true\"]')" in app_bar_source
     assert "overflowY: 'auto'" in app_bar_source
     assert "const cellBorderStyle = cellFmt && cellFmt.borderStyle" in render_source
     assert "textAlign: cellTextAlign" in render_source

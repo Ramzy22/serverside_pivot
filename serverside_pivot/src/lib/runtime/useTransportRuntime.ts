@@ -210,6 +210,8 @@ export function useTransportRuntime(
     setLocalRuntimeResponseRef.current = runtime.setLocalRuntimeResponse;
     const clientTransportObjRef = runtime.clientTransportRef;
     const lastPublishedClientPropsRef = useRef<Record<string, string>>({});
+    const externalPropsRef = useRef<Record<string, unknown>>(asObject(core.configuration.props));
+    externalPropsRef.current = asObject(core.configuration.props);
 
     const setProps = useCallback((nextProps: unknown) => {
         const currentRawSetProps = rawSetPropsRef.current;
@@ -262,9 +264,14 @@ export function useTransportRuntime(
                 if (Object.keys(rest).length > 0 && typeof currentRawSetProps === 'function') {
                     const changedRest: Record<string, unknown> = {};
                     const publishedMap = lastPublishedClientPropsRef.current;
+                    const externalProps = externalPropsRef.current;
                     for (const [key, value] of Object.entries(rest)) {
                         const serialized = serializeClientPropValue(value);
-                        if (serialized === null || !Object.prototype.hasOwnProperty.call(publishedMap, key) || publishedMap[key] !== serialized) {
+                        const hasExternal = Object.prototype.hasOwnProperty.call(externalProps, key);
+                        const externalSerialized = hasExternal ? serializeClientPropValue(externalProps[key]) : null;
+                        const differsFromExternal = hasExternal && (externalSerialized === null || externalSerialized !== serialized);
+                        const differsFromPublished = serialized === null || !Object.prototype.hasOwnProperty.call(publishedMap, key) || publishedMap[key] !== serialized;
+                        if (differsFromExternal || differsFromPublished) {
                             changedRest[key] = value;
                             if (serialized !== null) {
                                 publishedMap[key] = serialized;
