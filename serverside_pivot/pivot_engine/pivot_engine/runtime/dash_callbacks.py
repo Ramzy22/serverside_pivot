@@ -746,6 +746,141 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
         return response
 
 
+def _register_runtime_subscription_endpoint(app: Any) -> None:
+    """Mount the same-origin Dash subscription & baseline fast-lane route.
+
+    Bypasses Dash's full 25-prop callback graph on high-frequency ticks while
+    enforcing the exact same signed session and dataset authorization policy as
+    `/_serverside_pivot/payload/<token>`.
+    """
+    _ensure_dash_payload_session_support(app)
+    if "_serverside_pivot_runtime_subscription" in getattr(app.server, "view_functions", {}):
+        return
+
+    @app.server.route(
+        "/_serverside_pivot/subscription",
+        methods=["POST"],
+        endpoint="_serverside_pivot_runtime_subscription",
+    )
+    def _serverside_pivot_runtime_subscription():
+        from flask import Response, request as flask_request
+        from ..diff.snapshot_provider import SnapshotAuthorizationError, SnapshotExpiredError
+
+        body = flask_request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return Response(
+                json.dumps({"type": "ERROR", "code": "invalid_json"}),
+                status=422,
+                content_type="application/json",
+            )
+
+        registrations = _dash_export_registrations(app)
+        if not registrations:
+            return Response(
+                json.dumps({"type": "ERROR", "code": "no_registered_runtime"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        pivot_id_hint = body.get("pivotId")
+        registration = None
+        if pivot_id_hint is not None:
+            target_prefix = f"pivot::{_normalize_id(pivot_id_hint)}::"
+            for reg_key, reg in registrations.items():
+                if reg_key.startswith(target_prefix):
+                    registration = reg
+                    break
+        if registration is None:
+            registration = next(iter(registrations.values()))
+
+        table = str(body.get("table") or "").strip()
+        action = str(body.get("action") or "poll").strip().lower()
+        payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+        state = body.get("state") if isinstance(body.get("state"), dict) else {}
+
+        gateway = registration.gateway(app)
+        sub_service = gateway.subscription_service
+        if not table:
+            sub_id = str(payload.get("subscriptionId") or "")
+            existing = sub_service.broker.get_subscription(sub_id) if sub_id else None
+            if existing is not None:
+                table = existing.table
+        if not table:
+            return Response(
+                json.dumps({"type": "ERROR", "code": "missing_table"}),
+                status=422,
+                content_type="application/json",
+            )
+
+        # Reject mutations over the read-only Dash fast-lane unless explicitly authorized.
+        if action == "push_changes":
+            return Response(
+                json.dumps({"type": "AUTH_REVOKED", "code": "mutation_not_allowed_on_fastlane"}),
+                status=403,
+                content_type="application/json",
+            )
+
+        principal = None
+        row_scope = None
+        try:
+            auth_result = run_awaitable_sync(
+                _resolve_dash_principal(
+                    dataset_authorizer=registration.dataset_authorizer,
+                    principal_getter=registration.principal_getter,
+                    table=table,
+                    operation="read",
+                    require_authorization=_is_production_environment(),
+                )
+            )
+            principal = auth_result.principal
+            row_scope = auth_result.row_scope
+            result = sub_service.handle_command(
+                table=table,
+                action=action,
+                payload=payload,
+                state=state,
+                principal=principal,
+                row_scope=row_scope,
+            )
+            return Response(
+                json.dumps(result, default=str, separators=(",", ":")),
+                status=200,
+                content_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
+        except (RuntimeDatasetAuthorizationError, SnapshotAuthorizationError):
+            return Response(
+                json.dumps({"type": "AUTH_REVOKED", "code": "authorization_denied"}),
+                status=403,
+                content_type="application/json",
+            )
+        except SnapshotExpiredError:
+            return Response(
+                json.dumps({"type": "ERROR", "code": SnapshotExpiredError.code}),
+                status=410,
+                content_type="application/json",
+            )
+        except ResourceExhaustedError:
+            return Response(
+                json.dumps({"type": "ERROR", "code": ResourceExhaustedError.code}),
+                status=503,
+                content_type="application/json",
+            )
+        except ValueError as exc:
+            return Response(
+                json.dumps({"type": "ERROR", "code": "invalid_subscription_request", "message": str(exc)}),
+                status=422,
+                content_type="application/json",
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Unhandled error in /_serverside_pivot/subscription")
+            return Response(
+                json.dumps({"type": "ERROR", "code": "subscription_internal_error", "message": str(exc)}),
+                status=500,
+                content_type="application/json",
+            )
+
+
 def _externalize_data_payload_if_needed(
     app: Any,
     payload: Dict[str, Any],
@@ -937,6 +1072,7 @@ def register_dash_pivot_transport_callback(
 
     include_drill_store = drill_store_id is not None
     _register_runtime_payload_endpoint(app)
+    _register_runtime_subscription_endpoint(app)
     export_registration = _DashExportRegistration(
         callback_key, runtime_service_getter, dataset_authorizer, principal_getter,
     )

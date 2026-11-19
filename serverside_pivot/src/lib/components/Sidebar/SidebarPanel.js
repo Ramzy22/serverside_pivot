@@ -4634,172 +4634,171 @@ import {
                             </div>
 
                             {/* Enhanced Action Buttons */}
-                            <div style={{display: 'flex', gap: '6px', padding: '0 8px'}}>
-                                <button 
-                                    onClick={() => table.toggleAllColumnsVisible(true)} 
+                            <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '4px', padding: '0 8px'}}>
+                                <button
+                                    type="button"
+                                    className="sp-btn sp-btn-subtle"
+                                    onClick={() => table.toggleAllColumnsVisible(true)}
+                                    title="Show All Columns"
                                     style={{
-                                        ...styles.btn, 
-                                        padding: '8px 12px', 
-                                        fontSize: '11px', 
-                                        flex: 1, 
+                                        ...styles.btn,
+                                        padding: '6px 4px',
+                                        fontSize: '11px',
+                                        gap: '4px',
+                                        minWidth: 0,
                                         justifyContent: 'center',
                                         background: theme.background,
                                         fontWeight: 600,
                                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                        transition: 'all 0.2s'
                                     }}
-                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                 >
-                                    <Icons.Visibility style={{fontSize: '14px'}} />
-                                    <span>Show All</span>
+                                    <Icons.Visibility style={{fontSize: '13px', flexShrink: 0}} />
+                                    <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>Show</span>
                                 </button>
-                                <button 
-                                    onClick={() => table.toggleAllColumnsVisible(false)} 
+                                <button
+                                    type="button"
+                                    className="sp-btn sp-btn-subtle"
+                                    onClick={() => table.toggleAllColumnsVisible(false)}
+                                    title="Hide All Columns"
                                     style={{
-                                        ...styles.btn, 
-                                        padding: '8px 12px', 
-                                        fontSize: '11px', 
-                                        flex: 1, 
+                                        ...styles.btn,
+                                        padding: '6px 4px',
+                                        fontSize: '11px',
+                                        gap: '4px',
+                                        minWidth: 0,
                                         justifyContent: 'center',
                                         background: theme.background,
                                         fontWeight: 600,
                                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                        transition: 'all 0.2s'
                                     }}
-                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                 >
-                                    <Icons.VisibilityOff style={{fontSize: '14px'}} />
-                                    <span>Hide All</span>
+                                    <Icons.VisibilityOff style={{fontSize: '13px', flexShrink: 0}} />
+                                    <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>Hide</span>
                                 </button>
-                                <button 
-                                    onClick={() => toggleAllColumnsPinned(false)} 
+                                <button
+                                    type="button"
+                                    className="sp-btn sp-btn-subtle"
+                                    onClick={() => toggleAllColumnsPinned(false)}
+                                    title="Unpin All Columns"
                                     style={{
-                                        ...styles.btn, 
-                                        padding: '8px 12px', 
-                                        fontSize: '11px', 
-                                        flex: 1, 
+                                        ...styles.btn,
+                                        padding: '6px 4px',
+                                        fontSize: '11px',
+                                        gap: '4px',
+                                        minWidth: 0,
                                         justifyContent: 'center',
                                         background: theme.background,
                                         fontWeight: 600,
                                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                        transition: 'all 0.2s'
                                     }}
-                                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                 >
-                                    <Icons.Unpin style={{fontSize: '14px'}} />
-                                    <span>Unpin All</span>
+                                    <Icons.Unpin style={{fontSize: '13px', flexShrink: 0}} />
+                                    <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>Unpin</span>
                                 </button>
                             </div>
 
                             {/* Enhanced Selection Bar */}
                             {selectedCols.size > 0 && (
                                 <div style={{
-                                    display: 'flex', 
+                                    display: 'flex',
                                     flexDirection: 'column',
-                                    gap: '8px', 
-                                    background: `linear-gradient(135deg, ${theme.select}ee, ${theme.select}dd)`, 
-                                    padding: '12px', 
-                                    borderRadius: '8px', 
-                                    border: `2px solid ${theme.primary}66`,
-                                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                                    gap: '8px',
+                                    background: theme.select || 'var(--sp-select)',
+                                    padding: '10px',
+                                    borderRadius: 'var(--sp-radius-md, 8px)',
+                                    border: '1px solid var(--sp-border-strong, var(--sp-primary))',
+                                    boxShadow: 'var(--sp-shadow-sm, 0 2px 8px rgba(0,0,0,0.1))',
                                     margin: '0 8px'
                                 }}>
                                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                                         <span style={{
-                                            fontSize: '12px', 
-                                            fontWeight: 700, 
-                                            padding: '4px 10px', 
-                                            color: theme.primary, 
+                                            fontSize: '12px',
+                                            fontWeight: 700,
+                                            padding: '4px 10px',
+                                            color: theme.primary,
                                             background: theme.background,
                                             borderRadius: '6px',
                                             boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
                                         }}>
                                             {selectedCols.size} Column{selectedCols.size > 1 ? 's' : ''} Selected
                                         </span>
-                                        <button 
-                                            onClick={() => setSelectedCols(new Set())} 
+                                        <button
+                                            type="button"
+                                            className="sp-btn sp-btn-ghost"
+                                            onClick={() => setSelectedCols(new Set())}
                                             style={{
-                                                border: 'none', 
-                                                background: theme.background, 
-                                                cursor: 'pointer', 
-                                                display: 'flex', 
+                                                border: 'none',
+                                                background: theme.background,
+                                                cursor: 'pointer',
+                                                display: 'flex',
                                                 color: theme.textSec,
                                                 padding: '4px',
                                                 borderRadius: '4px',
-                                                transition: 'all 0.2s'
                                             }}
-                                            onMouseEnter={e => e.currentTarget.style.background = theme.hover}
-                                            onMouseLeave={e => e.currentTarget.style.background = theme.background}
                                         >
                                             <Icons.Close/>
                                         </button>
                                     </div>
                                     <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
-                                        <button 
+                                        <button
+                                            type="button"
+                                            className="sp-btn sp-btn-subtle"
                                             onClick={() => {
-                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'left')); 
-                                                setSelectedCols(new Set()); 
-                                            }} 
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'left'));
+                                                setSelectedCols(new Set());
+                                            }}
                                             style={{
-                                                ...styles.btn, 
-                                                padding: '6px 12px', 
-                                                fontSize: '11px', 
+                                                ...styles.btn,
+                                                padding: '6px 8px',
+                                                fontSize: '11px',
                                                 background: theme.background,
                                                 flex: 1,
                                                 justifyContent: 'center',
                                                 fontWeight: 600,
                                                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                transition: 'all 0.2s'
                                             }}
-                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                         >
                                             <Icons.PinLeft />
                                             <span>Pin Left</span>
                                         </button>
-                                        <button 
+                                        <button
+                                            type="button"
+                                            className="sp-btn sp-btn-subtle"
                                             onClick={() => {
-                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, false)); 
-                                                setSelectedCols(new Set()); 
-                                            }} 
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, false));
+                                                setSelectedCols(new Set());
+                                            }}
                                             style={{
-                                                ...styles.btn, 
-                                                padding: '6px 12px', 
-                                                fontSize: '11px', 
+                                                ...styles.btn,
+                                                padding: '6px 8px',
+                                                fontSize: '11px',
                                                 background: theme.background,
                                                 flex: 1,
                                                 justifyContent: 'center',
                                                 fontWeight: 600,
                                                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                transition: 'all 0.2s'
                                             }}
-                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                         >
                                             <Icons.Unpin />
                                             <span>Unpin</span>
                                         </button>
-                                        <button 
+                                        <button
+                                            type="button"
+                                            className="sp-btn sp-btn-subtle"
                                             onClick={() => {
-                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'right')); 
-                                                setSelectedCols(new Set()); 
-                                            }} 
+                                                Array.from(selectedCols).forEach(id => handlePinColumn(id, 'right'));
+                                                setSelectedCols(new Set());
+                                            }}
                                             style={{
-                                                ...styles.btn, 
-                                                padding: '6px 12px', 
-                                                fontSize: '11px', 
+                                                ...styles.btn,
+                                                padding: '6px 8px',
+                                                fontSize: '11px',
                                                 background: theme.background,
                                                 flex: 1,
                                                 justifyContent: 'center',
                                                 fontWeight: 600,
                                                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                transition: 'all 0.2s'
                                             }}
-                                            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)'}
-                                            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)'}
                                         >
                                             <Icons.PinRight />
                                             <span>Pin Right</span>

@@ -7,7 +7,9 @@ import {
     encodeBytesToUtf8,
 } from './clientResponsePostProcessor';
 import { ClientSqlPlanner } from './clientSqlPlanner';
+import { ClientSubscriptionEngine } from './clientSubscriptionEngine';
 import { applyCustomDimensionsToDataset, DuckDbWasmExecutor } from './duckdbWasmExecutor';
+import type { BaselineDescriptor, StreamUpdateBatch } from '../streamingTypes';
 import type {
     ClientEngineTelemetry,
     ClientPivotTransportInterface,
@@ -65,18 +67,45 @@ export class ClientPivotTransport implements ClientPivotTransportInterface {
     private payloadStore: Map<string, JsonObject>;
     private exportStore: Map<string, StoredClientExport>;
     private exportJobStore: Map<string, StoredClientExportJob>;
+    private subscriptionEngine: ClientSubscriptionEngine;
 
     public constructor(options: ClientPivotTransportOptions = {}) {
         const { data = [], ...config } = options;
         this.config = { ...config };
-        this.executor = new DuckDbWasmExecutor(Array.isArray(data) ? data : [], this.config);
+        const initialRows = Array.isArray(data) ? data : [];
+        this.executor = new DuckDbWasmExecutor(initialRows, this.config);
         this.payloadStore = new Map();
         this.exportStore = new Map();
         this.exportJobStore = new Map();
+        this.subscriptionEngine = new ClientSubscriptionEngine(initialRows, (updatedRows) => {
+            this.executor.setData(updatedRows);
+        });
     }
 
     public setData(rows: Array<{ [key: string]: unknown }>): void {
-        this.executor.setData(Array.isArray(rows) ? rows : []);
+        const nextRows = Array.isArray(rows) ? rows : [];
+        this.executor.setData(nextRows);
+        this.subscriptionEngine.setRows(nextRows);
+    }
+
+    public applyStreamUpdates(batch: StreamUpdateBatch): number {
+        return this.subscriptionEngine.applyStreamUpdates(batch);
+    }
+
+    public captureBaseline(label?: string): BaselineDescriptor {
+        return this.subscriptionEngine.captureSnapshot(label, 'baseline');
+    }
+
+    public freezeSnapshot(label?: string): BaselineDescriptor {
+        return this.subscriptionEngine.captureSnapshot(label, 'freeze_snapshot');
+    }
+
+    public listBaselines(): BaselineDescriptor[] {
+        return this.subscriptionEngine.listBaselines();
+    }
+
+    public getSubscriptionEngine(): ClientSubscriptionEngine {
+        return this.subscriptionEngine;
     }
 
     public getData(): Array<{ [key: string]: unknown }> {

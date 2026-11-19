@@ -110,6 +110,7 @@ class RuntimeHttpGateway:
         self._fallback_lifecycle: Optional[RuntimeRequestLifecycle] = None
         self._export_job_store = None
         self._export_job_runner = None
+        self._subscription_service = None
         self.payload_url_prefix = payload_url_prefix.rstrip("/")
         self.inline_payload_bytes = (
             _inline_limit_bytes()
@@ -171,11 +172,36 @@ class RuntimeHttpGateway:
                 )
             return self._export_job_runner
 
+    @property
+    def subscription_service(self):
+        with self._resource_lock:
+            if self._subscription_service is None:
+                from .subscription_service import RuntimeSubscriptionService
+
+                def _adapter_getter():
+                    service = self._runtime_service_getter()
+                    return service._adapter_getter()
+
+                def _authorize_read(principal, table_name):
+                    return self.dataset_authorizer.authorize(
+                        principal=principal,
+                        table=table_name,
+                        operation="read",
+                    )
+
+                self._subscription_service = RuntimeSubscriptionService(
+                    _adapter_getter,
+                    authorizer=_authorize_read,
+                )
+            return self._subscription_service
+
     def close(self) -> None:
         with self._resource_lock:
             self._closed = True
             if self._export_job_runner is not None:
                 self._export_job_runner.close()
+            if self._subscription_service is not None:
+                self._subscription_service.close()
 
     def _export_job_response(self, request, snapshot):
         response = build_export_job_response(snapshot, request_id=request.get("requestId"))
@@ -858,6 +884,145 @@ def register_runtime_http_transport(
             )
             headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
         return Response(content=item.body, media_type=item.content_type, headers=headers)
+
+    @router.post("/subscription")
+    async def runtime_subscription_command(
+        body: Any = Body(...),
+        user: Any = Depends(current_user_dependency),
+    ):
+        from ..diff.snapshot_provider import SnapshotAuthorizationError, SnapshotExpiredError
+
+        envelope = body if isinstance(body, dict) else {}
+        table = str(envelope.get("table") or "").strip()
+        action = str(envelope.get("action") or "poll").strip().lower()
+        payload = _object(envelope.get("payload"))
+        state = _object(envelope.get("state"))
+        if not table:
+            sub_id = str(payload.get("subscriptionId") or "")
+            existing_sub = gateway.subscription_service.broker.get_subscription(sub_id) if sub_id else None
+            if existing_sub is not None:
+                table = existing_sub.table
+        if not table:
+            return JSONResponse(status_code=422, content={"status": "error", "code": "missing_table"})
+
+        dataset_op = "mutate" if action == "push_changes" else "read"
+        try:
+            row_scope = gateway.dataset_authorizer.authorize(
+                principal=user,
+                table=table,
+                operation=dataset_op,
+            )
+            if action == "push_changes":
+                gateway.mutation_authorizer.authorize(
+                    principal=user,
+                    table=table,
+                    kind="update",
+                    payload=payload,
+                    row_scope=row_scope,
+                )
+            result = gateway.subscription_service.handle_command(
+                table=table,
+                action=action,
+                payload=payload,
+                state=state,
+                principal=user,
+                row_scope=row_scope,
+            )
+            return JSONResponse(status_code=200, content=_json_safe(result))
+        except (MutationAuthorizationError, RuntimeDatasetAuthorizationError, SnapshotAuthorizationError) as exc:
+            return JSONResponse(
+                status_code=403,
+                content={"type": "AUTH_REVOKED", "code": "authorization_denied", "message": str(exc)},
+            )
+        except SnapshotExpiredError as exc:
+            return JSONResponse(
+                status_code=410,
+                content={"type": "ERROR", "code": SnapshotExpiredError.code, "message": str(exc)},
+            )
+        except ResourceExhaustedError as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"type": "ERROR", "code": ResourceExhaustedError.code, "message": str(exc)},
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"type": "ERROR", "code": "invalid_subscription_request", "message": str(exc)},
+            )
+
+    @router.post("/stream")
+    async def runtime_subscription_stream(
+        request: Request,
+        body: Any = Body(...),
+        user: Any = Depends(current_user_dependency),
+    ):
+        from starlette.responses import StreamingResponse
+        from .subscription_service import (
+            build_pivot_spec_from_subscription_state,
+            build_viewport_window_from_payload,
+        )
+
+        envelope = body if isinstance(body, dict) else {}
+        table = str(envelope.get("table") or "").strip()
+        payload = _object(envelope.get("payload"))
+        state = _object(envelope.get("state"))
+        if not table:
+            return JSONResponse(status_code=422, content={"status": "error", "code": "missing_table"})
+
+        try:
+            row_scope = gateway.dataset_authorizer.authorize(
+                principal=user,
+                table=table,
+                operation="read",
+            )
+        except RuntimeDatasetAuthorizationError as exc:
+            return JSONResponse(
+                status_code=403,
+                content={"type": "AUTH_REVOKED", "code": "authorization_denied", "message": str(exc)},
+            )
+
+        spec = build_pivot_spec_from_subscription_state(table, state)
+        viewport = build_viewport_window_from_payload(payload, state)
+        baseline_id = payload.get("baselineId") or payload.get("snapshotId")
+        known_rev = payload.get("knownRevision")
+        poll_interval_ms = max(25, min(5000, int(payload.get("intervalMs") or 100)))
+
+        sub, initial_snapshot = gateway.subscription_service.broker.subscribe(
+            spec=spec,
+            viewport=viewport,
+            principal=user,
+            row_scope=row_scope,
+            baseline_id=str(baseline_id) if baseline_id else None,
+            known_revision=int(known_rev) if known_rev is not None else None,
+        )
+
+        def _format_sse(frame: Dict[str, Any]) -> str:
+            event_name = "control" if frame.get("type") in {"AUTH_REVOKED", "INVALIDATE", "HEARTBEAT"} else "frame"
+            seq_val = frame.get("seq")
+            lines = [f"event: {event_name}"]
+            if seq_val is not None:
+                lines.append(f"id: {seq_val}")
+            lines.append("data: " + json.dumps(_json_safe(frame), separators=(",", ":")))
+            return "\n".join(lines) + "\n\n"
+
+        async def _sse_generator():
+            yield _format_sse(initial_snapshot)
+            async for frame in gateway.subscription_service.broker.stream_events(
+                sub.subscription_id,
+                poll_interval_seconds=poll_interval_ms / 1000.0,
+                is_disconnected=request.is_disconnected,
+            ):
+                yield _format_sse(frame)
+
+        return StreamingResponse(
+            _sse_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     app.include_router(router)
     return gateway

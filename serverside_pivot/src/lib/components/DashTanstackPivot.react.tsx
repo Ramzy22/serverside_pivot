@@ -106,6 +106,9 @@ export interface DashTanstackPivotProps {
   activeReportId?: string;
   rowSelection?: string | boolean;
   selectedRows?: Array<string>;
+  streamingConfig?: object;
+  streamUpdates?: object;
+  diffConfig?: object;
 }
 
 /** Value-axis configuration accepted by the public Dash API. */
@@ -418,5 +421,8 @@ DashTanstackPivot.propTypes = {
   savedReports: PropTypes.arrayOf(PropTypes.object),
   activeReportId: PropTypes.string,
   rowSelection: PropTypes.oneOfType([PropTypes.oneOf(['single', 'multiple']), PropTypes.bool]),
-  selectedRows: PropTypes.arrayOf(PropTypes.string)
+  selectedRows: PropTypes.arrayOf(PropTypes.string),
+  streamingConfig: PropTypes.object,
+  streamUpdates: PropTypes.object,
+  diffConfig: PropTypes.object
 };

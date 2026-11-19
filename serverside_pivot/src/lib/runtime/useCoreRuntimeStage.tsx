@@ -186,7 +186,10 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     paginationConfig: stage.externalPagination = null,
     localeText: stage.externalLocaleText = null,
     mergedHeaderSeparator: stage.mergedHeaderSeparator = ' ',
-    rowSelection: stage.externalRowSelection = false
+    rowSelection: stage.externalRowSelection = false,
+    streamingConfig: stage.streamingConfig = null,
+    streamUpdates: stage.streamUpdates = null,
+    diffConfig: stage.diffConfig = null
   } = stage.props);
   // Deliberately do not hydrate legacy editing props. The component accepts
   // them for backward-compatible Dash layouts, but they cannot enable or

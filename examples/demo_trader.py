@@ -8,7 +8,10 @@ and open http://127.0.0.1:8051
 from __future__ import annotations
 
 import argparse
+import random
 import sys
+import threading
+import time
 from pathlib import Path
 
 from dash import Dash, html
@@ -26,6 +29,70 @@ from examples.demo_datasets import (
     get_trader_adapter,
     trader_workspace_config,
 )
+
+class _DemoPrincipal:
+    id = "trader-demo"
+    role = "trader"
+    attributes = {"accounting_tenant": "trader-demo"}
+
+
+_DEMO_PRINCIPAL = _DemoPrincipal()
+_TRADER_ADAPTER = get_trader_adapter()
+_EOD_BASELINE = _TRADER_ADAPTER.capture_baseline(
+    TRADER_TABLE_NAME,
+    label="EOD Close (T₀)",
+    principal=_DEMO_PRINCIPAL,
+    ttl_seconds=86400 * 30,
+)
+_TRADER_PIVOT_CONFIG = {
+    **trader_workspace_config("dash"),
+    "streamingConfig": {
+        "enabled": True,
+        "transport": "dash",
+        "cadenceMs": 250,
+        "sortLock": "in_place",
+        "flashEnabled": True,
+        "flashDurationMs": 550,
+        "showSparklineTooltip": True,
+    },
+    "diffConfig": {
+        "enabled": True,
+        "baselineId": _EOD_BASELINE.snapshot_id,
+        "baselineLabel": _EOD_BASELINE.label,
+        "displayMode": "split",
+        "changedOnly": False,
+        "showPnlExplain": True,
+    },
+}
+
+
+def _start_market_tick_simulator(interval_seconds: float = 0.5, batch_size: int = 12) -> threading.Event:
+    """Background daemon pushing realistic mark-to-market PnL ticks via VersionedSourceAdapter."""
+    stop_event = threading.Event()
+    rng = random.Random(2026)
+
+    def _run():
+        while not stop_event.is_set():
+            try:
+                updates = []
+                for _ in range(batch_size):
+                    pos_id = rng.randint(0, TRADER_DEFAULT_ROWS - 1)
+                    pnl_shock = round(rng.gauss(0.0, 28_500.0), 2)
+                    updates.append({"id": pos_id, "daily_pnl": pnl_shock})
+                _TRADER_ADAPTER.push_stream_changes(
+                    TRADER_TABLE_NAME,
+                    updates,
+                    mode="update",
+                    key_fields=["id"],
+                )
+            except Exception:
+                pass
+            stop_event.wait(interval_seconds)
+
+    thread = threading.Thread(target=_run, name="trader-live-ticks", daemon=True)
+    thread.start()
+    return stop_event
+
 
 app = Dash(
     __name__,
@@ -183,19 +250,13 @@ app.layout = html.Div(
                                 ),
                             ],
                         ),
-                        DashTanstackPivot(**trader_workspace_config("dash")),
+                        DashTanstackPivot(**_TRADER_PIVOT_CONFIG),
                     ],
                 ),
             ],
         )
     ],
 )
-
-
-class _DemoPrincipal:
-    id = "trader-demo"
-    role = "trader"
-    attributes = {}
 
 
 register_pivot_app(
@@ -209,13 +270,22 @@ register_pivot_app(
             "rowSecurity": {"mode": "global"},
         },
     }),
-    runtime_principal_getter=lambda _request: _DemoPrincipal(),
+    runtime_principal_getter=lambda _request: _DEMO_PRINCIPAL,
 )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Trading Desk Pivot Showcase")
     parser.add_argument("--port", type=int, default=8051, help="Port to run on (default: 8051)")
+    parser.add_argument("--no-live-ticks", action="store_true", help="Disable background live market tick simulator")
+    parser.add_argument("--tick-interval", type=float, default=0.5, help="Live tick interval in seconds (default: 0.5)")
     args = parser.parse_args()
-    print(f"\nTrading Desk Demo running at: http://127.0.0.1:{args.port}\n")
-    app.run(debug=False, use_reloader=False, port=args.port)
+    stop_evt = None
+    if not args.no_live_ticks:
+        stop_evt = _start_market_tick_simulator(interval_seconds=max(0.1, args.tick_interval))
+    print(f"\nTrading Desk Demo (Live CDC + EOD Baseline T₀) running at: http://127.0.0.1:{args.port}\n")
+    try:
+        app.run(debug=False, use_reloader=False, port=args.port)
+    finally:
+        if stop_evt is not None:
+            stop_evt.set()

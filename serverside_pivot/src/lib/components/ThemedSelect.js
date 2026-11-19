@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
 import { PivotThemeContext } from '../contexts/PivotThemeContext';
+import { resolveOverlayPortalTarget } from '../hooks/useDismiss';
 
 let nextThemedSelectId = 1;
 
@@ -308,6 +309,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
             ref={menuRef}
             id={listboxId}
             role="listbox"
+            data-pivot-workspace-root="true"
             data-themed-select-menu="true"
             aria-label={ariaLabel || title || 'Options'}
             className="sp-menu-surface"
@@ -405,7 +407,7 @@ const ThemedSelect = React.forwardRef(/** @param {any} p0 @param {any} forwarded
         </div>
     ) : null;
 
-    const targetEl = portalTarget || (typeof document !== 'undefined' ? (triggerRef.current?.closest?.('[data-pivot-workspace-root]') || document.body) : null);
+    const targetEl = portalTarget || resolveOverlayPortalTarget(triggerRef.current);
 
     return (
         <>

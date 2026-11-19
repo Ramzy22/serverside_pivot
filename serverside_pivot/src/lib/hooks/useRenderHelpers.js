@@ -17,6 +17,7 @@ import {
     normalizeHeaderStyle,
 } from '../presentation/headerFormatting';
 import { CellErrorBoundary, SafeCellContent } from '../presentation/safeCellContent';
+import { LiveCellDisplay } from '../components/LiveCellDisplay';
 import { normalizeDataBarVariant, resolveDataBarMaximum } from '../utils/dataBars';
 
 /** @type {any} */
@@ -130,6 +131,7 @@ export function useRenderHelpers({
     selectedRowKeys,
     toggleRowCheckbox,
     rowCheckboxMode,
+    liveSubscriptionStore = null,
 }) {
     /** @type {(...args: any[]) => any} */
     const localize = useCallback((key, fallback, values = {}) => {
@@ -240,6 +242,7 @@ export function useRenderHelpers({
     const EMPTY_STYLE = useMemo(() => ({}), []);
     /** @type {any} */
     const DATA_BAR_SPAN_STYLE = useMemo(() => ({ position: 'relative', zIndex: 1 }), []);
+    const lastResizeEndedAtRef = useRef(0);
     /** @type {any} */
     const SKELETON_CELL_STYLE = useMemo(() => ({
         width: '70%',
@@ -248,7 +251,7 @@ export function useRenderHelpers({
         borderRadius: '999px',
         background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
         backgroundSize: '220% 100%',
-        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite',
+        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite',
     }), []);
 
     /** @type {(...args: any[]) => any} */
@@ -504,6 +507,41 @@ export function useRenderHelpers({
                         <SafeCellContent render={() => flexRender(col.columnDef.cell, displayCellLike.getContext())} />
                     </CellErrorBoundary>
                 );
+                if (
+                    liveSubscriptionStore
+                    && liveSubscriptionStore.getStatus().active
+                    && !isReportConfigGutter
+                    && col.id !== '__row_number__'
+                    && col.id !== '__row_checkbox__'
+                ) {
+                    const liveRowKey = String(
+                        rowData._canonicalPath
+                        || rowData._path
+                        || rowData._id
+                        || row.id
+                        || ''
+                    );
+                    if (liveRowKey) {
+                        const liveRowLabel = String(rowData._path || rowData._id || row.id || '').replace(/\|\|\|/g, ' › ');
+                        const liveColLabel = typeof col.columnDef?.header === 'string' && col.columnDef.header.trim()
+                            ? col.columnDef.header.trim()
+                            : formatDisplayLabel(col.id);
+                        cellContent = (
+                            <LiveCellDisplay
+                                store={liveSubscriptionStore}
+                                rowKey={liveRowKey}
+                                colId={col.id}
+                                rowLabel={liveRowLabel}
+                                colLabel={liveColLabel}
+                                isHierarchy={isHierarchy}
+                                softStale={Boolean(rowData.__softStale)}
+                                isDark={isDarkTheme(theme)}
+                                theme={theme}
+                                fallbackContent={cellContent}
+                            />
+                        );
+                    }
+                }
             }
         }
 
@@ -580,13 +618,15 @@ export function useRenderHelpers({
                         >
                             <div
                                 style={{
-                                    width: `${pct * 100}%`,
+                                    width: '100%',
                                     height: '100%',
                                     borderRadius: '999px',
+                                    transform: `scaleX(${pct})`,
+                                    transformOrigin: 'left center',
                                     background: isNeg
                                         ? (theme.dataBarNegative ? barBorder : (isDarkTheme(theme) ? '#FB7185' : '#DC2626'))
-                                        : (theme.dataBarPositive ? barBorder : (theme.primary || '#4F46E5')),
-                                    transition: 'width 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                        : (theme.dataBarPositive ? barBorder : (theme.primary || 'var(--sp-primary, #4F46E5)')),
+                                    transition: 'transform var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
                                 }}
                             />
                         </div>
@@ -601,7 +641,7 @@ export function useRenderHelpers({
                             width: `${pct * 100}%`,
                             background: barColor,
                             borderRight: pct > 0.01 ? `2px solid ${barBorder}` : 'none',
-                            transition: 'width 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                            transition: 'opacity var(--sp-dur-fast, 140ms) ease',
                             pointerEvents: 'none',
                             zIndex: 0,
                         }} />
@@ -729,6 +769,7 @@ export function useRenderHelpers({
         EMPTY_STYLE,
         DATA_BAR_SPAN_STYLE,
         SKELETON_CELL_STYLE,
+        liveSubscriptionStore,
     ]);
 
     // --- Helper to Render a single real TanStack Cell with useCallback ---
@@ -782,9 +823,9 @@ export function useRenderHelpers({
     const headerContentBaseStyle = useMemo(() => ({
         display: 'flex',
         alignItems: 'center',
-        gap: '4px',
+        gap: '3px',
         width: '100%',
-        padding: '0 4px',
+        padding: 0,
         overflow: 'hidden',
         minWidth: 0,
     }), []);
@@ -1083,6 +1124,8 @@ export function useRenderHelpers({
         const isAbsoluteSort = isAbsoluteSortSpecifier(sortSpecifier) || shouldUseAbsoluteSort(sorting, sortOptions, header.column.id);
         /** @type {any} */
         const hasSortPriority = !isGroupHeader && !isEmptyPlaceholder && isSorted && Number.isFinite(Number(sortIndex)) && Number(sortIndex) >= 0;
+        const multiSortActive = Array.isArray(sorting) && sorting.length > 1;
+        const shouldShowSortPriorityBadge = hasSortPriority && multiSortActive;
         /** @type {any} */
         const isResizingColumn = header.column.getIsResizing();
         /** @type {any} */
@@ -1331,6 +1374,76 @@ export function useRenderHelpers({
         const isSpanningHeaderCell = isSpanningLeaf && headerRowSpan > 1;
         /** @type {any} */
         const computedHeaderHeight = isSpanningHeaderCell ? spanTargetHeight : effectiveHeaderHeight;
+        const headerPadding = toFiniteNumber(theme.headerPaddingX, toFiniteNumber(theme.cellPaddingX, 12)) ?? 12;
+        const compactHeaderControls = headerControlsMode === 'hover' && !isGroupHeader && !isEmptyPlaceholder
+            && headerWidth < headerPadding * 2 + 92;
+        const compactActionsHeight = Math.max(0, Math.min(16, Math.floor(computedHeaderHeight / 2) - 1));
+        const dragControl = headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && header.column.id !== '__row_number__' && header.column.id !== 'hierarchy' && (
+            <span
+                className="sp-header-control"
+                style={{ color: theme.textSec, opacity: 0.4, cursor: 'grab', fontSize: '13px', marginRight: '2px', flexShrink: 0, lineHeight: 1 }}
+                title="Drag to reorder"
+                aria-hidden="true"
+            >⠿</span>
+        );
+        const filterControl = headerControlsMode !== 'never' && !isGroupHeader && filterColumnId && header.column.id !== '__row_number__' && !isEmptyPlaceholder && (
+            <div
+                className="sp-header-control"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    handleFilterClick(e, filterColumnId);
+                }}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleFilterClick(e, filterColumnId);
+                    }
+                }}
+                role="button"
+                tabIndex={0}
+                data-pivot-filter-owner={filterOwner}
+                style={{
+                    display:'flex',
+                    alignItems: 'center',
+                    padding: '2px',
+                    borderRadius: '4px',
+                    background: filters[filterColumnId] ? theme.select : 'transparent',
+                    color: filters[filterColumnId] ? theme.primary : 'inherit'
+                }}
+                aria-label={localize('filterColumn', 'Filter Column')}
+                title={localize('filterColumn', 'Filter Column')}
+            >
+                <Icons.Filter/>
+            </div>
+        );
+        const absoluteSortBadge = shouldShowAbsoluteSortBadge && (
+            <span
+                className={absoluteSortBadgeHoverOnly ? 'sp-header-control sp-header-badge' : 'sp-header-badge'}
+                style={absoluteSortBadgeStyle}
+                title="Absolute value sort"
+            >|x|</span>
+        );
+        const columnMenu = headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && (
+            <div
+                className="sp-header-control"
+                onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id, header, level); }}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleHeaderContextMenu(e, header.column.id, header, level);
+                    }
+                }}
+                role="button"
+                tabIndex={0}
+                style={moreVertStyle}
+                aria-label={localize('moreColumnOptions', 'More Column Options')}
+                title={localize('moreColumnOptions', 'More Column Options')}
+            >
+                <Icons.MoreVert/>
+            </div>
+        );
         const headerCellElement = (
             <div key={isSpanningHeaderCell ? undefined : header.id} style={{
                 ...headerStateStyle,
@@ -1342,12 +1455,15 @@ export function useRenderHelpers({
                     : (effectiveHeaderWrap ? 'auto' : computedHeaderHeight),
                 minHeight: computedHeaderHeight,
                 cursor: isEmptyPlaceholder ? 'default' : 'pointer',
+                ...(compactHeaderControls ? {
+                    padding: `0 ${toCssPx(theme.headerPaddingX ?? theme.cellPaddingX, '12px')} ${compactActionsHeight + 1}px`,
+                } : {}),
                 // Position is handled by getHeaderStickyStyle or spanning wrapper
                 position: isSpanningHeaderCell ? 'absolute' : (headerStateStyle.position || 'relative'),
                 ...(isSpanningHeaderCell ? {
                     top: 0,
                     left: 0,
-                    zIndex: Math.max(Number(headerStateStyle.zIndex || 0), 3),
+                    zIndex: Math.max(Number(headerStateStyle.zIndex || 0), 6),
                 } : {}),
                 ...(theme.headerFontSize !== undefined && theme.headerFontSize !== null ? { fontSize: toCssPx(theme.headerFontSize, undefined) } : {}),
                 ...(theme.headerFontWeight !== undefined && theme.headerFontWeight !== null ? { fontWeight: theme.headerFontWeight } : {}),
@@ -1444,7 +1560,11 @@ export function useRenderHelpers({
                     setFocusedHeaderId(/** @param {any} [current] @returns {any} */ current => (current === header.column.id ? null : current));
                 }
             }}
-            onClick={isEmptyPlaceholder ? undefined : header.column.getToggleSortingHandler()}>
+            onClick={isEmptyPlaceholder ? undefined : (e) => {
+                if (Date.now() - lastResizeEndedAtRef.current < 180) return;
+                const toggleSort = header.column.getToggleSortingHandler();
+                if (typeof toggleSort === 'function') toggleSort(e);
+            }}>
                 <div style={{
                     ...headerContentBaseStyle,
                     justifyContent: resolvedHeaderJustify,
@@ -1452,14 +1572,7 @@ export function useRenderHelpers({
                 }}
                 data-header-content="true"
                 data-header-column-id={String(header.column.id)}>
-                {headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && header.column.id !== '__row_number__' && header.column.id !== 'hierarchy' && (
-                    <span
-                        className="sp-header-control"
-                        style={{ color: theme.textSec, opacity: 0.4, cursor: 'grab', fontSize: '13px', marginRight: '2px', flexShrink: 0, lineHeight: 1 }}
-                        title="Drag to reorder"
-                        aria-hidden="true"
-                    >⠿</span>
-                )}
+                {!compactHeaderControls && dragControl}
                 {(() => {
                     /** @type {any} */
                     const rawHeaderLabel = typeof header.column.columnDef.header === 'string'
@@ -1474,12 +1587,12 @@ export function useRenderHelpers({
                     /** @type {any} */
                     const configuredShortLabel = header.column.columnDef.meta?.shortLabel || null;
                     /** @type {any} */
-                    const headerPadPx = (toFiniteNumber(theme.headerPaddingX, toFiniteNumber(theme.cellPaddingX, 12)) ?? 12) * 2 + 8;
+                    const headerPadPx = headerPadding * 2 + 8;
                     /** @type {any} */
                     const visibleControlsReserve = (
                         (!isGroupHeader && isSorted && sortIndicatorMode === 'arrow' ? 16 : 0)
-                        + (hasSortPriority && showSortPriorityBadge ? 18 : 0)
-                        + (shouldShowAbsoluteSortBadge && !absoluteSortBadgeHoverOnly ? 26 : 0)
+                        + (shouldShowSortPriorityBadge && showSortPriorityBadge ? 18 : 0)
+                        + (shouldShowAbsoluteSortBadge && !absoluteSortBadgeHoverOnly && !compactHeaderControls ? 26 : 0)
                         + (headerControlsMode === 'always' && !isGroupHeader && !isEmptyPlaceholder ? 34 : 0)
                     );
                     /** @type {any} */
@@ -1513,75 +1626,29 @@ export function useRenderHelpers({
                     );
                 })()}
 
-                {headerControlsMode !== 'never' && !isGroupHeader && filterColumnId && header.column.id !== '__row_number__' && !isEmptyPlaceholder && (
-                    <div
-                        className="sp-header-control"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            handleFilterClick(e, filterColumnId);
-                        }}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleFilterClick(e, filterColumnId);
-                            }
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        data-pivot-filter-owner={filterOwner}
-                        style={{
-                            display:'flex',
-                            alignItems: 'center',
-                            padding: '2px',
-                            borderRadius: '4px',
-                            background: filters[filterColumnId] ? theme.select : 'transparent',
-                            color: filters[filterColumnId] ? theme.primary : 'inherit'
-                        }}
-                        aria-label={localize('filterColumn', 'Filter Column')}
-                        title={localize('filterColumn', 'Filter Column')}
-                    >
-                        <Icons.Filter/>
-                    </div>
-                )}
+                {!compactHeaderControls && filterControl}
 
                 {!isGroupHeader && isSorted && sortIndicatorMode === 'arrow' && (
                     <span style={{display: 'inline-flex', alignItems: 'center', color: sortIconColor}}>
                         {isSorted === 'asc' ? <Icons.SortAsc/> : <Icons.SortDesc/>}
                     </span>
                 )}
-                {hasSortPriority && showSortPriorityBadge && (
+                {shouldShowSortPriorityBadge && showSortPriorityBadge && (
                     <span style={sortPriorityBadgeStyle} title={`Sort priority ${sortIndex + 1}`}>{sortIndex + 1}</span>
                 )}
-                {shouldShowAbsoluteSortBadge && (
-                    <span
-                        className={absoluteSortBadgeHoverOnly ? 'sp-header-control sp-header-badge' : 'sp-header-badge'}
-                        style={absoluteSortBadgeStyle}
-                        title="Absolute value sort"
-                    >|x|</span>
-                )}
+                {!compactHeaderControls && absoluteSortBadge}
 
-                {headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && (
-                    <div
-                        className="sp-header-control"
-                        onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id, header, level); }}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleHeaderContextMenu(e, header.column.id, header, level);
-                            }
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        style={moreVertStyle}
-                        aria-label={localize('moreColumnOptions', 'More Column Options')}
-                        title={localize('moreColumnOptions', 'More Column Options')}
-                    >
-                        <Icons.MoreVert/>
+                {!compactHeaderControls && columnMenu}
+                </div>
+
+                {compactHeaderControls && (
+                    <div className="sp-header-compact-actions" style={{ height: compactActionsHeight }}>
+                        {dragControl}
+                        {filterControl}
+                        {absoluteSortBadge}
+                        {columnMenu}
                     </div>
                 )}
-                </div>
 
                 {!isGroupHeader && !isEmptyPlaceholder && activeFilterCol === filterColumnId
                     && activeFilterOwner === filterOwner && (
@@ -1620,7 +1687,14 @@ export function useRenderHelpers({
                     className="sp-resize-handle"
                     data-resizing={isResizeHandleVisible ? 'true' : undefined}
                     onMouseDown={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
+                        if (typeof window !== 'undefined') {
+                            const markResizeDone = () => {
+                                lastResizeEndedAtRef.current = Date.now();
+                            };
+                            window.addEventListener('mouseup', markResizeDone, { once: true, capture: true });
+                        }
                         header.getResizeHandler()(e);
                     }}
                     onTouchStart={(e) => {

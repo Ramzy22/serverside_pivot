@@ -7,7 +7,18 @@ import { usePivotConfig } from '../../contexts/PivotConfigContext';
 import { buildRowSpanPlan, collectRowSpanColumns } from '../../utils/rowSpanning';
 import { getPivotPerformanceNow, recordPivotMeasure } from '../../utils/pivotProfiler';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { isGrandTotalRow } from '../../hooks/usePivotNormalization';
+import {
+    MAX_FLIP_DISTANCE_PX,
+    MAX_SHEET_TRAVEL_PX,
+    ROW_MOTION_EASING,
+    SKELETON_FILL_DURATION_MS,
+    buildExpandRevealPlan,
+    buildSkeletonFillPlan,
+    computeBottomPinnedLayoutTop,
+    computeSlideDurationMs,
+} from '../../utils/rowMotion';
 import { resolveDepthToken, resolveGridLineBorders, withAlpha } from '../../utils/styles';
 
 /** @type {any} */
@@ -221,6 +232,10 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         /** @type {any} */
         const indexes = new Set();
         [...effectiveTopRows, ...effectiveBottomRows].forEach((row) => {
+            // When serverSidePinsGrandTotal is active, effectiveRowCount and normalizedData
+            // already exclude Grand Total from the virtualizer; never let a stale __virtualIndex
+            // on Grand Total double-subtract virtualBodyHeight or hide a real data row at that slot.
+            if (serverSidePinsGrandTotal && isGrandTotalRow(row && row.original)) return;
             /** @type {any} */
             const virtualIndex = row && row.original && typeof row.original.__virtualIndex === 'number'
                 ? row.original.__virtualIndex
@@ -228,7 +243,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             if (virtualIndex !== null) indexes.add(virtualIndex);
         });
         return Array.from(indexes).sort((a, b) => a - b);
-    }, [serverSide, effectiveTopRows, effectiveBottomRows]);
+    }, [serverSide, serverSidePinsGrandTotal, effectiveTopRows, effectiveBottomRows]);
     /** @type {any} */
     const pinnedVirtualIndexSet = React.useMemo(
         () => new Set(pinnedVirtualIndexes),
@@ -255,28 +270,90 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         return lookup;
     }, [effectiveCenterRows]);
 
-    const knownVisibleChildRowIdsRef = React.useRef(new Set());
-    const newlyRevealedUntilByKeyRef = React.useRef(/** @type {Map<string, { delayMs: number, expiresAt: number }>} */ (new Map()));
-    const revealClearTimerRef = React.useRef(/** @type {any} */ (null));
+    const prefersReducedMotion = usePrefersReducedMotion();
+    const rowNodeByKeyRef = React.useRef(/** @type {Map<string, HTMLElement>} */ (new Map()));
+    /** @type {(rowKey: string, node: HTMLElement | null) => void} */
+    const registerRowNode = React.useCallback((rowKey, node) => {
+        if (node) {
+            rowNodeByKeyRef.current.set(rowKey, node);
+        } else {
+            rowNodeByKeyRef.current.delete(rowKey);
+        }
+    }, []);
     const wasScrollingRef = React.useRef(false);
     const hasMountedCenterRowsRef = React.useRef(false);
     const [exitingRowSnapshots, setExitingRowSnapshots] = React.useState(/** @type {any[]} */ ([]));
+    const [collapseHoldHeight, setCollapseHoldHeight] = React.useState(0);
     const prevCommittedRowsRef = React.useRef(/** @type {any[]} */ ([]));
+    const prevTopByKeyRef = React.useRef(/** @type {Map<string, number>} */ (new Map()));
+    const prevVisualBodyHeightRef = React.useRef(0);
     const prevScrollTopRef = React.useRef(0);
     const prevModelRowCountRef = React.useRef(0);
     const prevColumnSignatureRef = React.useRef('');
     const exitUnderlayTimerRef = React.useRef(/** @type {any} */ (null));
+    const prevExpandedByPathRef = React.useRef(/** @type {Map<string, boolean>} */ (new Map()));
+    const expandedAtByPathRef = React.useRef(/** @type {Map<string, number>} */ (new Map()));
+    const collapsedAtByPathRef = React.useRef(/** @type {Map<string, number>} */ (new Map()));
+    const expandAllAtRef = React.useRef(0);
+    const prevSkeletonIndicesRef = React.useRef(/** @type {Set<number>} */ (new Set()));
+    const activeFlipAnimByKeyRef = React.useRef(/** @type {Map<string, { anim: any, targetTop: number, el: HTMLElement | null, restoreZIndex: boolean }>} */ (new Map()));
+    const activeRevealAnimByKeyRef = React.useRef(/** @type {Map<string, { anim: any, targetEl: HTMLElement | null }>} */ (new Map()));
+    const bottomPinnedGroupRef = React.useRef(/** @type {HTMLDivElement | null} */ (null));
+    const activeBottomFlipAnimRef = React.useRef(/** @type {any} */ (null));
+    const prevBottomPinnedRelTopRef = React.useRef(/** @type {number | null} */ (null));
+
+    const cancelTrackedMotionAnimations = React.useCallback(() => {
+        activeFlipAnimByKeyRef.current.forEach((record) => {
+            if (record && record.anim && typeof record.anim.cancel === 'function') {
+                record.anim.cancel();
+            }
+            if (record && record.el && record.el.style) {
+                record.el.style.willChange = '';
+                if (record.restoreZIndex) record.el.style.zIndex = '4';
+            }
+        });
+        activeFlipAnimByKeyRef.current.clear();
+        activeRevealAnimByKeyRef.current.forEach((record) => {
+            if (record && record.anim && typeof record.anim.cancel === 'function') {
+                record.anim.cancel();
+            }
+            if (record && record.targetEl && record.targetEl.style) {
+                record.targetEl.style.willChange = '';
+            }
+        });
+        activeRevealAnimByKeyRef.current.clear();
+        if (activeBottomFlipAnimRef.current && typeof activeBottomFlipAnimRef.current.cancel === 'function') {
+            activeBottomFlipAnimRef.current.cancel();
+            activeBottomFlipAnimRef.current = null;
+        }
+        if (bottomPinnedGroupRef.current && bottomPinnedGroupRef.current.style) {
+            bottomPinnedGroupRef.current.style.willChange = '';
+        }
+    }, []);
 
     React.useEffect(() => () => {
         if (exitUnderlayTimerRef.current) {
             clearTimeout(exitUnderlayTimerRef.current);
             exitUnderlayTimerRef.current = null;
         }
-        if (revealClearTimerRef.current) {
-            clearTimeout(revealClearTimerRef.current);
-            revealClearTimerRef.current = null;
-        }
-    }, []);
+        cancelTrackedMotionAnimations();
+    }, [cancelTrackedMotionAnimations]);
+
+    // Scroll-aware elevation attributes updated directly on the scroll container DOM node
+    // (zero React re-renders per scroll frame) to drive sticky header & pinned-edge shadows.
+    React.useEffect(() => {
+        const el = parentRef && parentRef.current;
+        if (!el || typeof el.addEventListener !== 'function') return undefined;
+        const syncScrollAttrs = () => {
+            const scrolledY = el.scrollTop > 2 ? 'true' : 'false';
+            const scrolledX = el.scrollLeft > 2 ? 'true' : 'false';
+            if (el.dataset.scrolledY !== scrolledY) el.dataset.scrolledY = scrolledY;
+            if (el.dataset.scrolledX !== scrolledX) el.dataset.scrolledX = scrolledX;
+        };
+        syncScrollAttrs();
+        el.addEventListener('scroll', syncScrollAttrs, { passive: true });
+        return () => el.removeEventListener('scroll', syncScrollAttrs);
+    }, [parentRef]);
 
     /** @type {any} */
     const leftPinnedWidth = React.useMemo(
@@ -456,7 +533,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         top: 0,
         display: 'flex',
         alignItems: 'center',
-        zIndex: 90,
+        zIndex: 4,
         pointerEvents: 'none',
     }), [baseRowStyle]);
 
@@ -469,19 +546,19 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         position: 'absolute',
         top: 0,
         left: 0,
-        background: theme.surfaceMuted || theme.headerSubtleBg || '#F8FAFC',
+        background: theme.surfaceMuted || theme.headerSubtleBg || 'var(--sp-surface-muted, #F8FAFC)',
         borderBottom: `1px solid ${theme.border}`,
         display: 'flex',
         alignItems: 'center',
         gap: '10px',
         overflow: 'hidden',
-        zIndex: 88,
-        boxShadow: `0 4px 12px -6px ${theme.border}`,
-        animation: 'pivot-band-enter 160ms cubic-bezier(0.22, 1, 0.36, 1) both',
+        zIndex: 10,
+        boxShadow: `0 4px 12px -6px ${withAlpha(theme.border, 0.5, 'rgba(15,23,42,0.12)')}`,
+        animation: 'pivot-band-enter 160ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both',
     }), [styles.row, totalLayoutWidth, theme.surfaceMuted, theme.headerSubtleBg, theme.border]);
 
     const isScrollingNowForMotion = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
-    const disableRowMotion = !hasMountedCenterRowsRef.current || isScrollingNowForMotion || wasScrollingRef.current;
+    const disableRowMotion = prefersReducedMotion || !hasMountedCenterRowsRef.current || isScrollingNowForMotion || wasScrollingRef.current;
 
     /** @type {any} */
     const defaultRowBg = theme.leafBg || theme.surfaceBg || theme.background;
@@ -560,8 +637,14 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         display: 'flex',
         minHeight: effectiveHeaderHeight,
         height: theme.headerWrap ? 'auto' : effectiveHeaderHeight,
+    }), [effectiveHeaderHeight, theme.headerWrap]);
+
+    // Header cells draw their own separators so a tier boundary stops at a spanning cell.
+    const floatingFilterRowStyle = React.useMemo(() => ({
+        ...headerRowStyle,
+        background: theme.background,
         borderBottom: `1px solid ${gridBorders.headerBorderBottomColor}`,
-    }), [effectiveHeaderHeight, theme.headerWrap, gridBorders.headerBorderBottomColor]);
+    }), [headerRowStyle, theme.background, gridBorders.headerBorderBottomColor]);
 
     /** @type {any} */
     const centerHeaderRenderPlan = React.useMemo(
@@ -690,11 +773,72 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         () => visibleLeafColumns.map(/** @param {any} [col] @returns {string} */ (col) => (col ? String(col.id) : '')).join('\u001f'),
         [visibleLeafColumns]
     );
+    // Unified visual layout adjustments (bounded to virtualRows):
+    // Optimistic collapse: collapsing needs no new server data, so descendants of a
+    // row that just flipped expanded -> collapsed exit immediately and rows below
+    // slide up without waiting for the round-trip.
+    /** @type {{ hiddenKeys: Set<string>, topOffsetDeltaByIndex: Map<number, number>, totalCollapseShift: number }} */
+    const rowMotionLayoutPlan = (() => {
+        const hiddenKeys = new Set();
+        const topOffsetDeltaByIndex = new Map();
+        if (rowSpanEnabled || !hasMountedCenterRowsRef.current) {
+            return { hiddenKeys, topOffsetDeltaByIndex, totalCollapseShift: 0 };
+        }
+        const now = Date.now();
+        /** @param {string} ancestorKey @param {any} ancestorRow @returns {boolean} */
+        const isRecentlyCollapsed = (ancestorKey, ancestorRow) => {
+            if (!serverSide) return false;
+            const isExpanded = typeof ancestorRow.getIsExpanded === 'function'
+                ? Boolean(ancestorRow.getIsExpanded())
+                : Boolean(ancestorRow.original && ancestorRow.original._is_expanded);
+            if (isExpanded) return false;
+            if (prevExpandedByPathRef.current.get(ancestorKey) === true) return true;
+            const collapsedAt = collapsedAtByPathRef.current.get(ancestorKey) || 0;
+            return Boolean(collapsedAt > 0 && now - collapsedAt < (isRequestPending ? 4000 : 1200));
+        };
+        let collapseShift = 0;
+        for (let i = 0; i < virtualRows.length; i += 1) {
+            const virtualRow = virtualRows[i];
+            if (!virtualRow) continue;
+            if (collapseShift !== 0) topOffsetDeltaByIndex.set(virtualRow.index, -collapseShift);
+            if (serverSide && pinnedVirtualIndexSet.has(virtualRow.index)) continue;
+            const row = resolveVirtualRow(virtualRow.index);
+            if (!row || !row.original) continue;
+            const stableRowKey = row.id ? String(row.id) : String(virtualRow.index);
+            const path = row.original._path ? String(row.original._path) : stableRowKey;
+            if (serverSide && path.includes('|||')) {
+                const parts = path.split('|||');
+                for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+                    const ancestorKey = parts.slice(0, depth).join('|||');
+                    const ancestorRow = centerRowLookup.get(ancestorKey);
+                    if (ancestorRow && isRecentlyCollapsed(ancestorKey, ancestorRow)) {
+                        hiddenKeys.add(stableRowKey);
+                        collapseShift += Number(virtualRow.size) > 0 ? Number(virtualRow.size) : rowHeight;
+                        break;
+                    }
+                }
+            }
+        }
+        return {
+            hiddenKeys,
+            topOffsetDeltaByIndex,
+            totalCollapseShift: collapseShift,
+        };
+    })();
+
+    const effectiveVisualBodyHeight = Math.max(
+        0,
+        virtualBodyHeight - rowMotionLayoutPlan.totalCollapseShift
+    );
+    const effectiveContainerBodyHeight = collapseHoldHeight > effectiveVisualBodyHeight
+        ? collapseHoldHeight
+        : effectiveVisualBodyHeight;
+
     /** @type {any[]} */
-    const committedRowSnapshots = React.useMemo(() => {
+    const committedRowSnapshots = (() => {
         /** @type {any[]} */
         const snapshots = [];
-        const topRowCount = effectiveTopRows.length;
+        const topRowCountLocal = effectiveTopRows.length;
         for (let i = 0; i < virtualRows.length; i += 1) {
             const virtualRow = virtualRows[i];
             if (!virtualRow) continue;
@@ -704,48 +848,44 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             if (!serverSide && pinnedRowIdSet.has(row.id)) continue;
             if (serverSide && !showColTotals && isGrandTotalRow(row.original)) continue;
             const stableRowKey = row.id ? String(row.id) : String(virtualRow.index);
+            if (rowMotionLayoutPlan.hiddenKeys.has(stableRowKey)) continue;
             const rowPath = (row.original && row.original._path) ? String(row.original._path) : stableRowKey;
-            const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + effectiveBodyRowsTopOffset;
-            const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
+            const offsetDelta = rowMotionLayoutPlan.topOffsetDeltaByIndex.get(virtualRow.index) || 0;
+            const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + effectiveBodyRowsTopOffset + offsetDelta;
+            const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCountLocal + virtualRow.index);
             const rowBg = getRowLevelBackground(row);
             const rowSpanByColumnId = rowSpanEnabled && row.id != null
                 ? (rowSpanPlan.get(String(row.id)) || null)
                 : null;
             const rowDepthValue = Number((row.original && row.original.depth !== undefined) ? row.original.depth : (row.depth || 0));
+            const isExpanded = typeof row.getIsExpanded === 'function'
+                ? Boolean(row.getIsExpanded())
+                : Boolean(row.original && row.original._is_expanded);
             snapshots.push({
                 rowKey: stableRowKey,
                 rowPath,
                 row,
+                virtualIndex: virtualRow.index,
                 top: adjustedTop,
                 size: virtualRow.size,
                 displayRowIndex,
                 rowBg,
                 rowSpanByColumnId,
                 depth: rowDepthValue,
+                isExpanded,
             });
         }
         return snapshots;
-    }, [
-        virtualRows,
-        effectiveTopRows.length,
-        serverSide,
-        pinnedVirtualIndexSet,
-        resolveVirtualRow,
-        pinnedRowIdSet,
-        showColTotals,
-        getPinnedRowsBefore,
-        rowHeight,
-        effectiveBodyRowsTopOffset,
-        centerDisplayIndexById,
-        getRowLevelBackground,
-        rowSpanEnabled,
-        rowSpanPlan,
-    ]);
+    })();
 
-    // Run pre-paint (useLayoutEffect) so exiting collapse snapshots mount BEFORE
-    // the browser paints the next frame — avoiding a 1-frame empty flash — and
-    // staggered child reveals retain their timing across mid-flight re-renders.
+    // Pre-paint motion controller (useLayoutEffect):
+    // - Pure render (zero ref mutations during render)
+    // - Captures genuinely collapsing child rows & bottom-fold pushed rows into the exit underlay
+    // - Holds container height during collapse underlay to avoid layout-thrash height transitions
+    // - Drives WAAPI FLIP for surviving rows, expand-gated reveals for newly expanded children,
+    //   and crisp 100ms opacity crossfades for skeleton/stale replacements
     React.useLayoutEffect(() => {
+        const now = Date.now();
         const isScrollingNow = Boolean(rowVirtualizer && rowVirtualizer.isScrolling);
         const currentScrollTop = parentRef && parentRef.current ? parentRef.current.scrollTop : 0;
         const currentModelCount = serverSide
@@ -755,13 +895,52 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         const columnsChanged = prevColumnSignatureRef.current !== '' && prevColumnSignatureRef.current !== columnStructureSignature;
         const activeSnapshotKeys = new Set(committedRowSnapshots.map(/** @param {any} [item] @returns {any} */ (item) => item.rowKey));
 
-        // Cancel exiting underlay on column/schema change or for rows that came back (rapid re-expand)
+        // 1. Track expand/collapse intent transitions for expand-gated reveal & optimistic collapse
+        let newlyExpandedParentCount = 0;
+        const nextExpandedByPath = new Map();
+        committedRowSnapshots.forEach(/** @param {any} [snap] */ (snap) => {
+            if (!snap || !snap.rowPath) return;
+            nextExpandedByPath.set(snap.rowPath, Boolean(snap.isExpanded));
+            const prevExpanded = prevExpandedByPathRef.current.get(snap.rowPath);
+            if (snap.isExpanded) {
+                collapsedAtByPathRef.current.delete(snap.rowPath);
+                if (prevExpanded === false) {
+                    expandedAtByPathRef.current.set(snap.rowPath, now);
+                    newlyExpandedParentCount += 1;
+                }
+            } else if (prevExpanded === true) {
+                collapsedAtByPathRef.current.set(snap.rowPath, now);
+                expandedAtByPathRef.current.delete(snap.rowPath);
+            }
+        });
+        if (pendingRowTransitions && typeof pendingRowTransitions.forEach === 'function') {
+            pendingRowTransitions.forEach(/** @param {any} [_phase] @param {string} [path] */ (_phase, path) => {
+                if (path) expandedAtByPathRef.current.set(String(path), now);
+            });
+        }
+        if (newlyExpandedParentCount > 1) {
+            expandAllAtRef.current = now;
+        }
+        // Prune expired expand/collapse intent timestamps
+        expandedAtByPathRef.current.forEach((ts, key) => {
+            if (now - ts > 6000) expandedAtByPathRef.current.delete(key);
+        });
+        collapsedAtByPathRef.current.forEach((ts, key) => {
+            if ((!isRequestPending && now - ts > 1200) || now - ts > 6000) {
+                collapsedAtByPathRef.current.delete(key);
+            }
+        });
+
+        // 2. Cancel exiting underlay on column change, reduced motion, or rapid re-expand
         setExitingRowSnapshots(/** @param {any} [prev] @returns {any} */ (prev) => {
             if (!Array.isArray(prev) || prev.length === 0) return prev;
-            if (columnsChanged || rowSpanEnabled) return [];
-            const remaining = prev.filter(/** @param {any} [snap] @returns {any} */ (snap) => !centerRowLookup.has(snap.rowKey) && !activeSnapshotKeys.has(snap.rowKey));
+            if (prefersReducedMotion || columnsChanged || rowSpanEnabled) return [];
+            const remaining = prev.filter(/** @param {any} [snap] @returns {any} */ (snap) => !activeSnapshotKeys.has(snap.rowKey));
             return remaining.length === prev.length ? prev : remaining;
         });
+        if (prefersReducedMotion || columnsChanged || rowSpanEnabled) {
+            setCollapseHoldHeight(0);
+        }
 
         /** @param {string} childPath @returns {boolean} */
         const hasCollapsedVisibleAncestor = (childPath) => {
@@ -769,6 +948,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             const parts = childPath.split('|||');
             for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
                 const ancestorKey = parts.slice(0, depth).join('|||');
+                if (collapsedAtByPathRef.current.has(ancestorKey)) return true;
                 const ancestorRow = centerRowLookup.get(ancestorKey);
                 if (ancestorRow) {
                     const isExpanded = typeof ancestorRow.getIsExpanded === 'function'
@@ -780,84 +960,450 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             return false;
         };
 
-        // Capture genuinely collapsing child rows as an underlay behind sliding siblings (AG Grid FLIP).
-        // Require a collapsed visible ancestor so filtering, sorting, or dataset switches do not show stale ghosts.
-        if (
-            !isScrollingNow
+        /** @param {string} childPath @returns {boolean} */
+        const hasRecentlyExpandedAncestor = (childPath) => {
+            if (now - expandAllAtRef.current < 4000) return true;
+            if (!childPath || !childPath.includes('|||')) return false;
+            const parts = childPath.split('|||');
+            for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+                const ancestorKey = parts.slice(0, depth).join('|||');
+                const expandedAt = expandedAtByPathRef.current.get(ancestorKey);
+                if (expandedAt && now - expandedAt < 6000) return true;
+            }
+            return false;
+        };
+
+        // 3. Pre-compute unified batch timing across collapsing rows, expanding child sheets,
+        //    surviving siblings, skeleton-to-data fills, and bottom-pinned Grand Total so every
+        //    layer glides in exact lockstep.
+        const baseMotionReady = Boolean(
+            !prefersReducedMotion
+            && !isScrollingNow
             && !wasScrollingRef.current
             && !columnsChanged
             && !rowSpanEnabled
-            && hasMountedCenterRowsRef.current
             && scrollDelta < Math.max(12, rowHeight)
-            && currentModelCount < prevModelRowCountRef.current
-            && prevCommittedRowsRef.current.length > 0
-        ) {
-            const vanished = prevCommittedRowsRef.current
+        );
+        const layoutMotionEligible = Boolean(baseMotionReady && hasMountedCenterRowsRef.current);
+        const isInitialViewportMount = !hasMountedCenterRowsRef.current && prevTopByKeyRef.current.size === 0;
+        const skeletonFillEligible = Boolean(
+            baseMotionReady
+            && (prevSkeletonIndicesRef.current.size > 0 || isInitialViewportMount)
+        );
+        const isShrinkingVisually = (
+            rowMotionLayoutPlan.hiddenKeys.size > 0
+            || currentModelCount < prevModelRowCountRef.current
+            || effectiveVisualBodyHeight < prevVisualBodyHeightRef.current
+        );
+        const vanishedRows = (layoutMotionEligible && isShrinkingVisually && prevCommittedRowsRef.current.length > 0)
+            ? prevCommittedRowsRef.current
                 .filter(/** @param {any} [snap] @returns {any} */ (snap) => (
                     snap
                     && snap.depth > 0
-                    && !centerRowLookup.has(snap.rowKey)
                     && !activeSnapshotKeys.has(snap.rowKey)
                     && hasCollapsedVisibleAncestor(snap.rowPath)
                 ))
-                .slice(0, 24);
-            if (vanished.length > 0) {
-                if (exitUnderlayTimerRef.current) clearTimeout(exitUnderlayTimerRef.current);
-                setExitingRowSnapshots(vanished);
-                exitUnderlayTimerRef.current = setTimeout(() => {
-                    exitUnderlayTimerRef.current = null;
-                    setExitingRowSnapshots([]);
-                }, 215);
+                .slice(0, 24)
+            : [];
+        const vanishedSpanPx = vanishedRows.reduce(
+            /** @param {number} sum @param {any} snap */
+            (sum, snap) => sum + (Number(snap && snap.size) > 0 ? Number(snap.size) : rowHeight),
+            0
+        );
+
+        // When every visible row arrived from a full-viewport query (prevTopByKey empty),
+        // let buildSkeletonFillPlan materialize every row cleanly as one cohesive cascade
+        // instead of mixing depth-0 fade-in with depth>0 tucked sheet slides.
+        const expandRevealPlan = (
+            layoutMotionEligible
+            && committedRowSnapshots.length > 0
+            && prevTopByKeyRef.current.size > 0
+        )
+            ? buildExpandRevealPlan({
+                committedSnapshots: committedRowSnapshots,
+                prevTopByKey: prevTopByKeyRef.current,
+                hasRecentlyExpandedAncestor,
+                rowHeight,
+            })
+            : { revealByKey: new Map(), maxRevealTravelPx: 0 };
+
+        const skeletonFillPlan = (skeletonFillEligible && committedRowSnapshots.length > 0)
+            ? buildSkeletonFillPlan({
+                committedSnapshots: committedRowSnapshots,
+                prevSkeletonIndices: prevSkeletonIndicesRef.current,
+                prevTopByKey: prevTopByKeyRef.current,
+                expandRevealByKey: expandRevealPlan.revealByKey,
+                isInitialMount: isInitialViewportMount,
+            })
+            : new Map();
+
+        const bottomEl = bottomPinnedGroupRef.current;
+        const containerEl = parentRef && parentRef.current;
+        const hasBottomPinned = Boolean(bottomEl && containerEl && effectiveBottomRows.length > 0);
+        const newBottomLayoutRelTop = hasBottomPinned
+            ? computeBottomPinnedLayoutTop({
+                stickyHeaderHeight: effectiveStickyHeaderHeight,
+                topPinnedCount: effectiveTopRows.length,
+                bottomPinnedCount: effectiveBottomRows.length,
+                containerBodyHeight: effectiveContainerBodyHeight,
+                rowHeight,
+                scrollTop: currentScrollTop,
+                clientHeight: containerEl ? containerEl.clientHeight : 0,
+            })
+            : null;
+        const prevBottomLayoutRelTop = prevBottomPinnedRelTopRef.current;
+        const bottomLayoutDelta = (
+            hasBottomPinned
+            && typeof newBottomLayoutRelTop === 'number'
+            && typeof prevBottomLayoutRelTop === 'number'
+        )
+            ? (prevBottomLayoutRelTop - newBottomLayoutRelTop)
+            : 0;
+
+        let maxBatchShiftPx = Math.max(
+            Math.min(vanishedSpanPx, MAX_SHEET_TRAVEL_PX),
+            expandRevealPlan.maxRevealTravelPx,
+            Math.abs(bottomLayoutDelta) <= MAX_FLIP_DISTANCE_PX ? Math.abs(bottomLayoutDelta) : 0
+        );
+        if (layoutMotionEligible && committedRowSnapshots.length > 0) {
+            for (let i = 0; i < committedRowSnapshots.length; i += 1) {
+                const snap = committedRowSnapshots[i];
+                const prevTop = prevTopByKeyRef.current.get(snap.rowKey);
+                if (typeof prevTop === 'number') {
+                    const deltaAbs = Math.abs(prevTop - snap.top);
+                    if (deltaAbs >= 1 && deltaAbs <= MAX_FLIP_DISTANCE_PX && deltaAbs > maxBatchShiftPx) {
+                        maxBatchShiftPx = deltaAbs;
+                    }
+                }
+            }
+        }
+        const batchDurationMs = computeSlideDurationMs(maxBatchShiftPx);
+
+        if (vanishedRows.length > 0) {
+            if (exitUnderlayTimerRef.current) clearTimeout(exitUnderlayTimerRef.current);
+            const scrollEl = parentRef && parentRef.current;
+            const newTotalContentHeight = (
+                effectiveVisualBodyHeight
+                + effectiveStickyHeaderHeight
+                + ((effectiveTopRows.length + effectiveBottomRows.length) * rowHeight)
+            );
+            const wouldClampScroll = Boolean(
+                scrollEl
+                && scrollEl.scrollTop > 2
+                && newTotalContentHeight < (scrollEl.scrollTop + scrollEl.clientHeight)
+            );
+            const holdHeight = (wouldClampScroll && prevVisualBodyHeightRef.current > effectiveVisualBodyHeight)
+                ? prevVisualBodyHeightRef.current
+                : 0;
+            const exitShiftPx = Math.min(Math.max(vanishedSpanPx, 8), MAX_SHEET_TRAVEL_PX);
+            const stampedVanished = vanishedRows.map(/** @param {any} snap */ (snap) => ({
+                ...snap,
+                exitShiftPx,
+                exitDurationMs: batchDurationMs,
+            }));
+            setExitingRowSnapshots(stampedVanished);
+            setCollapseHoldHeight(holdHeight);
+            exitUnderlayTimerRef.current = setTimeout(() => {
+                exitUnderlayTimerRef.current = null;
+                setExitingRowSnapshots([]);
+                setCollapseHoldHeight(0);
+            }, batchDurationMs + 25);
+        }
+
+        // 4. Unified WAAPI FLIP + parent-anchored rigid-sheet expand reveal + 100ms fill crossfade
+        // Track only our own WAAPI handles so unrelated re-renders (setExitingRowSnapshots,
+        // pending transition clears, hover, server response settling) never cancel in-flight glides.
+        /** @param {any} anim @returns {boolean} */
+        const isAnimActive = (anim) => Boolean(
+            anim && (anim.playState === 'running' || anim.playState === 'pending')
+        );
+        /** @param {HTMLElement} node @returns {number | null} */
+        const readCurrentTranslateY = (node) => {
+            if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return null;
+            const computedTransform = window.getComputedStyle(node).transform;
+            if (!computedTransform || computedTransform === 'none') return null;
+            if (typeof DOMMatrix === 'function') {
+                const matrix = new DOMMatrix(computedTransform);
+                return Number.isFinite(matrix.m42) ? matrix.m42 : null;
+            }
+            const match = computedTransform.match(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,\s*([^)]+)\)/);
+            if (match) {
+                const parsed = Number(match[1]);
+                return Number.isFinite(parsed) ? parsed : null;
+            }
+            return null;
+        };
+
+        if (!layoutMotionEligible && !skeletonFillEligible) {
+            cancelTrackedMotionAnimations();
+        } else {
+            // Prune tracking entries for unmounted rows
+            activeFlipAnimByKeyRef.current.forEach((record, key) => {
+                if (!activeSnapshotKeys.has(key)) {
+                    if (record && record.anim && typeof record.anim.cancel === 'function') {
+                        record.anim.cancel();
+                    }
+                    activeFlipAnimByKeyRef.current.delete(key);
+                }
+            });
+            activeRevealAnimByKeyRef.current.forEach((record, key) => {
+                if (!activeSnapshotKeys.has(key)) {
+                    if (record && record.anim && typeof record.anim.cancel === 'function') {
+                        record.anim.cancel();
+                    }
+                    activeRevealAnimByKeyRef.current.delete(key);
+                }
+            });
+
+            if (committedRowSnapshots.length > 0) {
+                const revealOpacityDurationMs = Math.round(batchDurationMs * 0.72);
+                for (let i = 0; i < committedRowSnapshots.length; i += 1) {
+                    const snap = committedRowSnapshots[i];
+                    const el = rowNodeByKeyRef.current.get(snap.rowKey);
+                    if (!el || typeof el.animate !== 'function') continue;
+                    const innerEl = el.firstElementChild;
+
+                    const prevTop = layoutMotionEligible ? prevTopByKeyRef.current.get(snap.rowKey) : undefined;
+                    const revealSpec = layoutMotionEligible ? expandRevealPlan.revealByKey.get(snap.rowKey) : undefined;
+                    const fillSpec = skeletonFillPlan.get(snap.rowKey);
+                    if (typeof prevTop === 'number') {
+                        const deltaY = prevTop - snap.top;
+                        if (Math.abs(deltaY) >= 1 && Math.abs(deltaY) <= MAX_FLIP_DISTANCE_PX) {
+                            let fromTop = prevTop;
+                            const existingFlip = activeFlipAnimByKeyRef.current.get(snap.rowKey);
+                            if (existingFlip && isAnimActive(existingFlip.anim)) {
+                                const liveY = readCurrentTranslateY(el);
+                                if (typeof liveY === 'number') {
+                                    fromTop = liveY;
+                                }
+                                existingFlip.anim.cancel();
+                                activeFlipAnimByKeyRef.current.delete(snap.rowKey);
+                            }
+                            if (Math.abs(fromTop - snap.top) >= 1 && Math.abs(fromTop - snap.top) <= MAX_FLIP_DISTANCE_PX) {
+                                if (el.style) el.style.willChange = 'transform';
+                                const anim = el.animate(
+                                    [
+                                        { transform: `translate3d(0, ${fromTop}px, 0)` },
+                                        { transform: `translate3d(0, ${snap.top}px, 0)` },
+                                    ],
+                                    { duration: batchDurationMs, easing: ROW_MOTION_EASING }
+                                );
+                                const record = { anim, targetTop: snap.top, el, restoreZIndex: false };
+                                activeFlipAnimByKeyRef.current.set(snap.rowKey, record);
+                                const cleanup = () => {
+                                    if (activeFlipAnimByKeyRef.current.get(snap.rowKey) === record) {
+                                        activeFlipAnimByKeyRef.current.delete(snap.rowKey);
+                                        if (el.style) el.style.willChange = '';
+                                    }
+                                };
+                                anim.onfinish = cleanup;
+                                anim.oncancel = cleanup;
+                            }
+                        }
+                    } else if (revealSpec) {
+                        // Parent-anchored rigid-sheet unfold: wrapper glides synchronously with
+                        // descending siblings (zIndex: 2 behind opaque zIndex: 4 parent) while
+                        // inner row materializes smoothly without stagger drift.
+                        const existingFlip = activeFlipAnimByKeyRef.current.get(snap.rowKey);
+                        if (existingFlip && existingFlip.anim && typeof existingFlip.anim.cancel === 'function') {
+                            existingFlip.anim.cancel();
+                        }
+                        if (el.style) {
+                            el.style.zIndex = '2';
+                            el.style.willChange = 'transform';
+                        }
+                        const slideAnim = el.animate(
+                            [
+                                { transform: `translate3d(0, ${revealSpec.fromTop}px, 0)` },
+                                { transform: `translate3d(0, ${revealSpec.toTop}px, 0)` },
+                            ],
+                            { duration: batchDurationMs, easing: ROW_MOTION_EASING }
+                        );
+                        const slideRecord = { anim: slideAnim, targetTop: revealSpec.toTop, el, restoreZIndex: true };
+                        activeFlipAnimByKeyRef.current.set(snap.rowKey, slideRecord);
+                        const cleanupSlide = () => {
+                            if (activeFlipAnimByKeyRef.current.get(snap.rowKey) === slideRecord) {
+                                activeFlipAnimByKeyRef.current.delete(snap.rowKey);
+                                if (el.style) {
+                                    el.style.zIndex = '4';
+                                    el.style.willChange = '';
+                                }
+                            }
+                        };
+                        slideAnim.onfinish = cleanupSlide;
+                        slideAnim.oncancel = cleanupSlide;
+
+                        const targetEl = /** @type {HTMLElement} */ ((innerEl && typeof innerEl.animate === 'function') ? innerEl : el);
+                        const prevReveal = activeRevealAnimByKeyRef.current.get(snap.rowKey);
+                        if (prevReveal && prevReveal.anim && typeof prevReveal.anim.cancel === 'function') {
+                            prevReveal.anim.cancel();
+                        }
+                        if (targetEl.style) targetEl.style.willChange = 'opacity';
+                        const fadeAnim = targetEl.animate(
+                            [{ opacity: 0 }, { opacity: 1 }],
+                            { duration: revealOpacityDurationMs, easing: 'ease-out', fill: 'backwards' }
+                        );
+                        const fadeRecord = { anim: fadeAnim, targetEl };
+                        activeRevealAnimByKeyRef.current.set(snap.rowKey, fadeRecord);
+                        const cleanupFade = () => {
+                            if (activeRevealAnimByKeyRef.current.get(snap.rowKey) === fadeRecord) {
+                                activeRevealAnimByKeyRef.current.delete(snap.rowKey);
+                                if (targetEl.style) targetEl.style.willChange = '';
+                            }
+                        };
+                        fadeAnim.onfinish = cleanupFade;
+                        fadeAnim.oncancel = cleanupFade;
+                    } else if (fillSpec) {
+                        // Smooth query/skeleton arrival: inner row settles gently into its final
+                        // slot with a tight top-to-bottom cascade without disturbing outer wrapper Y.
+                        const targetEl = /** @type {HTMLElement} */ ((innerEl && typeof innerEl.animate === 'function') ? innerEl : el);
+                        const prevReveal = activeRevealAnimByKeyRef.current.get(snap.rowKey);
+                        if (prevReveal && prevReveal.anim && typeof prevReveal.anim.cancel === 'function') {
+                            prevReveal.anim.cancel();
+                        }
+                        const canTranslateInner = Boolean(innerEl && targetEl === innerEl);
+                        if (targetEl.style) {
+                            targetEl.style.willChange = canTranslateInner ? 'transform, opacity' : 'opacity';
+                        }
+                        const keyframes = canTranslateInner
+                            ? [
+                                { opacity: 0, transform: `translate3d(0, ${fillSpec.offsetYPx}px, 0)` },
+                                { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+                            ]
+                            : [{ opacity: 0 }, { opacity: 1 }];
+                        const anim = targetEl.animate(
+                            keyframes,
+                            {
+                                duration: fillSpec.durationMs,
+                                delay: fillSpec.delayMs,
+                                easing: ROW_MOTION_EASING,
+                                fill: 'backwards',
+                            }
+                        );
+                        const record = { anim, targetEl };
+                        activeRevealAnimByKeyRef.current.set(snap.rowKey, record);
+                        const cleanup = () => {
+                            if (activeRevealAnimByKeyRef.current.get(snap.rowKey) === record) {
+                                activeRevealAnimByKeyRef.current.delete(snap.rowKey);
+                                if (targetEl.style) targetEl.style.willChange = '';
+                            }
+                        };
+                        anim.onfinish = cleanup;
+                        anim.oncancel = cleanup;
+                    }
+                }
             }
         }
 
-        prevCommittedRowsRef.current = committedRowSnapshots;
+        // 4b. GPU WAAPI FLIP (or smooth post-query fade-in) for bottom-pinned rows (Grand Total).
+        if (hasBottomPinned && bottomEl && typeof newBottomLayoutRelTop === 'number') {
+            if (
+                layoutMotionEligible
+                && typeof prevBottomLayoutRelTop === 'number'
+                && typeof bottomEl.animate === 'function'
+            ) {
+                if (Math.abs(bottomLayoutDelta) >= 1.5 && Math.abs(bottomLayoutDelta) <= MAX_FLIP_DISTANCE_PX) {
+                    const activeBottomAnim = activeBottomFlipAnimRef.current;
+                    const currentBottomTransformY = isAnimActive(activeBottomAnim)
+                        ? (readCurrentTranslateY(bottomEl) ?? 0)
+                        : 0;
+                    const fromOffset = (prevBottomLayoutRelTop + currentBottomTransformY) - newBottomLayoutRelTop;
+                    if (activeBottomAnim && typeof activeBottomAnim.cancel === 'function') {
+                        activeBottomAnim.cancel();
+                        activeBottomFlipAnimRef.current = null;
+                    }
+                    if (Math.abs(fromOffset) >= 1.5 && Math.abs(fromOffset) <= MAX_FLIP_DISTANCE_PX) {
+                        if (bottomEl.style) bottomEl.style.willChange = 'transform';
+                        const anim = bottomEl.animate(
+                            [
+                                { transform: `translate3d(0, ${fromOffset}px, 0)` },
+                                { transform: 'translate3d(0, 0, 0)' },
+                            ],
+                            { duration: batchDurationMs, easing: ROW_MOTION_EASING }
+                        );
+                        activeBottomFlipAnimRef.current = anim;
+                        const cleanup = () => {
+                            if (activeBottomFlipAnimRef.current === anim) {
+                                activeBottomFlipAnimRef.current = null;
+                                if (bottomEl.style) bottomEl.style.willChange = '';
+                            }
+                        };
+                        anim.onfinish = cleanup;
+                        anim.oncancel = cleanup;
+                    }
+                }
+            } else if (
+                skeletonFillEligible
+                && prevBottomLayoutRelTop === null
+                && skeletonFillPlan.size > 0
+                && typeof bottomEl.animate === 'function'
+            ) {
+                const activeBottomAnim = activeBottomFlipAnimRef.current;
+                if (activeBottomAnim && typeof activeBottomAnim.cancel === 'function') {
+                    activeBottomAnim.cancel();
+                    activeBottomFlipAnimRef.current = null;
+                }
+                if (bottomEl.style) bottomEl.style.willChange = 'opacity';
+                const anim = bottomEl.animate(
+                    [{ opacity: 0 }, { opacity: 1 }],
+                    { duration: SKELETON_FILL_DURATION_MS, easing: 'ease-out', fill: 'backwards' }
+                );
+                activeBottomFlipAnimRef.current = anim;
+                const cleanup = () => {
+                    if (activeBottomFlipAnimRef.current === anim) {
+                        activeBottomFlipAnimRef.current = null;
+                        if (bottomEl.style) bottomEl.style.willChange = '';
+                    }
+                };
+                anim.onfinish = cleanup;
+                anim.oncancel = cleanup;
+            }
+            prevBottomPinnedRelTopRef.current = newBottomLayoutRelTop;
+        } else {
+            prevBottomPinnedRelTopRef.current = null;
+        }
+
+        // 5. Commit tracking state for the next frame
+        const nextTopByKey = new Map();
+        const nextSkeletonIndices = new Set();
+        committedRowSnapshots.forEach(/** @param {any} [snap] */ (snap) => {
+            nextTopByKey.set(snap.rowKey, snap.top);
+        });
+        if (serverSide) {
+            const freshIndexSet = new Set();
+            committedRowSnapshots.forEach(/** @param {any} [snap] */ (snap) => {
+                if (snap && typeof snap.virtualIndex === 'number') {
+                    freshIndexSet.add(snap.virtualIndex);
+                }
+            });
+            virtualRows.forEach(/** @param {any} [virtualRow] */ (virtualRow) => {
+                if (!virtualRow || pinnedVirtualIndexSet.has(virtualRow.index)) return;
+                if (freshIndexSet.has(virtualRow.index)) return;
+                const resolvedCurrent = resolveVirtualRow(virtualRow.index);
+                const resolvedKey = resolvedCurrent && resolvedCurrent.id ? String(resolvedCurrent.id) : null;
+                if (resolvedKey && rowMotionLayoutPlan.hiddenKeys.has(resolvedKey)) {
+                    // Optimistically hidden collapsed descendant — not a missing skeleton slot.
+                    return;
+                }
+                nextSkeletonIndices.add(virtualRow.index);
+            });
+        }
+
+        prevTopByKeyRef.current = nextTopByKey;
+        if (committedRowSnapshots.length > 0 || currentModelCount === 0) {
+            prevCommittedRowsRef.current = committedRowSnapshots;
+            prevExpandedByPathRef.current = nextExpandedByPath;
+        }
+        prevVisualBodyHeightRef.current = effectiveVisualBodyHeight;
+        prevSkeletonIndicesRef.current = nextSkeletonIndices;
         prevColumnSignatureRef.current = columnStructureSignature;
         prevScrollTopRef.current = currentScrollTop;
         prevModelRowCountRef.current = currentModelCount;
-
         wasScrollingRef.current = isScrollingNow;
-        if (effectiveCenterRows.length > 0) {
+        if (committedRowSnapshots.length > 0 || effectiveCenterRows.length > 0) {
             hasMountedCenterRowsRef.current = true;
         }
-        // Prune rows that were collapsed or removed so re-expanding them later
-        // plays the reveal animation cleanly.
-        knownVisibleChildRowIdsRef.current.forEach((rowKey) => {
-            if (!centerRowLookup.has(rowKey)) {
-                knownVisibleChildRowIdsRef.current.delete(rowKey);
-                newlyRevealedUntilByKeyRef.current.delete(rowKey);
-            }
-        });
-        if (isScrollingNow) {
-            newlyRevealedUntilByKeyRef.current.clear();
-            if (revealClearTimerRef.current) {
-                clearTimeout(revealClearTimerRef.current);
-                revealClearTimerRef.current = null;
-            }
-            return;
-        }
-        const now = Date.now();
-        let maxExpiresAt = 0;
-        newlyRevealedUntilByKeyRef.current.forEach((meta, rowKey) => {
-            if (!meta || meta.expiresAt <= now) {
-                newlyRevealedUntilByKeyRef.current.delete(rowKey);
-            } else if (meta.expiresAt > maxExpiresAt) {
-                maxExpiresAt = meta.expiresAt;
-            }
-        });
-        if (maxExpiresAt > now) {
-            if (revealClearTimerRef.current) clearTimeout(revealClearTimerRef.current);
-            revealClearTimerRef.current = setTimeout(() => {
-                revealClearTimerRef.current = null;
-                const cutoff = Date.now();
-                newlyRevealedUntilByKeyRef.current.forEach((meta, key) => {
-                    if (!meta || meta.expiresAt <= cutoff) {
-                        newlyRevealedUntilByKeyRef.current.delete(key);
-                    }
-                });
-            }, Math.max(16, maxExpiresAt - now + 20));
-        }
-    }, [rowVirtualizer && rowVirtualizer.isScrolling, effectiveCenterRows, committedRowSnapshots, columnStructureSignature, rowSpanEnabled, rowCount, centerRowLookup, rowHeight, serverSide, parentRef]);
+    });
     /** @type {(...args: any[]) => any} */
     const getCellRenderOptions = React.useCallback((column, renderOptions = {}) => {
         /** @type {any} */
@@ -943,6 +1489,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             <>
                 {leftPinnedSectionStyle && (
                     <div
+                        data-pinned-edge={disablePinnedColumnStickiness ? undefined : 'left'}
                         style={disablePinnedColumnStickiness
                             ? { display: 'flex', width: leftPinnedWidth, minWidth: leftPinnedWidth, flexShrink: 0, position: 'relative', background: `var(--sp-row-current-bg, ${rowBackground})`, boxShadow: 'none' }
                             : { ...leftPinnedSectionStyle, background: `var(--sp-row-current-bg, ${rowBackground})` }
@@ -983,17 +1530,21 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         const stickyOffset = isTop ? (stickyHeaders ? effectiveStickyHeaderHeight : 0) : 0;
         /** @type {any} */
         const groupHeight = rowsForPin.length * rowHeight;
+        const opaqueSurfaceBg = theme.surfaceBg || theme.background || '#FFFFFF';
 
         return (
             <div
+                ref={isTop ? undefined : bottomPinnedGroupRef}
                 style={{
                     position: 'sticky',
                     top: isTop ? stickyOffset : undefined,
                     bottom: isTop ? undefined : 0,
                     zIndex: 80,
+                    isolation: 'isolate',
+                    backgroundColor: opaqueSurfaceBg,
                     display: 'flex',
                     width: `${totalLayoutWidth}px`,
-                    minWidth: `${totalLayoutWidth}px`,
+                    minWidth: '100%',
                     height: `${groupHeight}px`,
                     flexDirection: 'column'
                 }}
@@ -1013,7 +1564,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                         : `1px solid ${gridBorders.rowBorderColor}`;
                     /** @type {any} */
                     const extraShadow = isEdgeRow
-                        ? (isTop ? `0 2px 4px -2px ${theme.border}80` : `0 -4px 6px -1px rgba(15,23,42,0.06)`)
+                        ? (isTop ? `0 2px 4px -2px ${withAlpha(theme.border, 0.5, 'rgba(148,163,184,0.35)')}` : '0 -4px 6px -1px rgba(15,23,42,0.06)')
                         : 'none';
                     return (
                         <div
@@ -1026,7 +1577,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                 minWidth: `${totalLayoutWidth}px`,
                                 height: rowHeight,
                                 '--sp-row-current-bg': rowBackground,
-                                background: 'var(--sp-row-current-bg)',
+                                background: `linear-gradient(var(--sp-row-current-bg, ${rowBackground}), var(--sp-row-current-bg, ${rowBackground})), ${opaqueSurfaceBg}`,
                                 borderBottom: rowBorderBottom,
                                 boxShadow: extraShadow,
                             }}
@@ -1052,7 +1603,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             <div
                 ref={parentRef}
                 data-pivot-scroll-container="true"
-                style={{...styles.scrollContainer, overflow: 'auto'}}
+                style={{...styles.scrollContainer, overflow: 'auto', '--sp-left-pinned-width': `${leftPinnedWidth}px`}}
                 onKeyDown={handleKeyDown}
                 tabIndex={0}
                 role="grid"
@@ -1062,17 +1613,19 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                  <div style={{
                      width: `${totalLayoutWidth}px`,
                      minWidth:'100%',
-                     height: `${virtualBodyHeight + effectiveStickyHeaderHeight + (effectiveTopRows.length + effectiveBottomRows.length) * rowHeight}px`,
+                     height: `${effectiveContainerBodyHeight + effectiveStickyHeaderHeight + (effectiveTopRows.length + effectiveBottomRows.length) * rowHeight}px`,
                      position: 'relative',
-                     borderRadius: `0 0 ${theme.radius || '16px'} ${theme.radius || '16px'}`,
+                     borderRadius: `0 0 ${theme.radius || '8px'} ${theme.radius || '8px'}`,
                      overflow: 'visible',
-                     transition: disableRowMotion ? 'none' : 'height 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))'
                  }}>
                      {/* Sticky Header */}
                      <div
                          ref={stickyHeaderRef}
+                         data-pivot-sticky-header="true"
                          style={{
                              ...styles.headerSticky,
+                             background: `linear-gradient(${theme.headerBg}, ${theme.headerBg}), ${theme.surfaceBg || theme.background || '#FFFFFF'}`,
+                             isolation: 'isolate',
                              width: 'fit-content',
                              display: 'flex',
                              position: stickyHeaders ? 'sticky' : 'relative',
@@ -1081,7 +1634,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                          role="rowgroup"
                      >
                          {/* Left Section */}
-                         <div style={{position: 'sticky', left: 0, zIndex: 4, background: theme.headerBg}}>
+                         <div data-pinned-edge={leftPinnedWidth > 0 ? 'left' : undefined} style={{position: 'sticky', left: 0, zIndex: 4, background: `linear-gradient(${theme.headerBg}, ${theme.headerBg}), ${theme.surfaceBg || theme.background || '#FFFFFF'}`}}>
                              {leftHeaderGroups.map(/** @param {any} [group] @param {any} [level] @returns {any} */ (group, level) => (
                                  <div key={group.id} data-header-level={level} style={headerRowStyle}>
                                      {group.headers.map(/** @param {any} [header] @returns {any} */ (header) => renderHeaderCell(
@@ -1098,7 +1651,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                  </div>
                              ))}
                              {showFloatingFilters && (
-                                 <div style={{...headerRowStyle, background: theme.background}}>
+                                 <div style={floatingFilterRowStyle}>
                                      {leftCols.map(/** @param {any} [column] @param {any} [idx] @returns {any} */ (column, idx) => (
                                          <div key={column.id} style={{...styles.headerCell, width: column.getSize(), height: effectiveHeaderHeight, padding: '2px 4px', borderRight: idx === leftCols.length - 1 ? `1px solid ${gridBorders.pinnedColumnBorderColor}` : 'none'}}>
                                              {column.id !== 'hierarchy' && (
@@ -1171,14 +1724,14 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                                  background: 'var(--pivot-loading-header-gradient, linear-gradient(90deg, rgba(233,243,255,0.92) 0%, rgba(193,220,255,0.98) 48%, rgba(233,243,255,0.92) 100%))',
                                                  backgroundSize: '220% 100%',
                                                  border: '1px solid var(--pivot-loading-border, rgba(153, 187, 238, 0.5))',
-                                                 animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
+                                                 animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite'
                                              }}
                                          />
                                      ))}
                                  </div>
                              )}
                              {showFloatingFilters && (
-                                 <div style={{...headerRowStyle, background: theme.background}}>
+                                 <div style={floatingFilterRowStyle}>
                                      <div style={beforeSpacerStyle} />
                                      {virtualCenterCols.map(/** @param {any} [virtualCol] @returns {any} */ virtualCol => {
                                          const column = centerCols[virtualCol.index];
@@ -1208,7 +1761,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                          </div>
 
                          {/* Right Section */}
-                         <div style={{position: 'sticky', right: 0, zIndex: 4, background: theme.headerBg}}>
+                         <div style={{position: 'sticky', right: 0, zIndex: 4, background: `linear-gradient(${theme.headerBg}, ${theme.headerBg}), ${theme.surfaceBg || theme.background || '#FFFFFF'}`}}>
                              {rightHeaderGroups.map(/** @param {any} [group] @param {any} [level] @returns {any} */ (group, level) => (
                                  <div key={group.id} data-header-level={level} style={headerRowStyle}>
                                      {group.headers.map(/** @param {any} [header] @returns {any} */ (header) => renderHeaderCell(
@@ -1225,7 +1778,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                  </div>
                              ))}
                              {showFloatingFilters && (
-                                 <div style={{...headerRowStyle, background: theme.background}}>
+                                 <div style={floatingFilterRowStyle}>
                                      {rightCols.map(/** @param {any} [column] @param {any} [idx] @returns {any} */ (column, idx) => (
                                          <div key={column.id} style={{...styles.headerCell, width: column.getSize(), height: effectiveHeaderHeight, padding: '2px 4px', borderLeft: idx === 0 ? `1px solid ${gridBorders.pinnedColumnBorderColor}` : 'none'}}>
                                              {column.id !== 'hierarchy' && (
@@ -1254,6 +1807,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                     {stickyTreeRow && (() => {
                         /** @type {any} */
                         const stickyRowBg = getRowLevelBackground(stickyTreeRow);
+                        const opaqueSurfaceBg = theme.surfaceBg || theme.background || '#FFFFFF';
                         return (
                         <div
                             role="row"
@@ -1262,14 +1816,15 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                 position: 'sticky',
                                 top: `${(stickyHeaders ? effectiveStickyHeaderHeight : 0) + (effectiveTopRows.length * rowHeight)}px`,
                                 zIndex: 79,
+                                isolation: 'isolate',
                                 display: 'flex',
                                 width: `${totalLayoutWidth}px`,
-                                minWidth: `${totalLayoutWidth}px`,
+                                minWidth: '100%',
                                 height: `${rowHeight}px`,
                                 '--sp-row-current-bg': stickyRowBg,
-                                background: 'var(--sp-row-current-bg)',
+                                background: `linear-gradient(var(--sp-row-current-bg, ${stickyRowBg}), var(--sp-row-current-bg, ${stickyRowBg})), ${opaqueSurfaceBg}`,
                                 borderBottom: `1px solid ${gridBorders.rowBorderColor}`,
-                                boxShadow: `0 2px 4px -2px ${theme.border}80`,
+                                boxShadow: `0 2px 4px -2px ${withAlpha(theme.border, 0.5, 'rgba(148,163,184,0.35)')}`,
                             }}
                         >
                             {renderRowSections(
@@ -1310,7 +1865,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                          background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
                                          backgroundSize: '220% 100%',
                                          border: '1px solid var(--pivot-loading-border, rgba(153, 187, 238, 0.5))',
-                                         animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
+                                         animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite'
                                      }}
                                  />
                              ))}
@@ -1345,8 +1900,9 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                          width: '100%',
                                          height: '100%',
                                          '--sp-row-current-bg': snap.rowBg,
+                                         '--sp-exit-shift': `-${snap.exitShiftPx || 8}px`,
                                          background: 'var(--sp-row-current-bg)',
-                                         animation: 'pivot-row-exit 200ms cubic-bezier(0.22, 1, 0.36, 1) forwards',
+                                         animation: `pivot-row-exit ${snap.exitDurationMs || 220}ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) forwards`,
                                      }}
                                  >
                                      {renderRowSections(snap.row, snap.displayRowIndex, true, {
@@ -1360,13 +1916,11 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                      })}
 
                      {/* Center Virtualized Rows */}
-                     {(() => {
-                         const nowMs = Date.now();
-                         let revealBatchIndex = 0;
-                         return virtualRows.map(/** @param {any} [virtualRow] @returns {any} */ virtualRow => {
+                     {virtualRows.map(/** @param {any} [virtualRow] @returns {any} */ virtualRow => {
                           const topOffset = effectiveBodyRowsTopOffset;
+                          const offsetDelta = rowMotionLayoutPlan.topOffsetDeltaByIndex.get(virtualRow.index) || 0;
                           /** @type {any} */
-                          const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + topOffset;
+                          const adjustedTop = virtualRow.start - (getPinnedRowsBefore(virtualRow.index) * rowHeight) + topOffset + offsetDelta;
 
                           /** @type {any} */
                           let row;
@@ -1392,7 +1946,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                             background: defaultRowBg,
                                         }}>
                                             {renderSkeletonSections(defaultRowBg)}
-                                        </div>                                 );
+                                        </div>
+                                 );
                              }
 
                              if (
@@ -1464,29 +2019,9 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                           const stableRowKey = (row && row.id)
                               ? String(row.id)
                               : String(virtualRow.index);
-                          /** @type {any} */
-                          const isChildRow = Boolean((row.original && row.original.depth > 0) || row.depth > 0);
-                          if (isChildRow) {
-                              if (isScrollingNowForMotion || wasScrollingRef.current || !hasMountedCenterRowsRef.current) {
-                                  knownVisibleChildRowIdsRef.current.add(stableRowKey);
-                                  newlyRevealedUntilByKeyRef.current.delete(stableRowKey);
-                              } else if (!knownVisibleChildRowIdsRef.current.has(stableRowKey)) {
-                                  knownVisibleChildRowIdsRef.current.add(stableRowKey);
-                                  const delayMs = Math.min(revealBatchIndex * 18, 90);
-                                  revealBatchIndex += 1;
-                                  newlyRevealedUntilByKeyRef.current.set(stableRowKey, { delayMs, expiresAt: nowMs + 340 });
-                              }
+                          if (rowMotionLayoutPlan.hiddenKeys.has(stableRowKey)) {
+                              return null;
                           }
-                          const revealMeta = newlyRevealedUntilByKeyRef.current.get(stableRowKey);
-                          /** @type {any} */
-                          const shouldAnimateRowReveal = Boolean(
-                              isChildRow &&
-                              !isScrollingNowForMotion &&
-                              !wasScrollingRef.current &&
-                              revealMeta &&
-                              nowMs < revealMeta.expiresAt
-                          );
-                          const revealDelayMs = revealMeta ? revealMeta.delayMs : 0;
                           /** @type {any} */
                           const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
 
@@ -1503,10 +2038,12 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                           const transitionPhase = (pendingRowTransitions && typeof pendingRowTransitions.get === 'function')
                               ? pendingRowTransitions.get(transitionRowPath)
                               : null;
+                          const treeIndentPx = Number(theme.treeIndent) > 0 ? Number(theme.treeIndent) : 24;
 
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
+                                      ref={(el) => registerRowNode(stableRowKey, el)}
                                       style={rowSpanEnabled ? {
                                           position: 'absolute',
                                           top: `${adjustedTop}px`,
@@ -1520,8 +2057,9 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                           width: `${totalLayoutWidth}px`,
                                           height: virtualRow.size,
                                           transform: `translate3d(0, ${adjustedTop}px, 0)`,
-                                          zIndex: shouldAnimateRowReveal ? 2 : 4,
-                                          transition: disableRowMotion ? 'none' : 'transform 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                                          zIndex: 4,
+                                          opacity: 1,
+                                          transition: disableRowMotion ? 'none' : 'opacity var(--sp-dur-fast, 140ms) ease',
                                       }}
                                   >
                                   <div
@@ -1541,8 +2079,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                       ...(isTotalVirtualRow && theme.totalBorder ? {
                                           borderBottom: String(theme.totalBorder).includes(' ') ? theme.totalBorder : `1px solid ${theme.totalBorder}`,
                                       } : {}),
-                                      transition: disableRowMotion ? 'none' : 'background-color 160ms ease',
-                                      animation: shouldAnimateRowReveal ? `pivot-row-reveal 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) ${revealDelayMs}ms both` : undefined
+                                      transition: disableRowMotion ? 'none' : 'background-color var(--sp-dur-fast, 140ms) ease',
                                    }}>
                                       {renderRowSections(row, displayRowIndex, true, {
                                           rowBackground: rowBg,
@@ -1560,7 +2097,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                                   height: '2px',
                                                   overflow: 'hidden',
                                                   pointerEvents: 'none',
-                                                  zIndex: 85,
+                                                  zIndex: 6,
                                                   background: withAlpha(theme.primary, 0.14, 'rgba(79,70,229,0.14)'),
                                               }}
                                           >
@@ -1568,8 +2105,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                                   style={{
                                                       width: '36%',
                                                       height: '100%',
-                                                      background: `linear-gradient(90deg, transparent, ${theme.primary || '#4F46E5'}, transparent)`,
-                                                      animation: 'pivot-hairline-sweep 900ms cubic-bezier(0.4, 0, 0.2, 1) infinite',
+                                                      background: `linear-gradient(90deg, transparent, ${theme.primary || 'var(--sp-primary, #4F46E5)'}, transparent)`,
+                                                      animation: 'pivot-hairline-sweep 900ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) infinite',
                                                   }}
                                               />
                                           </div>
@@ -1583,15 +2120,15 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                           style={{
                                               ...transitionLoaderStyle,
                                               transform: `translate3d(0, ${adjustedTop + virtualRow.size}px, 0)`,
-                                              paddingLeft: `${28 + ((rowDepthValue + 1) * 18)}px`,
+                                              paddingLeft: `${28 + ((rowDepthValue + 1) * treeIndentPx)}px`,
                                           }}
                                       >
-                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: theme.primary || '#4F46E5' }}>
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: theme.primary || 'var(--sp-primary, #4F46E5)' }}>
                                               <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out infinite' }} />
                                               <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out 140ms infinite' }} />
                                               <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'currentColor', animation: 'pivot-wave-dot 840ms ease-in-out 280ms infinite' }} />
                                           </span>
-                                          <span style={{ fontSize: '11.5px', fontWeight: 600, color: theme.primary || '#4F46E5' }}>
+                                          <span style={{ fontSize: 'var(--sp-fs-sm, 11.5px)', fontWeight: 600, color: theme.primary || 'var(--sp-primary, #4F46E5)' }}>
                                               Loading breakdown…
                                           </span>
                                           <span style={{
@@ -1607,7 +2144,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                                   inset: 0,
                                                   width: '45%',
                                                   borderRadius: '999px',
-                                                  background: theme.primary || '#4F46E5',
+                                                  background: theme.primary || 'var(--sp-primary, #4F46E5)',
                                                   animation: 'pivot-hairline-sweep 950ms ease-in-out infinite',
                                               }} />
                                           </span>
@@ -1630,17 +2167,15 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                   )}
                               </React.Fragment>
                           );
-                      });
-                     })()}
+                      })}
 
                      {/* Spacer for all bottom-pinned rows.
                           Virtual rows use position:absolute (out of flow), so without this spacer
                           bottom sticky rows never reach their sticky activation point. */}
                      {effectiveBottomRows.length > 0 && (
                          <div style={{
-                             height: `${virtualBodyHeight}px`,
+                             height: `${effectiveContainerBodyHeight}px`,
                              flexShrink: 0,
-                             transition: disableRowMotion ? 'none' : 'height 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))'
                          }} />
                      )}
                     {/* Bottom Pinned Rows */}
@@ -1680,7 +2215,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                         pointerEvents: 'none',
                         background: 'var(--pivot-loading-progress-gradient, linear-gradient(90deg, rgba(75,139,245,0) 0%, rgba(75,139,245,0.9) 45%, rgba(75,139,245,0) 100%))',
                         backgroundSize: '220% 100%',
-                        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
+                        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite'
                     }}
                 />
             )}

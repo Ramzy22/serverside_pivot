@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "serverside-pivot"
 version = "0.0.96"
-description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
+description = "Enterprise server-side pivot table and 2D virtualized analytics grid for Python, Dash, and Streamlit powered by DuckDB, PyArrow, and Ibis"
 readme = "README_PYPI.md"
 # Keep the table form until the minimum supported setuptools can parse the
 # SPDX-string form consistently.  The isolated release build upgrades it.
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Topic :: Software Development :: User Interfaces",
 ]
-keywords = ["dash", "pivot", "tanstack", "table", "analytics"]
+keywords = ["pivot", "pivot-table", "analytics", "dash", "streamlit", "duckdb", "ibis", "pyarrow", "tanstack"]
 requires-python = ">=3.10"
 dependencies = [
     "dash>=2.0.0",

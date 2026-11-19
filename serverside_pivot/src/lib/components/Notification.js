@@ -4,12 +4,12 @@ import Icons from '../utils/Icons';
 /** @param {any} p0 @returns {any} */
 const Notification = ({ message, type, onClose }) => {
     const accentColor = type === 'error'
-        ? '#ef4444'
+        ? 'var(--sp-danger, #ef4444)'
         : type === 'warning'
-            ? '#f59e0b'
+            ? 'var(--sp-warning, #f59e0b)'
             : type === 'success'
-                ? '#10b981'
-                : 'var(--sp-primary, #0a84ff)';
+                ? 'var(--sp-success, #10b981)'
+                : 'var(--sp-primary, #4F46E5)';
     return (
         <div role="status" aria-live="polite" className="sp-toast-surface" style={{
             position: 'fixed',
@@ -17,9 +17,9 @@ const Notification = ({ message, type, onClose }) => {
             left: '50%',
             transform: 'translateX(-50%)',
             padding: '10px 14px 10px 16px',
-            borderRadius: '999px',
+            borderRadius: 'var(--sp-radius-pill, 999px)',
             color: 'var(--sp-text, #f8fafc)',
-            fontSize: '13px',
+            fontSize: 'var(--sp-fs-base, 13px)',
             fontWeight: 500,
             fontFamily: 'var(--sp-font-sans, system-ui, -apple-system, sans-serif)',
             background: 'var(--sp-glass-bg, rgba(28, 28, 30, 0.90))',
@@ -27,7 +27,7 @@ const Notification = ({ message, type, onClose }) => {
             WebkitBackdropFilter: 'blur(18px) saturate(180%)',
             border: '1px solid var(--sp-glass-border, rgba(255, 255, 255, 0.14))',
             boxShadow: 'var(--sp-shadow, 0 12px 32px rgba(0,0,0,0.28))',
-            animation: 'pivot-toast-enter 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both',
+            animation: 'pivot-toast-enter var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both',
             zIndex: 10000,
             display: 'flex',
             alignItems: 'center',
@@ -43,7 +43,7 @@ const Notification = ({ message, type, onClose }) => {
                 height: '8px',
                 borderRadius: '999px',
                 background: accentColor,
-                boxShadow: `0 0 0 3px ${type === 'error' ? 'rgba(239,68,68,0.16)' : type === 'warning' ? 'rgba(245,158,11,0.16)' : 'rgba(10,132,255,0.16)'}`,
+                boxShadow: `0 0 0 3px ${type === 'error' ? 'rgba(239,68,68,0.16)' : type === 'warning' ? 'rgba(245,158,11,0.16)' : type === 'success' ? 'rgba(16,185,129,0.16)' : 'var(--sp-focus-ring, rgba(79,70,229,0.18))'}`,
                 flexShrink: 0,
             }} />
             <span style={{ flex: 1, lineHeight: 1.35 }}>{message}</span>

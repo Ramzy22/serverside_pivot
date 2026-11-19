@@ -25,6 +25,14 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
     // Version to force re-renders when cache updates
     /** @type {[any, (...args: any[]) => any]} */
     const [cacheVersion, setCacheVersion] = useState(0);
+    /** @type {[any, (...args: any[]) => any]} */
+    const [blockStructureVersion, setBlockStructureVersion] = useState(0);
+
+    /** @type {(...args: any[]) => any} */
+    const bumpStructureAndDataVersion = useCallback(() => {
+        setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
+        setBlockStructureVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
+    }, []);
 
     // Current request version to handle race conditions
     /** @type {any} */
@@ -86,8 +94,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
                 changed = true;
             }
         }
-        if (changed) setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, [parseKey]);
+        if (changed) bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion, parseKey]);
 
     /** @type {(...args: any[]) => any} */
     const getBlock = useCallback((blockIndex, epoch = currentEpochRef.current) => {
@@ -190,10 +198,10 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
 
         // Force an immediate repaint so loading placeholders appear as soon as
         // a request is queued (not only when the response arrives).
-        setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
+        bumpStructureAndDataVersion();
         
         return version;
-    }, [evictOverflow, makeKey]);
+    }, [bumpStructureAndDataVersion, evictOverflow, makeKey]);
 
     /**
      * Store loaded rows into a block
@@ -246,8 +254,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         evictOverflow(epoch);
         
         // Trigger update
-        setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, [evictOverflow, getRowMergeKey, makeKey]);
+        bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion, evictOverflow, getRowMergeKey, makeKey]);
 
     /**
      * Clear the entire cache (e.g. on filter/sort change)
@@ -260,8 +268,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
             endBlock: null,
             buffer: 0
         };
-        setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, []);
+        bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion]);
 
     /**
      * Hard-delete all blocks at or after blockIndex.
@@ -278,8 +286,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
                 changed = true;
             }
         }
-        if (changed) setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, [parseKey]);
+        if (changed) bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion, parseKey]);
 
     /**
      * Soft-invalidate all blocks at or after blockIndex: mark them as 'partial'
@@ -298,8 +306,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
                 changed = true;
             }
         }
-        if (changed) setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, [parseKey]);
+        if (changed) bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion, parseKey]);
 
     /**
      * Soft-invalidate a specific contiguous block range while preserving rows.
@@ -324,8 +332,8 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
                 changed = true;
             }
         }
-        if (changed) setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
-    }, [parseKey]);
+        if (changed) bumpStructureAndDataVersion();
+    }, [bumpStructureAndDataVersion, parseKey]);
 
     /**
      * Keep only blocks within a sliding window around the viewport.
@@ -353,9 +361,9 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         const overflowChanged = evictOverflow(epoch);
 
         if (changed || overflowChanged) {
-            setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
+            bumpStructureAndDataVersion();
         }
-    }, [blockDistanceFromPinned, evictOverflow, parseKey]);
+    }, [blockDistanceFromPinned, bumpStructureAndDataVersion, evictOverflow, parseKey]);
 
     /**
      * Get a specific row from the cache
@@ -391,6 +399,71 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         return blocks;
     }, [parseKey]);
 
+    /**
+     * Patch matching rows in-place across loaded blocks (Single Value Truth) and mark
+     * unpatched out-of-viewport blocks with older `dataRevision` as `softStale`.
+      @type {(...args: any[]) => any} */
+    const patchRowsByKey = useCallback((patchesByRowKey, sourceRevision = null, visibleRowKeys = null, epoch = currentEpochRef.current) => {
+        if (!patchesByRowKey || typeof patchesByRowKey.get !== 'function' || patchesByRowKey.size === 0) {
+            return false;
+        }
+        let changed = false;
+        for (const [key, block] of Array.from(cacheRef.current.entries())) {
+            /** @type {any} */
+            const { epoch: keyEpoch } = parseKey(String(key));
+            if (keyEpoch !== epoch || !block || !Array.isArray(block.rows)) continue;
+
+            let blockTouched = false;
+            let blockInViewport = false;
+            const nextRows = block.rows.map(/** @param {any} [row] @returns {any} */ (row) => {
+                if (!row || typeof row !== 'object') return row;
+                const candidates = [row._canonicalPath, row._path, row._id, row.id].filter(Boolean).map(String);
+                if (visibleRowKeys && candidates.some(/** @param {any} [c] @returns {any} */ (c) => visibleRowKeys.has(c))) {
+                    blockInViewport = true;
+                }
+                let patch = null;
+                for (let i = 0; i < candidates.length; i += 1) {
+                    const hit = patchesByRowKey.get(candidates[i]);
+                    if (hit) {
+                        patch = hit;
+                        break;
+                    }
+                }
+                if (!patch) return row;
+                blockTouched = true;
+                return {
+                    ...row,
+                    ...patch,
+                    __softStale: false,
+                    ...(sourceRevision !== null ? { __dataRevision: sourceRevision } : {}),
+                };
+            });
+
+            if (blockTouched) {
+                cacheRef.current.set(key, {
+                    ...block,
+                    rows: nextRows,
+                    softStale: false,
+                    ...(sourceRevision !== null ? { dataRevision: sourceRevision } : {}),
+                });
+                changed = true;
+            } else if (
+                sourceRevision !== null
+                && !blockInViewport
+                && blockDistanceFromPinned(block.blockIndex, keyEpoch) !== 0
+                && (block.dataRevision === undefined || block.dataRevision < sourceRevision)
+                && !block.softStale
+            ) {
+                cacheRef.current.set(key, {
+                    ...block,
+                    softStale: true,
+                });
+            }
+        }
+        if (changed) setCacheVersion(/** @param {any} [v] @returns {any} */ v => v + 1);
+        return changed;
+    }, [blockDistanceFromPinned, parseKey]);
+
     return {
         setCurrentEpoch,
         getBlock,
@@ -400,11 +473,13 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         invalidateFromBlock,
         softInvalidateFromBlock,
         softInvalidateRange,
+        patchRowsByKey,
         pruneToRange,
         setPinnedRange,
         getRow,
         getLoadedBlocks,
         cacheVersion,
+        blockStructureVersion,
         blockSize,
         currentEpochRef
     };

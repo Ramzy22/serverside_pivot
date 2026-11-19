@@ -176,6 +176,7 @@ const formatNonScalarValue = (value) => {
         return `${value.length} items`;
     }
     if (value && typeof value === 'object') {
+        if (typeof value.__decimal__ === 'string') return value.__decimal__;
         if ('x' in value && 'y' in value) return `${value.x}: ${value.y}`;
         if ('label' in value && 'value' in value) return `${value.label}: ${value.value}`;
         try {
@@ -339,6 +340,21 @@ export const isDisplayNegative = (value, fmt, decimalPlaces, options = {}) => {
 /** @param {any} [value] @param {any} [fmt] @param {any} [decimalPlaces] @param {any} [groupSeparator] @param {any} [formatOptions] @returns {any} */
 export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR, formatOptions = null) => {
     if (value === null || value === undefined) return '';
+    if (value && typeof value === 'object' && typeof value.__decimal__ === 'string') {
+        const rawDec = value.__decimal__.trim();
+        if (!fmt) {
+            const neg = rawDec.startsWith('-');
+            const unsigned = neg ? rawDec.slice(1) : rawDec;
+            const dotIdx = unsigned.indexOf('.');
+            const intPart = dotIdx >= 0 ? unsigned.slice(0, dotIdx) : unsigned;
+            const fracPart = dotIdx >= 0 ? unsigned.slice(dotIdx + 1) : '';
+            const grouped = applyGroupSeparator(intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ','), groupSeparator);
+            return fracPart ? `${neg ? '-' : ''}${grouped}.${fracPart}` : `${neg ? '-' : ''}${grouped}`;
+        }
+        const coerced = Number(rawDec);
+        if (!Number.isFinite(coerced)) return rawDec;
+        value = coerced;
+    }
     if (typeof value !== 'number') return formatNonScalarValue(value);
     if (Number.isNaN(value)) return '';
     /** @type {any} */

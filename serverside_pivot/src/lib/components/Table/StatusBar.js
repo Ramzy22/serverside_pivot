@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import Icons from '../../utils/Icons';
 import { formatValue } from '../../utils/helpers';
+import { withAlpha } from '../../utils/styles';
 
 /** @param {any} [value] @param {any} [decimals] @param {any} [numberGroupSeparator] @returns {any} */
 const fmt = (value, decimals = 0, numberGroupSeparator) => {
@@ -27,7 +28,7 @@ const getPanelToneColors = (theme, tone = 'default') => {
     if (tone === 'info') {
         return {
             background: theme.select || 'rgba(59, 130, 246, 0.10)',
-            border: theme.primary ? `${theme.primary}33` : 'rgba(59, 130, 246, 0.22)',
+            border: withAlpha(theme.primary, 0.24, 'rgba(59, 130, 246, 0.22)'),
             accent: theme.primary || '#2563EB',
         };
     }
@@ -177,7 +178,7 @@ const StatusActionButton = ({ id, label, onClick, disabled = false, theme, icon 
                 fontSize: '11px',
                 fontWeight: 700,
                 cursor: disabled ? 'not-allowed' : 'pointer',
-                opacity: disabled ? 0.5 : 1,
+                opacity: disabled ? (theme.isDark ? 0.52 : 0.72) : 1,
                 whiteSpace: 'nowrap',
             }}
         >

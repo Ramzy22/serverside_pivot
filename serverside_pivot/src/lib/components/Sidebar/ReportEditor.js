@@ -2406,7 +2406,8 @@ export function ReportEditor({
         const target = selectedLineRef.current;
         if (!target || typeof target.scrollIntoView !== 'function') return;
         window.requestAnimationFrame(() => {
-            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            const reducedMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            target.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
         });
     }, []);
 

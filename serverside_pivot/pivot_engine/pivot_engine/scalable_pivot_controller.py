@@ -2898,6 +2898,14 @@ class ScalablePivotController(PivotController):
             column_discovery_skipped = False
         column_discovery_finished_at = time.perf_counter()
 
+        if (
+            not materialized_column_values
+            and not getattr(spec, "rows", None)
+            and getattr(spec, "columns", None)
+            and not (getattr(spec, "pivot_config", None) and spec.pivot_config.include_totals_column)
+        ):
+            return pa.table({})
+
         pivot_ibis_expr = self.planner.build_pivot_query_from_columns(spec, materialized_column_values)
         
         pivot_cache_key = self._cache_key_for_query(pivot_ibis_expr, spec)

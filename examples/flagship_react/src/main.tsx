@@ -50,6 +50,22 @@ function CapabilityCard({ number, title, copy }: (typeof capabilities)[number]) 
     </article>;
 }
 
+let workspaceConfigPromise: Promise<WorkspaceConfig> | null = null;
+function loadWorkspaceConfig(): Promise<WorkspaceConfig> {
+    if (!workspaceConfigPromise) {
+        workspaceConfigPromise = fetch('/v1/workspace-config')
+            .then(response => {
+                if (!response.ok) throw new Error(`workspace configuration request failed (${response.status})`);
+                return response.json() as Promise<WorkspaceConfig>;
+            })
+            .catch(error => {
+                workspaceConfigPromise = null;
+                throw error;
+            });
+    }
+    return workspaceConfigPromise;
+}
+
 function App() {
     const qualification = new URLSearchParams(window.location.search).get('qualification') === '1';
     const [workspaceMounted, setWorkspaceMounted] = useState(true);
@@ -58,11 +74,7 @@ function App() {
 
     useEffect(() => {
         let active = true;
-        fetch('/v1/workspace-config')
-            .then(response => {
-                if (!response.ok) throw new Error(`workspace configuration request failed (${response.status})`);
-                return response.json() as Promise<WorkspaceConfig>;
-            })
+        loadWorkspaceConfig()
             .then(config => {
                 if (active) setWorkspaceConfig(config);
             })

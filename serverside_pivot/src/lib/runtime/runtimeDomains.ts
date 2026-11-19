@@ -79,7 +79,7 @@ export interface PivotRuntimeProps {
     rowHeaderLabel?: string | ((rowFields: readonly string[]) => string);
     valueScale?: number;
     unitSuffix?: string;
-    /** Fits all columns into container width. Accepts `true` or `{ enabled?: boolean; minFontSize?: number }`. */
+    /** Fits columns to the container using formatted, loaded rows. At the font floor, wide values can require horizontal scrolling. */
     fitToWidth?: boolean | { enabled?: boolean; minFontSize?: number };
     /** Minimum font size (px) when `fitToWidth` scales text down. Can also be set via `themeOverrides.minFontSize`. Defaults to `10`. */
     minFontSize?: number;
@@ -95,6 +95,9 @@ export interface PivotRuntimeProps {
     activeReportId?: string;
     rowSelection?: 'single' | 'multiple' | boolean;
     selectedRows?: readonly string[];
+    streamingConfig?: PivotObject;
+    streamUpdates?: PivotObject;
+    diffConfig?: PivotObject;
 }
 
 export interface PivotRuntimeRow {
@@ -740,6 +743,7 @@ export interface WorkspacePresentation {
     readonly virtualRows: WorkspaceCollection;
     readonly visibleLeafColumns: WorkspaceCollection;
     readonly zoomLevel: number;
+    readonly liveSubscriptionStore?: unknown;
 }
 
 /** Narrow workspace-to-transport port for server chart request scheduling. */

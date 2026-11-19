@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 're
 import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
 import ThemedSelect from './ThemedSelect';
-import { themes, buildEditedCellVisualStyle, colorToInputHex } from '../utils/styles';
+import { themes, buildEditedCellVisualStyle, buildThemeCssVars, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { usePivotTheme } from '../contexts/PivotThemeContext';
@@ -11,6 +11,7 @@ import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
 import { applySavedReport } from '../utils/savedReports';
 import { isEventInsideElement, isEventInsideSelector } from '../utils/domEvents';
 import { updateDataBarMaximums } from '../utils/dataBars';
+import { useDismiss, OverlayPortal, resolveOverlayPortalTarget } from '../hooks/useDismiss';
 
 const SHOW_PIVOT_MODE_TOGGLE = true;
 
@@ -674,7 +675,9 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
     };
 
     const popover = (
-        <div ref={popoverRef} className="sp-menu-surface" data-cell-format-popover="true" style={{
+        <div ref={popoverRef} data-pivot-workspace-root="true" data-pivot-overlay-portal="true" className="sp-menu-surface" data-cell-format-popover="true" style={{
+            ...buildThemeCssVars(theme),
+            colorScheme: theme && theme.isDark ? 'dark' : 'light',
             position: 'fixed',
             left: popoverPosition ? `${popoverPosition.left}px` : '12px',
             top: popoverPosition ? `${popoverPosition.top}px` : '12px',
@@ -784,9 +787,7 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         </div>
     );
 
-    const portalTarget = typeof document !== 'undefined'
-        ? (anchorRef.current?.closest?.('[data-pivot-workspace-root]') || document.body)
-        : null;
+    const portalTarget = resolveOverlayPortalTarget(anchorRef.current);
     return portalTarget ? ReactDOM.createPortal(popover, portalTarget) : popover;
 }
 
@@ -1127,41 +1128,33 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
             </div>
         </div>
     );
-    const portalTarget = typeof document !== 'undefined'
-        ? (anchorRef.current?.closest?.('[data-pivot-workspace-root]') || document.body)
-        : null;
-    return portalTarget ? ReactDOM.createPortal(popoverNode, portalTarget) : popoverNode;
+    return (
+        <OverlayPortal theme={theme} anchorEl={anchorRef.current} zIndex={10002}>
+            <div style={{ pointerEvents: 'auto' }}>{popoverNode}</div>
+        </OverlayPortal>
+    );
 }
 
 /** @param {any} p0 @returns {any} */
 function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
     /** @type {any} */
     const menuRef = useRef(null);
-    useEffect(() => {
-        /** @param {any} [event] @returns {any} */
-        const handleOutside = (event) => {
-            if (menuRef.current && menuRef.current.hasAttribute('open') && !isEventInsideElement(event, menuRef.current)) {
-                menuRef.current.removeAttribute('open');
-            }
-        };
-        /** @param {any} [event] @returns {any} */
-        const handleEscape = (event) => {
-            if (event.key === 'Escape' && menuRef.current && menuRef.current.hasAttribute('open')) {
-                menuRef.current.removeAttribute('open');
-            }
-        };
-        document.addEventListener('mousedown', handleOutside);
-        document.addEventListener('keydown', handleEscape);
-        return () => {
-            document.removeEventListener('mousedown', handleOutside);
-            document.removeEventListener('keydown', handleEscape);
-        };
-    }, []);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const closeMenu = () => {
+        setMenuOpen(false);
+        if (menuRef.current) menuRef.current.removeAttribute('open');
+    };
+    useDismiss({
+        open: menuOpen,
+        onClose: closeMenu,
+        refs: [menuRef],
+        restoreFocus: true,
+    });
     /** @param {any} [format] @returns {any} */
     const runExport = (format) => {
         if (format === 'csv') exportPivot('csv');
         else exportPivot();
-        if (menuRef.current) menuRef.current.removeAttribute('open');
+        closeMenu();
     };
     /** @type {Record<string, any>} */
     const menuButtonStyle = {
@@ -1177,32 +1170,55 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
         whiteSpace: 'nowrap',
         opacity: isExporting ? 0.55 : 1,
     };
+    const { border: rawBorder, borderRadius: rawRadius, ...baseSplitStyle } = buttonStyle || {};
+    const splitRadius = rawRadius || '8px';
+    const splitBorder = rawBorder || `1px solid ${theme.primary || 'var(--sp-primary, #4F46E5)'}`;
 
     return (
-        <div role="group" aria-label="Export table" style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+        <div role="group" aria-label="Export table" style={{ display: 'inline-flex', alignItems: 'stretch', flexShrink: 0 }}>
             <button
                 type="button"
                 className="sp-btn sp-btn-primary"
                 data-testid="pivot-export-xlsx"
                 aria-label="Export XLSX"
-                style={{ ...buttonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+                style={{
+                    ...baseSplitStyle,
+                    borderTop: splitBorder,
+                    borderRight: 'none',
+                    borderBottom: splitBorder,
+                    borderLeft: splitBorder,
+                    borderTopLeftRadius: splitRadius,
+                    borderBottomLeftRadius: splitRadius,
+                    borderTopRightRadius: 0,
+                    borderBottomRightRadius: 0,
+                }}
                 onClick={() => exportPivot()}
                 disabled={isExporting}
             >
                 <Icons.Export/> {isExporting ? 'Exporting...' : 'Export XLSX'}
             </button>
-            <details ref={menuRef} style={{ position: 'relative', display: 'flex' }}>
+            <details
+                ref={menuRef}
+                open={menuOpen}
+                onToggle={(e) => setMenuOpen(Boolean(e.currentTarget && e.currentTarget.open))}
+                style={{ position: 'relative', display: 'flex' }}
+            >
                 <summary
                     className="sp-btn sp-btn-primary"
                     aria-label="Choose export format"
                     aria-disabled={isExporting}
                     onClick={event => { if (isExporting) event.preventDefault(); }}
                     style={{
-                        ...buttonStyle,
+                        ...baseSplitStyle,
                         alignItems: 'center',
+                        borderTop: splitBorder,
+                        borderRight: splitBorder,
+                        borderBottom: splitBorder,
+                        borderLeft: '1px solid rgba(255,255,255,0.22)',
                         borderTopLeftRadius: 0,
                         borderBottomLeftRadius: 0,
-                        borderLeft: '1px solid rgba(255,255,255,0.22)',
+                        borderTopRightRadius: splitRadius,
+                        borderBottomRightRadius: splitRadius,
                         boxSizing: 'border-box',
                         cursor: isExporting ? 'not-allowed' : 'pointer',
                         display: 'inline-flex',
@@ -1550,19 +1566,28 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     );
     /** @param {any} [sectionId] @returns {any} */
     const toggleToolbarSection = (sectionId) => {
-        setOpenToolbarSections(/** @param {any} [prev] @returns {any} */ prev => ({ ...prev, [sectionId]: !prev[sectionId] }));
+        setOpenToolbarSections(/** @param {any} [prev] @returns {any} */ (prev) => {
+            const isCurrentlyOpen = Boolean(prev && prev[sectionId]);
+            return {
+                view: false,
+                format: false,
+                charts: false,
+                theme: false,
+                [sectionId]: !isCurrentlyOpen,
+            };
+        });
     };
 
     // Base styles for different button variants
     /** @type {Record<string, any>} */
     const btnBase = {
         ...styles.btn,
-        borderRadius: theme.radiusSm || '10px',
-        padding: '7px 12px',
+        borderRadius: theme.radiusSm || '8px',
+        padding: '5px 10px',
         fontSize: '12px',
         fontWeight: 600,
-        lineHeight: 1.5,
-        minHeight: '36px',
+        lineHeight: 1.4,
+        minHeight: '32px',
     };
     /** @type {Record<string, any>} */
     const btnGhost = {
@@ -1652,19 +1677,19 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     const firstLineStyle = {
         display: 'flex',
         alignItems: 'center',
-        gap: '10px',
-        rowGap: '8px',
+        gap: '6px',
+        rowGap: '6px',
         flexWrap: 'wrap',
         width: '100%',
-        minHeight: '40px',
+        minHeight: '34px',
     };
     /** @type {Record<string, any>} */
     const innerDividerStyle = {
-        width: '1.5px',
+        width: '1px',
         alignSelf: 'stretch',
-        minHeight: '22px',
-        margin: '7px 2px',
-        background: theme.isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.28)',
+        minHeight: '20px',
+        margin: '6px 1px',
+        background: theme.isDark ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.14)',
         flexShrink: 0,
         borderRadius: '1px',
     };
@@ -2054,9 +2079,9 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         <div style={{
             ...styles.appBar,
             height: 'auto',
-            minHeight: '64px',
-            padding: '12px 20px',
-            gap: '10px',
+            minHeight: '50px',
+            padding: '8px 14px',
+            gap: '8px',
             flexDirection: 'column',
             overflowX: 'visible',
             overflowY: 'visible',
@@ -2200,14 +2225,14 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     </ThemedSelect>
                 )}
                 <div style={innerDividerStyle} />
-                <div style={{display:'flex', alignItems:'center', flex:'1 1 250px', minWidth:'220px', maxWidth:'360px'}}>
+                <div style={{display:'flex', alignItems:'center', flex:'1 1 160px', minWidth:'140px', maxWidth:'260px'}}>
                     <div className="sp-search-shell" style={{
                         ...styles.searchBox,
                         width:'100%',
-                        borderRadius:theme.radiusSm || '10px',
+                        borderRadius:theme.radiusSm || '8px',
                         border:`1px solid ${theme.border}`,
-                        height: '36px',
-                        padding: '0 12px'
+                        height: '32px',
+                        padding: '0 10px'
                     }}>
                         <Icons.Search />
                         <input

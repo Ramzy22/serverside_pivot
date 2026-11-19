@@ -137,6 +137,7 @@ export const useServerSideRowModel = ({
     structuralInFlight = false,
     stateEpochRef = null,
     structuralPendingVersionRef = null,
+    pendingExpansionRef = null,
     requestVersionRef: externalRequestVersionRef = null,
     colStart = null,
     colEnd = null,
@@ -161,9 +162,11 @@ export const useServerSideRowModel = ({
         invalidateFromBlock,
         softInvalidateFromBlock,
         softInvalidateRange,
+        patchRowsByKey,
         pruneToRange,
         setPinnedRange,
         cacheVersion,
+        blockStructureVersion,
         getLoadedBlocks
     } = useRowCache({ blockSize, maxBlocks: maxBlocksInCache });
 
@@ -175,8 +178,9 @@ export const useServerSideRowModel = ({
     const hasPendingStructuralTransition = useCallback(() => Boolean(
         structuralInFlight
         || (structuralPendingVersionRef && structuralPendingVersionRef.current)
+        || (pendingExpansionRef && pendingExpansionRef.current)
         || (stateEpochRef && Number.isFinite(Number(stateEpochRef.current)) && stateEpochRef.current !== stateEpoch)
-    ), [structuralInFlight, structuralPendingVersionRef, stateEpochRef, stateEpoch]);
+    ), [structuralInFlight, structuralPendingVersionRef, pendingExpansionRef, stateEpochRef, stateEpoch]);
     /** @type {any} */
     const inflightRequestRef = useRef(null);
     /** @type {any} */
@@ -189,6 +193,11 @@ export const useServerSideRowModel = ({
     const isMountedRef = useRef(true);
     /** @type {[any, (...args: any[]) => any]} */
     const [grandTotalRow, setGrandTotalRow] = useState(null);
+    useEffect(() => {
+        if (!excludeGrandTotal) {
+            setGrandTotalRow(null);
+        }
+    }, [excludeGrandTotal]);
     // Incremented whenever inflight is cleared so the viewport effect re-runs
     // even when virtualRows hasn't changed (e.g. after a stale/dropped response).
     /** @type {[any, (...args: any[]) => any]} */
@@ -307,10 +316,29 @@ export const useServerSideRowModel = ({
     }, []);
 
     // 2. Initialize Virtualizer
-    // We use the full rowCount for serverSide
+    // Hold the virtualizer rowCount synchronized with the cached blocks across the single
+    // render pass before useLayoutEffect writes incoming response rows into useRowCache.
+    // Without this, shrinking rowCount on collapse unmounts rows below the collapsed parent
+    // for 1 render before setBlockLoaded runs, breaking FLIP continuity and causing flicker.
+    const incomingDataSyncKey = serverSide && data
+        ? `${dataStateEpoch ?? stateEpoch}:${dataVersion}:${dataOffset}:${data.length}:${rowCount ?? ''}`
+        : null;
+    const [syncedRowCount, setSyncedRowCount] = useState(rowCount);
+    const lastSyncedDataKeyRef = useRef(incomingDataSyncKey);
+    const hasUnsyncedIncomingData = Boolean(
+        serverSide
+        && incomingDataSyncKey !== null
+        && incomingDataSyncKey !== lastSyncedDataKeyRef.current
+        && Number.isFinite(Number(syncedRowCount))
+        && Number(syncedRowCount) > 0
+    );
+    const effectiveVirtualizerRowCount = serverSide
+        ? ((hasUnsyncedIncomingData ? syncedRowCount : rowCount) || 0)
+        : (data ? data.length : 0);
+
     /** @type {any} */
     const rowVirtualizer = useVirtualizer({
-        count: serverSide ? (rowCount || 0) : (data ? data.length : 0),
+        count: effectiveVirtualizerRowCount,
         getScrollElement: () => parentRef.current,
         estimateSize: estimateRowHeight || (() => rowHeight),
         overscan: serverSide
@@ -319,7 +347,7 @@ export const useServerSideRowModel = ({
                 && rowOverscan !== undefined
                 && Number.isFinite(Number(rowOverscan))
                     ? Math.max(0, Math.floor(Number(rowOverscan)))
-                    : getServerSideRowOverscan(rowCount)
+                    : getServerSideRowOverscan(effectiveVirtualizerRowCount)
             )
             : 12
     });
@@ -343,7 +371,7 @@ export const useServerSideRowModel = ({
     useLayoutEffect(() => {
         if (!serverSide) return;
         rowVirtualizer.measure();
-    }, [serverSide, rowCount, rowHeight, rowVirtualizer]);
+    }, [serverSide, effectiveVirtualizerRowCount, rowHeight, rowVirtualizer]);
 
     const previousLifecycle = lifecycleResetRef.current;
     const cacheKeyChangedThisRender = Boolean(
@@ -387,7 +415,7 @@ export const useServerSideRowModel = ({
                 requestVersionRef.current = 0;
             }
             // Reset the grand total when filters/fields change (cacheKey change) so that a
-            // pre-filter grand total value is never shown alongside post-filter row data.
+            // pre-filter grand total value is never shown alongside querying skeletons.
             // The grand total is re-populated once the first response containing it arrives.
             setGrandTotalRow(null);
         }
@@ -439,7 +467,12 @@ export const useServerSideRowModel = ({
     // 3. Sync incoming data to Cache before browser paint so expand/collapse updates
     // rowCount and cached rows atomically without a 1-frame skeleton flash.
     useLayoutEffect(() => {
-        if (!serverSide || !data) return;
+        if (!serverSide) return;
+        if (!data) {
+            lastSyncedDataKeyRef.current = incomingDataSyncKey;
+            setSyncedRowCount(rowCount);
+            return;
+        }
 
         /** @type {any} */
         const responseStateEpoch = Number(dataStateEpoch);
@@ -454,6 +487,8 @@ export const useServerSideRowModel = ({
                 stateEpoch,
                 dataVersion,
             });
+            lastSyncedDataKeyRef.current = incomingDataSyncKey;
+            setSyncedRowCount(rowCount);
             return;
         }
 
@@ -528,15 +563,20 @@ export const useServerSideRowModel = ({
 
         if (excludeGrandTotal) {
             /** @type {any} */
-            const foundGrandTotal = data.find(isGrandTotalRow) || null;
+            const rawFoundGrandTotal = data.find(isGrandTotalRow) || null;
+            const foundGrandTotal = rawFoundGrandTotal && typeof rawFoundGrandTotal === 'object'
+                ? (() => {
+                    const { __virtualIndex: _ignoredVirtualIndex, ...rest } = rawFoundGrandTotal;
+                    return rest;
+                })()
+                : rawFoundGrandTotal;
+            normalizedData = data.filter(/** @param {any} [row] @returns {any} */ row => !isGrandTotalRow(row));
             if (foundGrandTotal) {
                 // Responses may include only a windowed column slice.
                 // Merge with previous values so pinned grand total cells don't
                 // transiently blank when horizontal windows shift.
                 setGrandTotalRow(/** @param {any} [prev] @returns {any} */ prev => (prev ? { ...prev, ...foundGrandTotal } : foundGrandTotal));
             }
-
-            normalizedData = data.filter(/** @param {any} [row] @returns {any} */ row => !isGrandTotalRow(row));
         }
 
         /** @returns {any} */
@@ -592,6 +632,8 @@ export const useServerSideRowModel = ({
         };
 
         if (normalizedData.length === 0) {
+            lastSyncedDataKeyRef.current = incomingDataSyncKey;
+            setSyncedRowCount(rowCount);
             clearInflightForResponse();
             debugLog('sync-empty', {
                 dataOffset,
@@ -682,6 +724,8 @@ export const useServerSideRowModel = ({
             }
         }
 
+        lastSyncedDataKeyRef.current = incomingDataSyncKey;
+        setSyncedRowCount(rowCount);
         clearInflightForResponse();
         const inflight = inflightRequestRef.current;
         if (inflight) {
@@ -725,7 +769,7 @@ export const useServerSideRowModel = ({
                 });
             }
         }
-    }, [data, dataOffset, dataVersion, dataStateEpoch, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
+    }, [data, dataOffset, dataVersion, dataStateEpoch, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd, incomingDataSyncKey]);
 
     /** @type {(...args: any[]) => any} */
     const blockNeedsViewportRequest = useCallback((
@@ -1602,7 +1646,7 @@ export const useServerSideRowModel = ({
         structuralInFlight,
         inflightClearedAt,
         cacheKeyChangedThisRender,
-        cacheVersion,
+        blockStructureVersion,
         collectBlocksNeeded,
         enqueueViewportRequest,
         resolveRetentionBufferBlocks,
@@ -1742,7 +1786,7 @@ export const useServerSideRowModel = ({
 
         return () => clearTimeout(timer);
 
-    }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd, resolveRetentionBufferBlocks]);
+    }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, blockStructureVersion, colStart, colEnd, resolveRetentionBufferBlocks]);
 
     useEffect(() => {
         if (!serverSide || hasPendingStructuralTransition() || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
@@ -1882,8 +1926,12 @@ export const useServerSideRowModel = ({
                 );
                 for (let i = 0; i < block.rows.length; i++) {
                     const row = block.rows[i];
-                    if (blockPendingColumns && row && typeof row === 'object') {
-                        merged[offsetInMerged + i] = { ...row, __colPending: true };
+                    if (row && typeof row === 'object' && (blockPendingColumns || block.softStale)) {
+                        merged[offsetInMerged + i] = {
+                            ...row,
+                            ...(blockPendingColumns ? { __colPending: true } : {}),
+                            ...(block.softStale ? { __softStale: true } : {}),
+                        };
                     } else {
                         merged[offsetInMerged + i] = row;
                     }
@@ -1967,12 +2015,29 @@ export const useServerSideRowModel = ({
         [softInvalidateFromBlock, stateEpoch]
     );
 
+    /** @type {(...args: any[]) => any} */
+    const patchRowsInCurrentEpoch = useCallback(
+        (patchesByRowKey, sourceRevision = null, visibleRowKeys = null) => {
+            if (patchesByRowKey && typeof patchesByRowKey.get === 'function') {
+                const gtPatch = patchesByRowKey.get('__GRAND_TOTAL__') || patchesByRowKey.get('Grand Total');
+                if (gtPatch) {
+                    setGrandTotalRow(/** @param {any} [prev] @returns {any} */ (prev) => (
+                        prev && typeof prev === 'object' ? { ...prev, ...gtPatch } : prev
+                    ));
+                }
+            }
+            return patchRowsByKey(patchesByRowKey, sourceRevision, visibleRowKeys, stateEpoch);
+        },
+        [patchRowsByKey, stateEpoch]
+    );
+
     return {
         rowVirtualizer,
         getRow: getRowInEpoch,
         clearCache,
         invalidateFromBlock: invalidateFromCurrentEpoch,
         softInvalidateFromBlock: softInvalidateFromCurrentEpoch,
+        patchRowsByKey: patchRowsInCurrentEpoch,
         grandTotalRow,
         loadedRows,
         renderedData: renderedDataInfo.data,

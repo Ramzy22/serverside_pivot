@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ColumnFilter from './ColumnFilter';
+import { useDismiss, OverlayPortal } from '../../hooks/useDismiss';
 
 const FALLBACK_WIDTH = 300;
 const FALLBACK_HEIGHT = 400;
@@ -16,7 +17,16 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
     /** @type {any} */
     const columnAnchorTarget = typeof Element !== 'undefined' && column instanceof Element ? column : null;
     /** @type {any} */
+    const resolvedAnchorTarget = anchorEl || columnAnchorTarget;
+    /** @type {any} */
     const columnPositionKey = columnAnchorTarget || (column && (column.id || column.header)) || null;
+
+    useDismiss({
+        open: Boolean(position),
+        onClose,
+        refs: [popoverRef, resolvedAnchorTarget],
+        restoreFocus: true,
+    });
 
     useEffect(() => {
         /** @type {any} */
@@ -37,11 +47,11 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
             /** @type {any} */
             const popoverHeight = (popoverRef.current && popoverRef.current.offsetHeight) || FALLBACK_HEIGHT;
 
-            let top = rect.bottom;
+            let top = rect.bottom + 4;
             let left = rect.left;
 
             if (top + popoverHeight + VIEWPORT_PADDING > viewportHeight) {
-                top = rect.top - popoverHeight;
+                top = rect.top - popoverHeight - 4;
             }
 
             top = Math.max(VIEWPORT_PADDING, Math.min(top, viewportHeight - popoverHeight - VIEWPORT_PADDING));
@@ -75,35 +85,49 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
     }
 
     return (
-        <div ref={popoverRef}
-            style={{
-                position: 'fixed', // Changed from absolute
-                top: `${position.top}px`,
-                left: `${position.left}px`,
-                background: resolvedTheme.surfaceBg || resolvedTheme.background || '#fff',
-                border: `1px solid ${resolvedTheme.border || '#ccc'}`,
-                boxShadow: resolvedTheme.shadowMd || '0 4px 12px rgba(0,0,0,0.15)',
-                zIndex: 1000,
-                padding: '12px',
-                borderRadius: resolvedTheme.radiusSm || '4px',
-                width: '300px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-                color: resolvedTheme.text || '#333'
-            }} onClick={e => e.stopPropagation()}>
-            <ColumnFilter 
-                column={column} 
-                onFilter={onFilter} 
-                currentFilter={currentFilter} 
-                options={options} 
-                optionMeta={optionMeta}
-                onSearchOptions={onSearchOptions}
-                onLoadMoreOptions={onLoadMoreOptions}
-                theme={resolvedTheme}
-                onClose={onClose} 
-            />
-        </div>
+        <OverlayPortal theme={resolvedTheme} anchorEl={resolvedAnchorTarget} zIndex={10002}>
+            <div
+                ref={popoverRef}
+                role="dialog"
+                aria-label="Filter column"
+                className="sp-menu-surface"
+                style={{
+                    position: 'fixed',
+                    top: `${position.top}px`,
+                    left: `${position.left}px`,
+                    background: resolvedTheme.surfaceBg || resolvedTheme.background || '#fff',
+                    backdropFilter: 'blur(18px) saturate(180%)',
+                    WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+                    border: `1px solid ${resolvedTheme.border || 'var(--sp-border, #cbd5e1)'}`,
+                    boxShadow: resolvedTheme.shadow || resolvedTheme.shadowMd || '0 14px 36px rgba(0,0,0,0.18)',
+                    zIndex: 10002,
+                    padding: '12px',
+                    borderRadius: 'var(--sp-radius-lg, 10px)',
+                    width: '300px',
+                    maxWidth: 'calc(100vw - 32px)',
+                    maxHeight: 'calc(100vh - 32px)',
+                    overflowY: 'auto',
+                    pointerEvents: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    color: resolvedTheme.text || 'var(--sp-text, #0f172a)'
+                }}
+                onClick={e => e.stopPropagation()}
+            >
+                <ColumnFilter
+                    column={column}
+                    onFilter={onFilter}
+                    currentFilter={currentFilter}
+                    options={options}
+                    optionMeta={optionMeta}
+                    onSearchOptions={onSearchOptions}
+                    onLoadMoreOptions={onLoadMoreOptions}
+                    theme={resolvedTheme}
+                    onClose={onClose}
+                />
+            </div>
+        </OverlayPortal>
     );
 };
 

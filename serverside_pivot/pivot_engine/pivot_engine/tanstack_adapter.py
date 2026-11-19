@@ -3574,6 +3574,99 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         result = query.execute()
         return result[column_id].tolist(), total_values
 
+    # ========== Live Streaming & Baseline Diff Facade ==========
+
+    def get_streaming_stack(self) -> Dict[str, Any]:
+        """Lazily initialize and return the 5-component streaming & diff stack."""
+        stack = getattr(self, "_streaming_stack", None)
+        if stack is not None:
+            return stack
+        from .diff.baseline_comparison_service import BaselineComparisonService
+        from .diff.snapshot_provider import SnapshotProvider
+        from .streaming.reactive_query_coordinator import ReactiveQueryCoordinator
+        from .streaming.subscription_broker import SubscriptionBroker
+        from .streaming.versioned_source_adapter import VersionedSourceAdapter
+
+        source_adapter = VersionedSourceAdapter(self.controller)
+        snapshot_provider = SnapshotProvider(self.controller, source_adapter)
+        comparison_service = BaselineComparisonService(self.controller, snapshot_provider)
+        coordinator = ReactiveQueryCoordinator(
+            self.controller, source_adapter, snapshot_provider, comparison_service
+        )
+        broker = SubscriptionBroker(
+            source_adapter=source_adapter,
+            snapshot_provider=snapshot_provider,
+            coordinator=coordinator,
+        )
+        stack = {
+            "source_adapter": source_adapter,
+            "snapshot_provider": snapshot_provider,
+            "comparison_service": comparison_service,
+            "coordinator": coordinator,
+            "broker": broker,
+        }
+        self._streaming_stack = stack
+        return stack
+
+    def push_stream_changes(
+        self,
+        table: str,
+        rows: List[Dict[str, Any]],
+        *,
+        mode: str = "upsert",
+        key_fields: Optional[List[str]] = None,
+        source: str = "push",
+    ):
+        """Atomically mutate `table` and publish one committed revision to subscribers."""
+        source_adapter = self.get_streaming_stack()["source_adapter"]
+        return source_adapter.apply_mutation_batch(
+            table, rows, mode=mode, key_fields=key_fields, source=source
+        )
+
+    def capture_baseline(
+        self,
+        table: str,
+        *,
+        label: Optional[str] = None,
+        ttl_seconds: Optional[float] = None,
+        principal: Any = None,
+        row_scope: Any = None,
+        external_table: Optional[str] = None,
+        time_travel_token: Optional[str] = None,
+    ):
+        """Capture an immutable T0 baseline snapshot governed by ResourceGovernor."""
+        snapshot_provider = self.get_streaming_stack()["snapshot_provider"]
+        return snapshot_provider.capture_snapshot(
+            table,
+            principal=principal,
+            row_scope=row_scope,
+            label=label,
+            kind="baseline",
+            ttl_seconds=ttl_seconds,
+            external_table=external_table,
+            time_travel_token=time_travel_token,
+        )
+
+    def freeze_snapshot(
+        self,
+        table: str,
+        *,
+        label: Optional[str] = None,
+        ttl_seconds: Optional[float] = None,
+        principal: Any = None,
+        row_scope: Any = None,
+    ):
+        """Capture a retained frozen snapshot for consistent historical scrolling/exports."""
+        snapshot_provider = self.get_streaming_stack()["snapshot_provider"]
+        return snapshot_provider.capture_snapshot(
+            table,
+            principal=principal,
+            row_scope=row_scope,
+            label=label,
+            kind="freeze_snapshot",
+            ttl_seconds=ttl_seconds,
+        )
+
 
 # Utility function for TanStack integration
 def create_tanstack_adapter(

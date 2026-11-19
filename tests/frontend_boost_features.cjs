@@ -1317,6 +1317,33 @@ test('Content-aware fitToWidth, configurable minFontSize, explicit fontSize pres
     assert.ok(compact.numericPaddingRight < 8);
 });
 
+test('fitToWidth tightens padding before clipping at the font floor and scrolls when values still cannot fit', () => {
+    const { computeFitToWidthLayout, measureColumnFitMetric } = loader.load('src/lib/utils/pivotLayoutUtils.js');
+    const widestValue = '-$198,765,432';
+    const columns = Array.from({ length: 8 }, (_, index) => measureColumnFitMetric({
+        columnId: `m${index}`,
+        rows: [{ original: { [`m${index}`]: index === 0 ? widestValue : '$98,765,432' } }],
+        headerLines: ['Revenue'],
+        shortLabel: 'x',
+        headerWrap: true,
+        headerControlsMode: 'hover',
+        measureBodyText: (text) => text.length * 6,
+        measureHeaderText: (text) => text.length * 6,
+    }));
+    const theme = { fontSize: 12, cellPaddingX: 12, headerPaddingX: 12, numericPaddingRight: 8 };
+    const fit = computeFitToWidthLayout({ columns, containerWidth: 393, baseFontSize: 12, minFontSize: 5.5, theme });
+    assert.equal(fit.fontSize, 5.5);
+    assert.ok(fit.compactTheme.cellPaddingX < 6);
+    assert.ok(Object.values(fit.columnSizing).reduce((sum, width) => sum + width, 0) <= 393);
+    const widestAtFloor = widestValue.length * 6 * 5.5 / 12;
+    assert.ok(fit.columnSizing.m0 >= widestAtFloor + 2 * fit.compactTheme.cellPaddingX + fit.compactTheme.numericPaddingRight);
+
+    const overflow = computeFitToWidthLayout({ columns, containerWidth: 150, baseFontSize: 12, minFontSize: 5.5, theme });
+    assert.equal(overflow.fontSize, 5.5);
+    assert.ok(overflow.columnSizing.m0 >= widestAtFloor + 2 * overflow.compactTheme.cellPaddingX + overflow.compactTheme.numericPaddingRight);
+    assert.ok(Object.values(overflow.columnSizing).reduce((sum, width) => sum + width, 0) > 150);
+});
+
 test('Structural theme tokens derive hierarchyBg from headerBg and totalBgStrong/totalTextStrong from totalBg/totalText', () => {
     const { themes, deriveStructuralThemeTokens, resolveThemeOverrides } = loader.load('src/lib/utils/styles.js');
     const overrides = resolveThemeOverrides('flash', {
@@ -1477,6 +1504,10 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
     const hoverBadge = findElements(hoverTree, (el) => el.props && el.props.title === 'Absolute value sort');
     assert.equal(hoverBadge.length, 1);
     assert.ok(String(hoverBadge[0].props.className).includes('sp-header-control'), 'under headerControls=hover, |x| badge hides until hover/focus');
+    const compactActions = findElements(hoverTree, (el) => el.props?.className === 'sp-header-compact-actions');
+    assert.equal(compactActions.length, 1);
+    assert.equal(findElements(compactActions, (el) => el.props?.title === 'Absolute value sort').length, 1);
+    assert.equal(findElements(compactActions, (el) => el.props?.['data-header-text'] === 'true').length, 0);
 
     const disabledBadgeTree = renderHeaderWith({ themeOverrides: { headerControls: 'hover', showAbsoluteSortBadge: false }, headerWidth: 180 });
     assert.equal(findElements(disabledBadgeTree, (el) => el.props && el.props.title === 'Absolute value sort').length, 0);
@@ -1706,4 +1737,337 @@ test('Regression: isEventInsideSelector detects portaled ThemedSelect menus via 
     };
     assert.equal(isEventInsideSelector(shadowEvent, '[data-themed-select-menu="true"]'), true);
     assert.equal(isEventInsideSelector({ target: { closest: () => null }, composedPath: () => [optionNode] }, '[data-themed-select-menu="true"]'), false);
+});
+
+test('Phase A-C: system CSS tokens, refined dark Grand Total/hover, and SSR-safe overlay portal target', () => {
+    const { themes, buildThemeCssVars } = loader.load('src/lib/utils/styles.js');
+    const { resolveOverlayPortalTarget } = loader.load('src/lib/hooks/useDismiss.js');
+
+    const darkVars = buildThemeCssVars(themes.dark);
+    assert.equal(darkVars['--sp-dur-instant'], '100ms');
+    assert.equal(darkVars['--sp-dur-fast'], '140ms');
+    assert.equal(darkVars['--sp-dur-base'], '200ms');
+    assert.equal(darkVars['--sp-dur-slow'], '240ms');
+    assert.equal(darkVars['--sp-ease-standard'], 'cubic-bezier(0.22, 1, 0.36, 1)');
+    assert.equal(darkVars['--sp-ease-exit'], 'cubic-bezier(0.4, 0, 1, 1)');
+    assert.equal(darkVars['--sp-row-hover-tint'], 'rgba(255, 255, 255, 0.055)');
+    assert.ok(darkVars['--sp-shadow'], 'unified --sp-shadow must be defined');
+    assert.ok(darkVars['--sp-success'] && darkVars['--sp-warning'] && darkVars['--sp-danger']);
+    assert.equal(darkVars['--sp-fs-base'], '13px');
+    assert.equal(darkVars['--sp-radius-pill'], '999px');
+    assert.equal(themes.dark.totalBgStrong, '#282E4C');
+    assert.equal(themes.dark.totalTextStrong, '#EEF2FF');
+
+    // Every built-in theme must use opaque (non-alpha) sticky row/header surface tokens so scrolling rows never bleed through.
+    const translucentRe = /rgba\(|hsla\(|\btransparent\b/i;
+    for (const [themeName, themeDef] of Object.entries(themes)) {
+        for (const token of ['headerBg', 'sortedHeaderBg', 'totalBg', 'totalBgStrong']) {
+            if (typeof themeDef[token] === 'string') {
+                assert.equal(
+                    translucentRe.test(themeDef[token]),
+                    false,
+                    `Theme ${themeName}.${token} must be opaque (got ${themeDef[token]})`
+                );
+            }
+        }
+    }
+
+    // SSR safety: returns null when document is undefined
+    assert.equal(resolveOverlayPortalTarget(null), null);
+});
+
+test('Row motion: rigid-sheet expand reveal maintains exact 1:1 sibling velocity and spacing across single and Expand-All', () => {
+    const {
+        computeSlideDurationMs,
+        computeBottomPinnedLayoutTop,
+        buildExpandRevealPlan,
+    } = loader.load('src/lib/utils/rowMotion.js');
+
+    // Distance-scaled duration bounds
+    assert.equal(computeSlideDurationMs(44), 215);
+    assert.equal(computeSlideDurationMs(132), 237);
+    assert.equal(computeSlideDurationMs(264), 258);
+    assert.equal(computeSlideDurationMs(1200), 300);
+
+    // Deterministic bottom-pinned layout coordinates (unclamped vs sticky-clamped)
+    assert.equal(
+        computeBottomPinnedLayoutTop({
+            stickyHeaderHeight: 88,
+            topPinnedCount: 0,
+            bottomPinnedCount: 1,
+            containerBodyHeight: 176,
+            rowHeight: 44,
+            scrollTop: 0,
+            clientHeight: 606,
+        }),
+        264
+    );
+    assert.equal(
+        computeBottomPinnedLayoutTop({
+            stickyHeaderHeight: 88,
+            topPinnedCount: 0,
+            bottomPinnedCount: 1,
+            containerBodyHeight: 3872,
+            rowHeight: 44,
+            scrollTop: 0,
+            clientHeight: 606,
+        }),
+        562
+    );
+
+    // Single-level expand: APAC (top=88) expands 3 children (132, 176, 220); EMEA moves 132 -> 264.
+    const prevSingle = new Map([
+        ['APAC', 88],
+        ['EMEA', 132],
+    ]);
+    const singlePlan = buildExpandRevealPlan({
+        committedSnapshots: [
+            { rowKey: 'APAC', rowPath: 'APAC', top: 88, size: 44, depth: 0 },
+            { rowKey: 'APAC|||Commercial', rowPath: 'APAC|||Commercial', top: 132, size: 44, depth: 1 },
+            { rowKey: 'APAC|||Enterprise', rowPath: 'APAC|||Enterprise', top: 176, size: 44, depth: 1 },
+            { rowKey: 'APAC|||Mid-market', rowPath: 'APAC|||Mid-market', top: 220, size: 44, depth: 1 },
+            { rowKey: 'EMEA', rowPath: 'EMEA', top: 264, size: 44, depth: 0 },
+        ],
+        prevTopByKey: prevSingle,
+        hasRecentlyExpandedAncestor: () => true,
+        rowHeight: 44,
+    });
+    assert.equal(singlePlan.revealByKey.get('APAC|||Commercial').fromTop, 0);
+    assert.equal(singlePlan.revealByKey.get('APAC|||Enterprise').fromTop, 44);
+    assert.equal(singlePlan.revealByKey.get('APAC|||Mid-market').fromTop, 88);
+    assert.equal(singlePlan.maxRevealTravelPx, 132);
+    // At every eased progress p in [0, 1], Mid-market stays exactly 44px above EMEA (zero gap/overlap).
+    for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+        const midY = 88 + (220 - 88) * p;
+        const emeaY = 132 + (264 - 132) * p;
+        assert.equal(emeaY - midY, 44);
+    }
+
+    // Multi-parent Expand All: APAC (88->88) + EMEA (132->264) both expand 3 children; Latin America moves 176 -> 440.
+    const prevAll = new Map([
+        ['APAC', 88],
+        ['EMEA', 132],
+        ['Latin America', 176],
+    ]);
+    const allPlan = buildExpandRevealPlan({
+        committedSnapshots: [
+            { rowKey: 'APAC', rowPath: 'APAC', top: 88, size: 44, depth: 0 },
+            { rowKey: 'APAC|||Commercial', rowPath: 'APAC|||Commercial', top: 132, size: 44, depth: 1 },
+            { rowKey: 'APAC|||Enterprise', rowPath: 'APAC|||Enterprise', top: 176, size: 44, depth: 1 },
+            { rowKey: 'APAC|||Mid-market', rowPath: 'APAC|||Mid-market', top: 220, size: 44, depth: 1 },
+            { rowKey: 'EMEA', rowPath: 'EMEA', top: 264, size: 44, depth: 0 },
+            { rowKey: 'EMEA|||Commercial', rowPath: 'EMEA|||Commercial', top: 308, size: 44, depth: 1 },
+            { rowKey: 'EMEA|||Enterprise', rowPath: 'EMEA|||Enterprise', top: 352, size: 44, depth: 1 },
+            { rowKey: 'EMEA|||Mid-market', rowPath: 'EMEA|||Mid-market', top: 396, size: 44, depth: 1 },
+            { rowKey: 'Latin America', rowPath: 'Latin America', top: 440, size: 44, depth: 0 },
+        ],
+        prevTopByKey: prevAll,
+        hasRecentlyExpandedAncestor: () => true,
+        rowHeight: 44,
+    });
+    assert.equal(allPlan.revealByKey.get('EMEA|||Mid-market').fromTop, 132);
+    for (const p of [0, 0.35, 0.7, 1]) {
+        const emeaLastY = 132 + (396 - 132) * p;
+        const latamY = 176 + (440 - 176) * p;
+        assert.equal(latamY - emeaLastY, 44);
+    }
+});
+
+test('Phase B: single-column sort suppresses priority badge while multi-column sort shows it', () => {
+    const React = localRequire('react');
+    const ReactDOMServer = localRequire('react-dom/server');
+    const { useRenderHelpers } = loader.load('src/lib/hooks/useRenderHelpers.js');
+    const { themes, getStyles } = loader.load('src/lib/utils/styles.js');
+    const theme = themes.dark;
+    const styles = getStyles(theme);
+
+    const renderWithSorting = (sortingList) => {
+        let helperApi = null;
+        const col = {
+            id: 'revenue_sum',
+            columns: [],
+            columnDef: { header: 'Revenue', meta: { measureField: 'revenue' } },
+            getIsSorted: () => 'desc',
+            getSortIndex: () => 0,
+            getIsResizing: () => false,
+            getIsPinned: () => false,
+            getLeafColumns: () => [],
+            getSize: () => 176,
+            getCanSort: () => true,
+            getCanResize: () => true,
+            getResizeHandler: () => () => {},
+            getToggleSortingHandler: () => () => {},
+        };
+        function Probe() {
+            helperApi = useRenderHelpers({
+                serverSide: true,
+                selectedCells: {},
+                fillRange: null,
+                dragStart: null,
+                theme,
+                getStickyStyle: () => ({}),
+                isDarkTheme: () => true,
+                handleCellMouseDown: () => {},
+                handleCellMouseEnter: () => {},
+                handleContextMenu: () => {},
+                handleFillMouseDown: () => {},
+                visibleLeafColIndexMap: new Map([['revenue_sum', 0]]),
+                lastSelected: null,
+                styles,
+                getConditionalStyle: () => null,
+                rowHeight: 40,
+                headerHeight: 40,
+                rowFields: ['region'],
+                tableRef: { current: null },
+                leftCols: [],
+                centerCols: [col],
+                rightCols: [],
+                columnPinning: { left: [], right: [] },
+                sorting: sortingList,
+                sortOptions: {},
+                fontFamily: 'Inter',
+                fontSize: '13px',
+                handleHeaderContextMenu: () => {},
+                autoSizeColumn: () => {},
+                autoSizeBounds: { minWidth: 40, maxWidth: 600 },
+                hoveredHeaderIdRef: { current: null },
+                focusedHeaderIdRef: { current: null },
+                setHoveredHeaderId: () => {},
+                setFocusedHeaderId: () => {},
+                handleFilterClick: () => {},
+                filters: {},
+                selectedCols: new Set(),
+                activeFilterCol: null,
+                activeFilterOwner: null,
+                filterAnchorEl: null,
+                closeFilterPopover: () => {},
+                activeFilterOptions: [],
+                activeFilterOptionMeta: null,
+                requestFilterOptions: null,
+                handleHeaderFilter: () => {},
+                headerFormatting: {},
+                dataBarsColumns: new Set(),
+                dataBarMaximums: {},
+                dataBarVariant: 'fill',
+                colorScaleStats: {},
+                cellFormatRules: {},
+                resolveEditedCellMarker: () => null,
+                resolveCellDisplayValue: (_r, _c, v) => v,
+                editedCellEpoch: 0,
+                getHeaderStickyStyle: () => ({}),
+                dragOverHeaderId: null,
+                dragOverSide: null,
+                rowCheckboxMode: false,
+                selectedRowKeys: new Set(),
+                toggleRowCheckbox: null,
+                getLocaleText: (_k, fallback) => fallback,
+            });
+            return null;
+        }
+        ReactDOMServer.renderToStaticMarkup(React.createElement(Probe));
+        const header = {
+            id: 'revenue_sum',
+            column: col,
+            isPlaceholder: false,
+            subHeaders: [],
+            getSize: () => 176,
+            getContext: () => ({}),
+        };
+        const tree = helperApi.renderHeaderCell(header, 1, 'center', 176, true, {});
+        const collectTitles = (node, acc = []) => {
+            if (!node || typeof node !== 'object') return acc;
+            if (Array.isArray(node)) {
+                node.forEach((child) => collectTitles(child, acc));
+                return acc;
+            }
+            if (node.props && node.props.title) acc.push(node.props.title);
+            if (node.props && node.props.children) collectTitles(node.props.children, acc);
+            return acc;
+        };
+        return collectTitles(tree);
+    };
+
+    const singleSortTitles = renderWithSorting([{ id: 'revenue_sum', desc: true }]);
+    assert.ok(!singleSortTitles.includes('Sort priority 1'), `Single-column sort must hide priority badge, found: ${JSON.stringify(singleSortTitles)}`);
+
+    const multiSortTitles = renderWithSorting([{ id: 'revenue_sum', desc: true }, { id: 'units_sum', desc: false }]);
+    assert.ok(multiSortTitles.includes('Sort priority 1'), `Multi-column sort must show priority badge, found: ${JSON.stringify(multiSortTitles)}`);
+});
+
+test('rowMotion: buildSkeletonFillPlan smoothly cascades full-viewport queries and partial scroll fills without colliding with FLIP or expand reveals', () => {
+    const {
+        SKELETON_FILL_DURATION_MS,
+        SKELETON_FILL_MAX_STAGGER_MS,
+        SKELETON_FILL_OFFSET_Y_PX,
+        SKELETON_FILL_STAGGER_MS,
+        buildSkeletonFillPlan,
+    } = loader.load('src/lib/utils/rowMotion.js');
+
+    // 1. Full-viewport query settle (e.g., Expand All growing from 4 skeletons to 12 visible rows)
+    const expandedSnapshots = Array.from({ length: 12 }, (_, i) => ({
+        rowKey: `row_${i}`,
+        rowPath: i === 0 ? 'APAC' : `APAC|||Child_${i}`,
+        virtualIndex: i,
+        top: i * 44,
+        size: 44,
+        depth: i === 0 ? 0 : 1,
+    }));
+    const fullQueryPlan = buildSkeletonFillPlan({
+        committedSnapshots: expandedSnapshots,
+        prevSkeletonIndices: new Set([0, 1, 2, 3]),
+        prevTopByKey: new Map(),
+        expandRevealByKey: new Map(),
+        isInitialMount: false,
+    });
+    assert.equal(fullQueryPlan.size, 12, 'All visible rows arriving from a full-viewport query must animate uniformly even when rowCount grows');
+    assert.equal(fullQueryPlan.get('row_0').delayMs, 0);
+    assert.equal(fullQueryPlan.get('row_1').delayMs, SKELETON_FILL_STAGGER_MS);
+    assert.equal(fullQueryPlan.get('row_11').delayMs, SKELETON_FILL_MAX_STAGGER_MS);
+    assert.equal(fullQueryPlan.get('row_0').durationMs, SKELETON_FILL_DURATION_MS);
+    assert.equal(fullQueryPlan.get('row_0').offsetYPx, SKELETON_FILL_OFFSET_Y_PX);
+
+    // 2. Partial scroll arrival (top 2 rows cached, bottom 2 replaced skeletons)
+    const partialPlan = buildSkeletonFillPlan({
+        committedSnapshots: [
+            { rowKey: 'cached_0', virtualIndex: 0, top: 0, size: 44, depth: 0 },
+            { rowKey: 'cached_1', virtualIndex: 1, top: 44, size: 44, depth: 0 },
+            { rowKey: 'fresh_2', virtualIndex: 2, top: 88, size: 44, depth: 0 },
+            { rowKey: 'fresh_3', virtualIndex: 3, top: 132, size: 44, depth: 0 },
+        ],
+        prevSkeletonIndices: new Set([2, 3]),
+        prevTopByKey: new Map([['cached_0', 0], ['cached_1', 44]]),
+        expandRevealByKey: new Map(),
+        isInitialMount: false,
+    });
+    assert.equal(partialPlan.size, 2);
+    assert.ok(!partialPlan.has('cached_0') && !partialPlan.has('cached_1'));
+    assert.equal(partialPlan.get('fresh_2').delayMs, 0);
+    assert.equal(partialPlan.get('fresh_3').delayMs, SKELETON_FILL_STAGGER_MS);
+
+    // 3. Single-row expand rows already handled by expandRevealByKey must not double-animate
+    const expandGuardPlan = buildSkeletonFillPlan({
+        committedSnapshots: [
+            { rowKey: 'APAC', virtualIndex: 0, top: 0, size: 44, depth: 0 },
+            { rowKey: 'APAC|||Consumer', virtualIndex: 1, top: 44, size: 44, depth: 1 },
+        ],
+        prevSkeletonIndices: new Set([1]),
+        prevTopByKey: new Map([['APAC', 0]]),
+        expandRevealByKey: new Map([['APAC|||Consumer', { fromTop: 0, toTop: 44, travelPx: 44, parentKey: 'APAC' }]]),
+        isInitialMount: false,
+    });
+    assert.equal(expandGuardPlan.size, 0);
+
+    // 4. Initial mount (rowCount 0 -> 4 before virtual skeletons ever rendered)
+    const initialPlan = buildSkeletonFillPlan({
+        committedSnapshots: [
+            { rowKey: 'APAC', virtualIndex: 0, top: 0, size: 44, depth: 0 },
+            { rowKey: 'EMEA', virtualIndex: 1, top: 44, size: 44, depth: 0 },
+        ],
+        prevSkeletonIndices: new Set(),
+        prevTopByKey: new Map(),
+        isInitialMount: true,
+    });
+    assert.equal(initialPlan.size, 2);
+    assert.equal(initialPlan.get('APAC').delayMs, 0);
+    assert.equal(initialPlan.get('EMEA').delayMs, SKELETON_FILL_STAGGER_MS);
 });

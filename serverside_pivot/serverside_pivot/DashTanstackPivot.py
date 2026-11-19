@@ -259,6 +259,8 @@ Keyword arguments:
 
 - detailMode (string; default PropTypes.oneOf(['none', 'inline', 'sidepanel', 'drawer']))
 
+- diffConfig (dict; default PropTypes.object)
+
 - drillEndpoint (string; default PropTypes.string)
 
 - duckdbBundleUrl (string; default PropTypes.string)
@@ -504,6 +506,10 @@ Keyword arguments:
 
 
 - sparklineFields (dict; default PropTypes.object)
+
+- streamUpdates (dict; default PropTypes.object)
+
+- streamingConfig (dict; default PropTypes.object)
 
 - table (string; default PropTypes.string)
 
@@ -966,11 +972,14 @@ Keyword arguments:
         activeReportId: typing.Optional[typing.Union[str]] = None,
         rowSelection: typing.Optional[typing.Union[str, "RowSelection"]] = None,
         selectedRows: typing.Optional[typing.Union[typing.Sequence[str]]] = None,
+        streamingConfig: typing.Optional[typing.Union[dict]] = None,
+        streamUpdates: typing.Optional[typing.Union[dict]] = None,
+        diffConfig: typing.Optional[typing.Union[dict]] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'activeReportId', 'autoSizeStrategy', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'duckdbBundleUrl', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'fitToWidth', 'grandTotalPosition', 'groupAllowUnbalanced', 'headerFormatting', 'immersiveExitPosition', 'immersiveMode', 'loadWebFonts', 'localeText', 'measureAxis', 'measureGroups', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowHeaderLabel', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showGrandTotal', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'style', 'table', 'tableCanvasSize', 'themeOverrides', 'treeConfig', 'uiConfig', 'unbalancedValues', 'unitSuffix', 'valConfigs', 'validationRules', 'valueScale', 'viewMode', 'viewState']
+        self._prop_names = ['id', 'activeReportId', 'autoSizeStrategy', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'diffConfig', 'drillEndpoint', 'duckdbBundleUrl', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'fitToWidth', 'grandTotalPosition', 'groupAllowUnbalanced', 'headerFormatting', 'immersiveExitPosition', 'immersiveMode', 'loadWebFonts', 'localeText', 'measureAxis', 'measureGroups', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowHeaderLabel', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showGrandTotal', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'streamUpdates', 'streamingConfig', 'style', 'table', 'tableCanvasSize', 'themeOverrides', 'treeConfig', 'uiConfig', 'unbalancedValues', 'unitSuffix', 'valConfigs', 'validationRules', 'valueScale', 'viewMode', 'viewState']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'activeReportId', 'autoSizeStrategy', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'duckdbBundleUrl', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'fitToWidth', 'grandTotalPosition', 'groupAllowUnbalanced', 'headerFormatting', 'immersiveExitPosition', 'immersiveMode', 'loadWebFonts', 'localeText', 'measureAxis', 'measureGroups', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowHeaderLabel', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showGrandTotal', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'style', 'table', 'tableCanvasSize', 'themeOverrides', 'treeConfig', 'uiConfig', 'unbalancedValues', 'unitSuffix', 'valConfigs', 'validationRules', 'valueScale', 'viewMode', 'viewState']
+        self.available_properties = ['id', 'activeReportId', 'autoSizeStrategy', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'diffConfig', 'drillEndpoint', 'duckdbBundleUrl', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'fitToWidth', 'grandTotalPosition', 'groupAllowUnbalanced', 'headerFormatting', 'immersiveExitPosition', 'immersiveMode', 'loadWebFonts', 'localeText', 'measureAxis', 'measureGroups', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowHeaderLabel', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showGrandTotal', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'streamUpdates', 'streamingConfig', 'style', 'table', 'tableCanvasSize', 'themeOverrides', 'treeConfig', 'uiConfig', 'unbalancedValues', 'unitSuffix', 'valConfigs', 'validationRules', 'valueScale', 'viewMode', 'viewState']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

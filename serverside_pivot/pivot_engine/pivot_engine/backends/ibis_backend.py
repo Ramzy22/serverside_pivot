@@ -165,6 +165,8 @@ def _connect_ibis_uri(connection_uri: str, **connection_kwargs) -> Any:
         return ibis.duckdb.connect(normalized_md, **connection_kwargs)
     if lower.startswith("duckdb://") or uri == ":memory:":
         target = uri[len("duckdb://"):] if lower.startswith("duckdb://") else uri
+        if len(target) >= 3 and target[0] == "/" and target[2] == ":":
+            target = target[1:]
         return ibis.duckdb.connect(target, **connection_kwargs)
 
     if "://" in uri and hasattr(ibis, "connect"):

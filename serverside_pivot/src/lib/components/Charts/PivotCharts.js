@@ -214,7 +214,8 @@ const ChartConfigSection = ({ title, theme, children, defaultCollapsed = true, f
         if (focusTrigger > 0 && focusTrigger !== prevTrigger.current) {
             prevTrigger.current = focusTrigger;
             setCollapsed(false);
-            setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60);
+            const reducedMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' }), 60);
         }
     }, [focusTrigger]);
     return (
@@ -1603,6 +1604,8 @@ const ChartSurface = ({
                             {exportMenuOpen && exportMenuTarget ? createPortal(
                                 <div
                                     ref={exportMenuRef}
+                                    data-pivot-workspace-root="true"
+                                    className="sp-menu-surface"
                                     role="menu"
                                     aria-label="Chart export formats"
                                     style={{

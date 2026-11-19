@@ -20,6 +20,9 @@ export function useRuntimeViewportTableData({
   showColTotals,
   tableDataRef,
   total,
+  liveSubscriptionStore = null,
+  liveChangedOnly = false,
+  liveChangedRevision = 0,
 }) {
   /** @type {(...args: any[]) => any} */
   const getStableDataRowId = useCallback(row => {
@@ -53,15 +56,31 @@ export function useRuntimeViewportTableData({
         return true;
       });
       /** @type {any[]} */
-      const nextData = [...centerData, ...pinnedData];
+      let nextData = [...centerData, ...pinnedData];
       if (serverSidePinsGrandTotal && grandTotalRow && !seenIds.has(GRAND_TOTAL_ROW_ID)) nextData.push(grandTotalRow);
+      if (liveChangedOnly && liveSubscriptionStore && typeof liveSubscriptionStore.hasRowChanged === 'function') {
+        nextData = nextData.filter(/** @param {any} [row] @returns {any} */ (row) => {
+          if (!row) return false;
+          if (isGrandTotalRow(row)) return true;
+          const candidates = [row._canonicalPath, row._path, row._id, row.id].filter(Boolean).map(String);
+          return candidates.some(/** @param {any} [k] @returns {any} */ (k) => liveSubscriptionStore.hasRowChanged(k));
+        });
+      }
       return nextData;
     }
     /** @type {any} */
     let baseData = filteredData.length ? [...nodes] : [];
     if (!showColTotals) baseData = baseData.filter(/** @param {any} [row] @returns {any} */ row => !row._isTotal);
+    if (liveChangedOnly && liveSubscriptionStore && typeof liveSubscriptionStore.hasRowChanged === 'function') {
+      baseData = baseData.filter(/** @param {any} [row] @returns {any} */ (row) => {
+        if (!row) return false;
+        if (isGrandTotalRow(row)) return true;
+        const candidates = [row._canonicalPath, row._path, row._id, row.id].filter(Boolean).map(String);
+        return candidates.some(/** @param {any} [k] @returns {any} */ (k) => liveSubscriptionStore.hasRowChanged(k));
+      });
+    }
     return showColTotals ? [...baseData, total] : baseData;
-  }, [filteredData, getStableDataRowId, grandTotalRow, nodes, pinnedRowCacheRef, renderedData, rowPinning, serverSide, serverSidePinsGrandTotal, showColTotals, total]);
+  }, [filteredData, getStableDataRowId, grandTotalRow, liveChangedOnly, liveChangedRevision, liveSubscriptionStore, nodes, pinnedRowCacheRef, renderedData, rowPinning, serverSide, serverSidePinsGrandTotal, showColTotals, total]);
 
   if (tableDataRef) tableDataRef.current = rawTableData;
 

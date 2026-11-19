@@ -755,7 +755,10 @@ export function useColumnDefs({
                         e.stopPropagation();
                         onToggleDetail(row);
                     }}
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }}
                     style={{
                         border: 'none',
                         background: isOpen ? 'rgba(59, 130, 246, 0.14)' : 'transparent',
@@ -1201,7 +1204,10 @@ export function useColumnDefs({
                                         e.stopPropagation();
                                         onConfigureReportLine(rowData);
                                     }}
-                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }}
                                     title="Configure this report line"
                                     aria-label="Configure this report line"
                                     style={{
@@ -1248,7 +1254,10 @@ export function useColumnDefs({
                         debugLog(`Toggling expansion (${modeLabel}) for`, row.id);
                         row.toggleExpanded(!expanded);
                     }}
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }}
                     style={{
                         border: 'none',
                         background: 'transparent',
@@ -1266,7 +1275,7 @@ export function useColumnDefs({
                             display: 'inline-flex',
                             alignItems: 'center',
                             transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                            transition: 'transform 180ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
+                            transition: 'transform 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
                         }}
                     >
                         <Icons.ChevronRight />

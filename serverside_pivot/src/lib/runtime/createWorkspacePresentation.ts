@@ -277,6 +277,7 @@ export function createWorkspacePresentation(
         virtualRows: source.virtualRows,
         visibleLeafColumns: source.visibleLeafColumns,
         zoomLevel: source.zoomLevel,
+        liveSubscriptionStore: source.liveSubscriptionStore,
     });
 }
 

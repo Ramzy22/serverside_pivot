@@ -72,6 +72,7 @@ def build_trader_table(row_count: int = TRADER_DEFAULT_ROWS) -> pa.Table:
         FROM range({row_count})
     )
     SELECT
+        id,
         CASE asset_class_id
             WHEN 0 THEN 'Equities'
             WHEN 1 THEN 'Fixed Income'
@@ -187,7 +188,10 @@ def build_trader_table(row_count: int = TRADER_DEFAULT_ROWS) -> pa.Table:
 def get_trader_adapter():
     """Create in-memory DuckDB adapter for trading demo."""
     adapter = create_tanstack_adapter(backend_uri=":memory:")
-    adapter.controller.load_data_from_arrow(TRADER_TABLE_NAME, build_trader_table())
+    tbl = build_trader_table()
+    adapter.controller.load_data_from_arrow(TRADER_TABLE_NAME, tbl)
+    stack = adapter.get_streaming_stack()
+    stack["source_adapter"].register_immutable_arrow_source(TRADER_TABLE_NAME, tbl)
     return adapter
 
 

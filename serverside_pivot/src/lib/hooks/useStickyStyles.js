@@ -1,5 +1,18 @@
 import { useMemo, useCallback } from 'react';
 
+const TRANSLUCENT_BG_RE = /rgba\(|hsla\(|\btransparent\b/i;
+
+/** @param {any} [bg] @param {any} [opaqueFallback] @returns {string} */
+const resolveOpaqueStickyBg = (bg, opaqueFallback) => {
+    const base = (typeof opaqueFallback === 'string' && opaqueFallback.trim()) ? opaqueFallback.trim() : '#FFFFFF';
+    if (typeof bg !== 'string' || !bg.trim()) return base;
+    const trimmed = bg.trim();
+    if (TRANSLUCENT_BG_RE.test(trimmed) && !trimmed.includes('gradient(')) {
+        return `linear-gradient(${trimmed}, ${trimmed}), ${base}`;
+    }
+    return trimmed;
+};
+
 const BODY_PINNED_Z_INDEX = 60;
 const BODY_PINNED_EDGE_Z_INDEX = 61;
 const HEADER_PINNED_Z_INDEX = 110;
@@ -102,7 +115,7 @@ const useStickyStyles = (theme, leftCols, rightCols) => {
     const getStickyStyle = useCallback((column, bg) => {
         /** @type {any} */
         const pinnedSide = resolvePinnedSide(column);
-        if (!pinnedSide) return { background: bg || theme.background };
+        if (!pinnedSide) return { background: bg || theme.surfaceBg || theme.background };
 
         /** @type {any} */
         const offsetLeaf = getOffsetLeaf(column, pinnedSide) || column;
@@ -113,7 +126,7 @@ const useStickyStyles = (theme, leftCols, rightCols) => {
             left: pinnedSide === 'left' ? `${offset}px` : undefined,
             right: pinnedSide === 'right' ? `${offset}px` : undefined,
             zIndex: hasBoundary(column, pinnedSide) ? BODY_PINNED_EDGE_Z_INDEX : BODY_PINNED_Z_INDEX,
-            background: bg || theme.background // Important for sticky to cover scrolled content
+            background: resolveOpaqueStickyBg(bg, theme.surfaceBg || theme.background || '#FFFFFF')
             ,
             ...(hasBoundary(column, pinnedSide) ? getBoundaryStyle(pinnedSide) : {})
         };
@@ -125,7 +138,7 @@ const useStickyStyles = (theme, leftCols, rightCols) => {
         /** @type {any} */
         const pinnedSide = resolvePinnedSide(column, renderSection);
         /** @type {any} */
-        const background = backgroundOverride || theme.headerBg;
+        const background = resolveOpaqueStickyBg(backgroundOverride || theme.headerBg, theme.surfaceBg || theme.background || '#FFFFFF');
 
         if (!pinnedSide) return { background };
 

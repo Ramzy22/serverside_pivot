@@ -6,7 +6,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { buildTsvFromRawRows } from '../utils/rawTableTsv';
 import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds, reconcilePivotLayoutOrder, pivotLayoutRequestFields } from '../utils/columnOrder';
 import { compareFilterOptionValues } from '../utils/filterOptions';
-import { buildThemeCssVars, getStyles, toCssPx, toFiniteNumber } from '../utils/styles';
+import { buildThemeCssVars, getStyles, resolveDepthToken, toCssPx, toFiniteNumber } from '../utils/styles';
 import { computeCompactFitThemeOverrides, computeFitToWidthLayout, createTextWidthMeasurer, measureColumnFitMetric, measureLongestHeaderWord } from '../utils/pivotLayoutUtils';
 import Icons from '../utils/Icons';
 import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, isGrandTotalRow, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
@@ -53,6 +53,7 @@ import { useRuntimeDisplayNavigation } from '../runtime/useRuntimeDisplayNavigat
 import { getDisplayOrderedLeafColumns } from './displayColumnOrder';
 import { useRuntimeViewRestoreScroll } from '../runtime/useRuntimeViewRestoreScroll';
 import { createRuntimeExportCommands } from '../runtime/createRuntimeExportCommands';
+import { useExternalStoreSnapshot, useViewportSubscriptionStore } from '../runtime/useViewportSubscriptionStore';
 const LazyPivotChartModal = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
   default: module.PivotChartModal
 })));
@@ -84,7 +85,20 @@ export function useViewportRuntimeStage(input, transport) {
           changed = true;
         }
       } else if (nextLeft.includes('hierarchy')) {
-        nextLeft = nextLeft.filter(id => id !== 'hierarchy');
+        const rightSet = new Set(Array.isArray(prev.right) ? prev.right : []);
+        const replacementFields = (stage.layoutMode === 'outline' || stage.layoutMode === 'tabular')
+          && Array.isArray(stage.rowFields)
+          ? stage.rowFields.filter(id => id && !rightSet.has(id) && !nextLeft.includes(id))
+          : [];
+        const expandedLeft = [];
+        nextLeft.forEach(id => {
+          if (id === 'hierarchy') {
+            replacementFields.forEach(rf => expandedLeft.push(rf));
+          } else {
+            expandedLeft.push(id);
+          }
+        });
+        nextLeft = expandedLeft;
         changed = true;
       }
 
@@ -664,21 +678,24 @@ export function useViewportRuntimeStage(input, transport) {
         onClick: () => stage.openSelectionChart(selectionForMenu)
       });
     }
+    const hasFilterableValue = value !== null && value !== undefined && String(value).trim() !== '';
     actions.push('separator');
-    actions.push({
-      label: `Filter by "${value}"`,
-      icon: <Icons.Filter />,
-      onClick: () => {
-        stage.handleHeaderFilter(colId, {
-          operator: 'AND',
-          conditions: [{
-            type: 'eq',
-            value: String(value),
-            caseSensitive: false
-          }]
-        });
-      }
-    });
+    if (hasFilterableValue) {
+      actions.push({
+        label: `Filter by "${value}"`,
+        icon: <Icons.Filter />,
+        onClick: () => {
+          stage.handleHeaderFilter(colId, {
+            operator: 'AND',
+            conditions: [{
+              type: 'eq',
+              value: String(value),
+              caseSensitive: false
+            }]
+          });
+        }
+      });
+    }
     actions.push({
       label: 'Clear Filter',
       onClick: () => stage.handleHeaderFilter(colId, null)
@@ -705,6 +722,11 @@ export function useViewportRuntimeStage(input, transport) {
             expandedPaths: new Set([rowPath])
           };
           stage.captureExpansionScrollPosition();
+          stage.pendingExpansionRef.current = {
+            anchorBlock: 0,
+            alreadyCleared: true,
+            baselineDataVersion: Number(stage.dataVersion || 0)
+          };
           stage.clearCache();
           stage.setExpandedWithHistory(prev => {
             const base = prev !== null && typeof prev === 'object' ? prev : {};
@@ -1067,6 +1089,7 @@ export function useViewportRuntimeStage(input, transport) {
     renderedOffset: stage.renderedOffset,
     clearCache: stage.clearCache,
     invalidateFromBlock: stage.invalidateFromBlock,
+    patchRowsByKey: stage.patchRowsByKey,
     grandTotalRow: stage.grandTotalRow,
     loadedRows: stage.loadedRows,
     requestUrgentColumnViewport: stage.requestUrgentColumnViewport,
@@ -1096,6 +1119,7 @@ export function useViewportRuntimeStage(input, transport) {
     structuralInFlight: stage.structuralInFlight,
     stateEpochRef: stage.stateEpochRef,
     structuralPendingVersionRef: stage.structuralPendingVersionRef,
+    pendingExpansionRef: stage.pendingExpansionRef,
     requestVersionRef: stage.requestVersionRef,
     tableName: stage.tableName,
     colStart: stage.colRequestStart,
@@ -1110,6 +1134,43 @@ export function useViewportRuntimeStage(input, transport) {
     layoutRequestFields: stage.layoutRequestFields
   }));
   stage.requestUrgentColumnViewportRef.current = stage.requestUrgentColumnViewport;
+  const liveSubscriptionCallbacks = useMemo(() => ({
+    onPatchRows: (patchesByRowKey, sourceRevision, visibleRowKeys) => {
+      if (typeof stage.patchRowsByKey === 'function') {
+        stage.patchRowsByKey(patchesByRowKey, sourceRevision, visibleRowKeys);
+      }
+    },
+    onTriggerViewportRefresh: () => {
+      if (typeof stage.requestVisibleViewportRefresh === 'function') {
+        stage.requestVisibleViewportRefresh();
+      }
+    },
+  }), [stage.patchRowsByKey, stage.requestVisibleViewportRefresh]);
+  const liveTransitionInFlight = Boolean(
+    stage.structuralInFlight
+    || (stage.pendingExpansionRef && stage.pendingExpansionRef.current)
+    || (stage.structuralPendingVersionRef && stage.structuralPendingVersionRef.current)
+  );
+  stage.liveSubscriptionStore = useViewportSubscriptionStore({
+    streamingConfig: stage.streamingConfig,
+    diffConfig: stage.diffConfig,
+    streamUpdates: stage.streamUpdates,
+    serverSide: stage.serverSide,
+    clientTransport: stage.clientTransportRef ? stage.clientTransportRef.current : null,
+    transitionInFlight: liveTransitionInFlight,
+    queryContext: {
+      table: stage.tableName || 'client_data',
+      rowFields: stage.rowFields || [],
+      colFields: stage.colFields || [],
+      valConfigs: stage.valConfigs || [],
+      filters: stage.filters || {},
+      sorting: stage.sorting || [],
+      expanded: stage.expanded || {},
+      viewportStart: stage.latestViewportRef?.current?.start ?? 0,
+      viewportEnd: stage.latestViewportRef?.current?.end ?? 100,
+    },
+    callbacks: liveSubscriptionCallbacks,
+  });
   ({ retryRuntimeData: stage.retryRuntimeData, runtimeDataError: stage.runtimeDataError } = useRuntimeDataRetry({
     runtimeDataError: stage.runtimeDataError,
     setRuntimeDataError: stage.setRuntimeDataError,
@@ -1391,6 +1452,10 @@ export function useViewportRuntimeStage(input, transport) {
     }, 10000);
     return () => clearTimeout(timeoutId);
   }, [stage.pendingRowTransitions, stage.serverSide, clearAllPendingRowTransitions]);
+  const liveSubscriptionStatus = useExternalStoreSnapshot(
+    stage.liveSubscriptionStore.subscribeStatus,
+    stage.liveSubscriptionStore.getStatus,
+  );
   const viewportTableData = useRuntimeViewportTableData({
     comparisonCellCountsRef: stage.comparisonCellCountsRef,
     comparisonCellEpoch: stage.comparisonCellEpoch,
@@ -1408,6 +1473,9 @@ export function useViewportRuntimeStage(input, transport) {
     showColTotals: stage.showColTotals,
     tableDataRef: stage.tableDataRef,
     total: stage.total,
+    liveSubscriptionStore: stage.liveSubscriptionStore,
+    liveChangedOnly: Boolean(liveSubscriptionStatus && liveSubscriptionStatus.changedOnly),
+    liveChangedRevision: liveSubscriptionStatus ? liveSubscriptionStatus.sourceRevision : 0,
   });
   for (const [key, value] of Object.entries(viewportTableData)) stage[key] = value;
     // Handle zero-crossing: when data spans negative and positive,
@@ -1560,7 +1628,11 @@ export function useViewportRuntimeStage(input, transport) {
     }, 800);
     if (stage.serverSide) {
       stage.captureExpansionScrollPosition();
-      stage.pendingExpansionRef.current = null;
+      stage.pendingExpansionRef.current = {
+        anchorBlock: 0,
+        alreadyCleared: true,
+        baselineDataVersion: Number(stage.dataVersion || 0)
+      };
       stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
       if (!shouldExpand) {
         if (stage.parentRef.current) stage.parentRef.current.scrollTop = 0;
@@ -1964,33 +2036,53 @@ export function useViewportRuntimeStage(input, transport) {
     10
   ) ?? 10;
   const lastFitSignatureRef = useRef('');
-  const fitLayoutSpec = useMemo(() => {
-    if (!fitToWidthEnabled || fitContainerWidth <= 0 || !stage.table) return null;
+  const canMeasureFit = fitToWidthEnabled && fitContainerWidth > 0;
+  const fitColumnMetrics = useMemo(() => {
+    if (!canMeasureFit || !stage.table) return null;
     const leaves = typeof stage.table.getVisibleLeafColumns === 'function'
       ? stage.table.getVisibleLeafColumns()
       : [];
     if (!leaves || leaves.length === 0) return null;
 
-    const allBodyRows = typeof stage.table.getRowModel === 'function' ? stage.table.getRowModel().rows : [];
+    // The server can only measure materialized rows. In-memory mode can also
+    // fit values on other pages without waiting for them to enter the viewport.
+    const allBodyRows = stage.table.getPrePaginationRowModel().rows;
     const pinnedTop = typeof stage.table.getTopRows === 'function' ? stage.table.getTopRows() : [];
     const pinnedBottom = typeof stage.table.getBottomRows === 'function' ? stage.table.getBottomRows() : [];
-    const sampledBody = typeof stage.getAutoSizeSampleRows === 'function'
-      ? stage.getAutoSizeSampleRows(allBodyRows)
-      : allBodyRows.slice(0, MAX_AUTO_SIZE_SAMPLE_ROWS);
     const seenIds = new Set();
-    const sampleRows = [];
-    [...pinnedTop, ...sampledBody, ...pinnedBottom].forEach(row => {
+    const fitRows = [];
+    [...pinnedTop, ...allBodyRows, ...pinnedBottom].forEach(row => {
       if (!row || (row.id !== undefined && seenIds.has(row.id))) return;
       if (row.id !== undefined) seenIds.add(row.id);
-      sampleRows.push(row);
+      fitRows.push(row);
     });
 
     const baseFamily = stage.effectiveFontFamily || stage.fontFamily || "'Inter', system-ui, sans-serif";
     const numericFamily = fitBaseTheme?.numericFontFamily || baseFamily;
     const baseHeaderPx = toFiniteNumber(fitBaseTheme?.headerFontSize, parsedFitBaseFontSize) ?? parsedFitBaseFontSize;
-    const measureHierarchyText = createTextWidthMeasurer(`${parsedFitBaseFontSize}px ${baseFamily}`, parsedFitBaseFontSize * 0.6);
-    const measureNumericText = createTextWidthMeasurer(`${parsedFitBaseFontSize}px ${numericFamily}`, parsedFitBaseFontSize * 0.6);
-    const measureHeaderText = createTextWidthMeasurer(`600 ${baseHeaderPx}px ${baseFamily}`, baseHeaderPx * 0.62);
+    const baseGroupPx = toFiniteNumber(fitBaseTheme?.headerGroupFontSize, baseHeaderPx) ?? baseHeaderPx;
+    const headerWeight = fitBaseTheme?.headerFontWeight ?? 600;
+    const measureHeaderText = createTextWidthMeasurer(`${headerWeight} ${baseHeaderPx}px ${baseFamily}`, baseHeaderPx * 0.62);
+    const measureGroupHeaderText = createTextWidthMeasurer(`${headerWeight} ${baseGroupPx}px ${baseFamily}`, baseGroupPx * 0.62);
+    const bodyMeasurers = new Map();
+    const measureBodyText = (text, row, colId) => {
+      const original = row.original;
+      const isTotal = isGrandTotalRow(original);
+      const hasChildren = original?._has_children || row.subRows?.length;
+      const leafWeight = fitBaseTheme?.leafFontWeight ?? 400;
+      const groupWeight = hasChildren
+        ? resolveDepthToken(fitBaseTheme?.groupFontWeight, original?.depth ?? row.depth, leafWeight)
+        : leafWeight;
+      const weight = isTotal || original?._reportFormat?.bold
+        ? (fitBaseTheme?.totalFontWeight ?? 700)
+        : (colId.startsWith('__RowTotal__') ? 700 : groupWeight);
+      const family = colId === 'hierarchy' ? baseFamily : numericFamily;
+      const font = `${weight} ${parsedFitBaseFontSize}px ${family}`;
+      if (!bodyMeasurers.has(font)) {
+        bodyMeasurers.set(font, createTextWidthMeasurer(font, parsedFitBaseFontSize * 0.6));
+      }
+      return bodyMeasurers.get(font)(text);
+    };
     const cellPaddingX = toFiniteNumber(fitBaseTheme?.cellPaddingX, 12) ?? 12;
     const headerPaddingX = toFiniteNumber(fitBaseTheme?.headerPaddingX, cellPaddingX) ?? cellPaddingX;
     const numericPaddingRight = toFiniteNumber(fitBaseTheme?.numericPaddingRight, 8) ?? 8;
@@ -1998,7 +2090,7 @@ export function useViewportRuntimeStage(input, transport) {
     const headerControlsMode = fitBaseTheme?.headerControls || 'always';
     const sortIndicatorMode = fitBaseTheme?.sortIndicator || 'arrow';
 
-    const measuredColumns = leaves.map(col => {
+    return leaves.map(col => {
       const colId = col.id;
       const baseSize = (col.columnDef && col.columnDef.size) || (typeof col.getSize === 'function' ? col.getSize() : 100) || 100;
       const matchingCfg = Array.isArray(stage.valConfigs) && typeof stage.matchesSelectedColumnToValueConfig === 'function'
@@ -2029,41 +2121,38 @@ export function useViewportRuntimeStage(input, transport) {
       return measureColumnFitMetric({
         columnId: colId,
         baseSize,
-        rows: sampleRows,
+        minSize: col.columnDef?.minSize,
+        rows: fitRows,
         getCellRawValue: (row, id) => row.getValue(id),
         formatCellText: (val) => formatValue(val, effectiveFmt, effectiveDec, effectiveSep, displayOpts),
-        formatHierarchyLabel: formatDisplayLabel,
+        getHierarchyLabel: ({ original }) => original?._reportDisplayLabel || original?._label || original?._id || '',
         headerLines: headerStack,
         shortLabel: col.columnDef?.meta?.shortLabel || null,
         headerWrap: headerWrapActive,
         headerControlsMode,
-        canSort: typeof col.getCanSort === 'function' ? col.getCanSort() : true,
+        canSort: Boolean(col.getIsSorted()),
         sortIndicator: sortIndicatorMode,
-        measureBodyText: colId === 'hierarchy' ? measureHierarchyText : measureNumericText,
+        measureBodyText: (text, row) => measureBodyText(text, row, colId),
         measureHeaderText,
+        measureGroupHeaderText,
         cellPaddingX,
         headerPaddingX,
         numericPaddingRight,
-        hierarchyIndentPx: 24,
+        hierarchyIndentPx: toFiniteNumber(fitBaseTheme?.treeIndent, 32) ?? 32,
         hierarchyExpandPx: 22,
         cellOverscan: 4,
         headerOverscan: 4,
       });
     });
 
-    return computeFitToWidthLayout({
-      columns: measuredColumns,
-      containerWidth: fitContainerWidth,
-      baseFontSize: parsedFitBaseFontSize,
-      minFontSize: fitMinFontSize,
-    });
   }, [
-    fitToWidthEnabled,
-    fitContainerWidth,
-    fitMinFontSize,
+    canMeasureFit,
     parsedFitBaseFontSize,
     stage.columns,
     stage.columnVisibility,
+    stage.expanded,
+    stage.rowPinning,
+    stage.sorting,
     stage.tableData,
     stage.dataVersion,
     stage.valConfigs,
@@ -2080,6 +2169,14 @@ export function useViewportRuntimeStage(input, transport) {
     stage.uiConfig?.wrapHeaders,
     fitBaseTheme,
   ]);
+  const fitLayoutSpec = useMemo(() => fitColumnMetrics && computeFitToWidthLayout({
+    columns: fitColumnMetrics,
+    containerWidth: fitContainerWidth,
+    baseFontSize: parsedFitBaseFontSize,
+    minFontSize: fitMinFontSize,
+    theme: fitBaseTheme,
+    getFixedColumnSize: id => stage.table.getColumn(id)?.getSize(),
+  }), [fitColumnMetrics, fitContainerWidth, parsedFitBaseFontSize, fitMinFontSize, fitBaseTheme, stage.columnSizing]);
   useEffect(() => {
     if (!fitLayoutSpec || !fitLayoutSpec.columnSizing) return;
     const sig = `${fitContainerWidth}:${fitLayoutSpec.fontSize}:${JSON.stringify(fitLayoutSpec.columnSizing)}`;
@@ -2094,15 +2191,20 @@ export function useViewportRuntimeStage(input, transport) {
   }, [fitLayoutSpec, fitContainerWidth]);
   const baseThemeCssVars = stage.themeCssVars;
   const fittedThemeBundle = useMemo(() => {
-    if (!fitToWidthEnabled || !fitLayoutSpec || !Number.isFinite(fitLayoutSpec.fontSize) || fitLayoutSpec.fontSize >= parsedFitBaseFontSize) {
+    if (!fitToWidthEnabled || !fitLayoutSpec || !Number.isFinite(fitLayoutSpec.fontSize)
+      || (!fitLayoutSpec.compactTheme && fitLayoutSpec.fontSize >= parsedFitBaseFontSize)) {
       return null;
     }
-    const fittedCss = `${fitLayoutSpec.fontSize}px`;
+    const fittedCss = fitLayoutSpec.fontSize < parsedFitBaseFontSize
+      ? `${fitLayoutSpec.fontSize}px`
+      : toCssPx(fitBaseFontSize, stage.fontSize);
     const fitScale = parsedFitBaseFontSize > 0 ? (fitLayoutSpec.fontSize / parsedFitBaseFontSize) : 1;
-    const compactOverrides = computeCompactFitThemeOverrides(fitBaseTheme, fitScale, fitLayoutSpec.fontSize, fitMinFontSize);
+    const compactOverrides = fitLayoutSpec.compactTheme
+      || computeCompactFitThemeOverrides(fitBaseTheme, fitScale, fitLayoutSpec.fontSize, fitMinFontSize);
     const fittedTheme = {
       ...fitBaseTheme,
       ...compactOverrides,
+      fontSize: fittedCss,
     };
     const fittedStyles = getStyles(fittedTheme);
     const fittedThemeCssVars = baseThemeCssVars
@@ -2114,7 +2216,7 @@ export function useViewportRuntimeStage(input, transport) {
       styles: fittedStyles,
       themeCssVars: fittedThemeCssVars,
     };
-  }, [fitToWidthEnabled, fitLayoutSpec, parsedFitBaseFontSize, fitBaseTheme, fitMinFontSize, baseThemeCssVars]);
+  }, [fitToWidthEnabled, fitLayoutSpec, parsedFitBaseFontSize, fitBaseFontSize, fitBaseTheme, fitMinFontSize, stage.fontSize, baseThemeCssVars]);
   if (fittedThemeBundle) {
     stage.effectiveFontSize = fittedThemeBundle.effectiveFontSize;
     stage.theme = fittedThemeBundle.theme;
@@ -2504,6 +2606,11 @@ export function useViewportRuntimeStage(input, transport) {
     }
     toExpand.forEach(row => expandedPaths.add(row._path));
     stage.captureExpansionScrollPosition();
+    stage.pendingExpansionRef.current = {
+      anchorBlock: 0,
+      alreadyCleared: true,
+      baselineDataVersion: Number(stage.dataVersion || 0)
+    };
     stage.clearCache();
     stage.setExpanded(prev => {
       const base = prev !== null && typeof prev === 'object' ? prev : {};
@@ -2551,24 +2658,27 @@ export function useViewportRuntimeStage(input, transport) {
     }
     const {
       anchorBlock,
+      alreadyCleared = false,
       expandedRowVirtualIndex,
       oldRowCount,
       extendedToBlock = -1
     } = pendingExpansion;
     stage.pendingExpansionRef.current = null;
-    if (anchorBlock < 0) {
-      // The expanded row was not in the viewport when the user toggled it.
-      // We cannot know which cached index first shifted, so remove every
-      // cached block. Keeping those rows during revalidation paints values
-      // from the previous hierarchy at their now-invalid virtual indexes.
-      if (stage.invalidateFromBlock) stage.invalidateFromBlock(0);
-    } else {
-      // The expansion request was extended to cover through extendedToBlock
-      // (anchorBlock + 1 when the anchor is known).  Those blocks were filled
-      // with fresh data by the data-sync effect, so retain them and remove
-      // every later block whose virtual row indexes may have shifted.
-      const firstStaleBlock = extendedToBlock >= 0 ? extendedToBlock + 1 : anchorBlock + 1;
-      if (stage.invalidateFromBlock) stage.invalidateFromBlock(firstStaleBlock);
+    if (!alreadyCleared) {
+      if (anchorBlock < 0) {
+        // The expanded row was not in the viewport when the user toggled it.
+        // We cannot know which cached index first shifted, so remove every
+        // cached block. Keeping those rows during revalidation paints values
+        // from the previous hierarchy at their now-invalid virtual indexes.
+        if (stage.invalidateFromBlock) stage.invalidateFromBlock(0);
+      } else {
+        // The expansion request was extended to cover through extendedToBlock
+        // (anchorBlock + 1 when the anchor is known).  Those blocks were filled
+        // with fresh data by the data-sync effect, so retain them and remove
+        // every later block whose virtual row indexes may have shifted.
+        const firstStaleBlock = extendedToBlock >= 0 ? extendedToBlock + 1 : anchorBlock + 1;
+        if (stage.invalidateFromBlock) stage.invalidateFromBlock(firstStaleBlock);
+      }
     }
     // Clear the transition loader now that the expansion response has landed.
     clearAllPendingRowTransitions();

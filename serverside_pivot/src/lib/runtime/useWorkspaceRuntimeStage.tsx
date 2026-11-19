@@ -393,7 +393,8 @@ export function useWorkspaceRuntimeStage(input) {
     table: workspace.table,
     selectedRowKeys: workspace.selectedRowKeys,
     toggleRowCheckbox: workspace.toggleRowCheckbox,
-    rowCheckboxMode: workspace.rowCheckboxMode
+    rowCheckboxMode: workspace.rowCheckboxMode,
+    liveSubscriptionStore: workspace.liveSubscriptionStore
   }));
   workspace.srOnly = {
     position: 'absolute',

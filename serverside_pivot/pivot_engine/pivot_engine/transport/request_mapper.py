@@ -385,15 +385,17 @@ class TanStackRequestMapper(FormulaEngineMixin):
                     continue
 
                 if isinstance(filter_obj, dict):
-                    if "conditions" in filter_obj and "operator" in filter_obj:
+                    if "conditions" in filter_obj and isinstance(filter_obj.get("conditions"), (list, tuple)):
                         # This is a multi-condition filter block
                         conditions = []
                         for cond in filter_obj.get("conditions", []):
+                            if not isinstance(cond, dict):
+                                continue
                             conditions.append(
                                 {
-                                    "field": field_name,
+                                    "field": cond.get("field") or field_name,
                                     "op": self._map_tanstack_operator(
-                                        cond.get("type", "eq")
+                                        cond.get("op") or cond.get("type", "eq")
                                     ),
                                     "value": cond.get("value"),
                                     "caseSensitive": cond.get("caseSensitive", False),
@@ -402,7 +404,10 @@ class TanStackRequestMapper(FormulaEngineMixin):
 
                         if conditions:
                             pivot_filters.append(
-                                {"op": filter_obj["operator"], "conditions": conditions}
+                                {
+                                    "op": str(filter_obj.get("operator") or filter_obj.get("op") or "AND").upper(),
+                                    "conditions": conditions,
+                                }
                             )
                     else:
                         # This is a single-condition filter dict
@@ -592,17 +597,38 @@ class TanStackRequestMapper(FormulaEngineMixin):
 
     def _map_tanstack_operator(self, tanstack_op: str) -> str:
         """Map TanStack filter operators to pivot engine operators"""
+        raw = str(tanstack_op or "eq").strip()
+        lower = raw.lower()
         mapping = {
             "eq": "=",
+            "equals": "=",
+            "=": "=",
+            "==": "=",
             "ne": "!=",
+            "neq": "!=",
+            "not_equals": "!=",
+            "!=": "!=",
+            "<>": "!=",
             "lt": "<",
+            "<": "<",
             "gt": ">",
+            ">": ">",
             "lte": "<=",
+            "<=": "<=",
             "gte": ">=",
+            ">=": ">=",
             "contains": "contains",
-            "startsWith": "starts_with",
-            "endsWith": "ends_with",
+            "not_contains": "not_contains",
+            "notcontains": "not_contains",
+            "startswith": "starts_with",
+            "starts_with": "starts_with",
+            "endswith": "ends_with",
+            "ends_with": "ends_with",
             "in": "in",
-            "notIn": "not in",
+            "notin": "not in",
+            "not_in": "not in",
+            "between": "between",
+            "is_null": "is_null",
+            "is_not_null": "is_not_null",
         }
-        return mapping.get(tanstack_op, "=")
+        return mapping.get(lower, "=")

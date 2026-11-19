@@ -13,10 +13,10 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
     const [isDragging, setIsDragging] = useState(false);
     /** @type {any} */
     const checkboxRef = useRef(null);
-    
+
     /** @type {any} */
     const isGroup = column.columns && column.columns.length > 0;
-    
+
     const header = column.columnDef.header;
     // Extract clean label, removing group prefix
     /** @type {any} */
@@ -29,7 +29,7 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
         label = column.headerVal;
     }
     label = formatDisplayLabel(label);
-    
+
     /** @type {any} */
     const pin = column.getIsPinned();
     /** @type {any} */
@@ -69,10 +69,9 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
         e.stopPropagation();
         /** @type {any} */
         const newSet = new Set(selectedCols);
-        // User fix: When toggling a group selection, it now only selects the leaf columns (removed the parent group ID from the selection array).
         /** @type {any} */
         const ids = isGroup ? getAllLeafIdsFromColumn(column) : [column.id];
-        
+
         /** @type {any} */
         const allSelected = ids.every(/** @param {any} [id] @returns {any} */ id => newSet.has(id));
         if (allSelected) {
@@ -86,7 +85,7 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
     /** @param {any} [e] @returns {any} */
     const toggleVisibility = (e) => {
         e.stopPropagation();
-        
+
         if (isGroup) {
             /** @type {any} */
             const leafCols = getAllLeafColumns(column);
@@ -123,7 +122,7 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
         /** @type {any} */
         const droppedColId = e.dataTransfer.getData('text/plain');
         if (droppedColId && onDrop && droppedColId !== column.id) {
-             onDrop(droppedColId, sectionId, column.id);
+            onDrop(droppedColId, sectionId, column.id);
         }
     };
 
@@ -148,19 +147,23 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
 
     /** @param {any} [active] @returns {any} */
     const getPinBtnStyle = (active) => ({
-        padding: '4px', 
+        width: '20px',
+        height: '20px',
+        padding: '2px',
         background: active ? theme.primary : 'transparent',
-        border: 'none', 
-        cursor: 'pointer', 
-        borderRadius: '4px', 
+        border: 'none',
+        cursor: 'pointer',
+        borderRadius: '4px',
         color: active ? '#fff' : theme.textSec,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        opacity: active ? 1 : 0.6,
-        transition: 'all 0.2s'
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: active ? 1 : 0.72,
+        transition: 'background-color var(--sp-dur-fast, 140ms) ease, color var(--sp-dur-fast, 140ms) ease, opacity var(--sp-dur-fast, 140ms) ease',
     });
 
     return (
-        <div 
+        <div
             style={{ display: 'flex', flexDirection: 'column', opacity: isDragging ? 0.5 : 1 }}
             draggable={!isGroup}
             onDragStart={onColDragStart}
@@ -171,35 +174,39 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
             aria-selected={isSelected || isPartiallySelected}
             aria-expanded={expanded}
         >
-            <div 
+            <div
+                className="sp-col-tree-row"
                 style={{
                     ...styles.columnItem,
-                    paddingLeft: `${level * 12 + 8}px`, // Reduced indentation step
+                    gap: '5px',
+                    paddingRight: '6px',
+                    paddingLeft: `${level * 12 + 6}px`,
+                    minWidth: 0,
                     background: (isSelected || isPartiallySelected) ? theme.select : (isHovered ? theme.hover : 'transparent'),
                     borderLeft: pin ? `3px solid ${theme.primary}` : '3px solid transparent'
-                }} 
-                onMouseEnter={e => !(isSelected || isPartiallySelected) && setIsHovered(true)}
-                onMouseLeave={e => !(isSelected || isPartiallySelected) && setIsHovered(false)}
+                }}
+                onMouseEnter={() => !(isSelected || isPartiallySelected) && setIsHovered(true)}
+                onMouseLeave={() => !(isSelected || isPartiallySelected) && setIsHovered(false)}
                 tabIndex={0}
                 onKeyDown={handleKeyDown}
             >
-                <input 
+                <input
                     ref={checkboxRef}
-                    type="checkbox" 
-                    checked={isSelected} 
+                    type="checkbox"
+                    checked={isSelected}
                     onChange={toggleSelection}
                     onClick={(e) => e.stopPropagation()}
-                    style={{ margin: 0, cursor: 'pointer', pointerEvents: 'auto' }}
-                    tabIndex={-1} 
+                    style={{ margin: 0, cursor: 'pointer', pointerEvents: 'auto', flexShrink: 0 }}
+                    tabIndex={-1}
                 />
 
                 {!isGroup && (
-                    <span style={{ cursor: 'grab', display: 'flex', opacity: 0.7, marginRight: '4px' }}>
+                    <span style={{ cursor: 'grab', display: 'inline-flex', opacity: 0.55, flexShrink: 0 }}>
                         <Icons.DragIndicator />
                     </span>
                 )}
-                
-                {isGroup ? (
+
+                {isGroup && (
                     <span
                         role="button"
                         tabIndex={0}
@@ -207,55 +214,58 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
                         aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
                         onClick={() => setExpanded(!expanded)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded); } }}
-                        style={{ cursor: 'pointer', display: 'flex', opacity: 0.7, marginRight: '4px' }}
+                        style={{ cursor: 'pointer', display: 'inline-flex', opacity: 0.75, flexShrink: 0 }}
                     >
                         {expanded ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
                     </span>
-                ) : <span style={{ width: '20px' }} />}
-                
+                )}
+
                 <span
                     onClick={toggleVisibility}
                     style={{
                         cursor: 'pointer',
-                        display: 'flex',
+                        display: 'inline-flex',
                         color: isVisible ? theme.primary : theme.textSec,
                         opacity: isVisible ? 1 : 0.5,
-                        marginRight: '4px'
+                        flexShrink: 0
                     }}
                     title={isVisible ? "Hide Column" : "Show Column"}
                     aria-label={isVisible ? "Hide Column" : "Show Column"}
                 >
                     {isVisible ? <Icons.Visibility /> : <Icons.VisibilityOff />}
                 </span>
-                
-                <span 
-                    style={{ 
-                        flex: 1, 
-                        overflow: 'hidden', 
-                        textOverflow: 'ellipsis', 
-                        whiteSpace: 'nowrap',
+
+                <span
+                    style={{
+                        flex: '1 1 0%',
+                        minWidth: 0,
+                        overflow: 'hidden',
                         fontWeight: isGroup ? 600 : 400,
                         cursor: isGroup ? 'pointer' : 'default',
                         color: isVisible ? theme.text : theme.textSec,
                         opacity: isVisible ? 1 : 0.6,
-                        display: 'flex', alignItems: 'center'
-                    }} 
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                    }}
                     onClick={() => isGroup && setExpanded(!expanded)}
                     title={label}
                 >
-                    {isGroup && <Icons.Group style={{ marginRight: '6px', fontSize: '14px', opacity: 0.8 }} />}
-                    {label}
+                    {isGroup && <Icons.Group style={{ fontSize: '13px', opacity: 0.8, flexShrink: 0 }} />}
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {label}
+                    </span>
                 </span>
 
                 {!isGroup && (
-                    <div className="pin-controls">
-                        <button onClick={(e) => handlePin(e, 'left')} title="Pin Column Left" aria-label="Pin Column Left">
+                    <div className="pin-controls sp-col-pin-controls" data-pinned={pin || undefined}>
+                        <button type="button" style={getPinBtnStyle(pin === 'left')} onClick={(e) => handlePin(e, 'left')} title="Pin Column Left" aria-label="Pin Column Left">
                             <Icons.PinLeft />
                         </button>
-                        <button onClick={(e) => handlePin(e, false)} title="Unpin Column" aria-label="Unpin Column">
+                        <button type="button" style={getPinBtnStyle(!pin)} onClick={(e) => handlePin(e, false)} title="Unpin Column" aria-label="Unpin Column">
                             <Icons.Unpin />
                         </button>
-                        <button onClick={(e) => handlePin(e, 'right')} title="Pin Column Right" aria-label="Pin Column Right">
+                        <button type="button" style={getPinBtnStyle(pin === 'right')} onClick={(e) => handlePin(e, 'right')} title="Pin Column Right" aria-label="Pin Column Right">
                             <Icons.PinRight />
                         </button>
                     </div>
@@ -266,12 +276,12 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
                     {column.columns
                         .filter(/** @param {any} [child] @returns {any} */ child => hasChildrenInZone(child, sectionId))
                         .map(/** @param {any} [child] @returns {any} */ child => (
-                        <ColumnTreeItem 
-                            key={child.id} 
-                            column={child} 
-                            level={level + 1} 
-                            theme={theme} 
-                            styles={styles} 
+                        <ColumnTreeItem
+                            key={child.id}
+                            column={child}
+                            level={level + 1}
+                            theme={theme}
+                            styles={styles}
                             handlePinColumn={handlePinColumn}
                             colSearch={colSearch}
                             selectedCols={selectedCols}

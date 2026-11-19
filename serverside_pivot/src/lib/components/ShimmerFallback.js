@@ -6,11 +6,11 @@ import React from 'react';
  * @returns {any}
  */
 export default function ShimmerFallback({ variant = 'panel', height = undefined, width = undefined, style = undefined } = {}) {
-    const shimmerBg = 'linear-gradient(90deg, var(--sp-hover, rgba(148,163,184,0.08)) 20%, var(--sp-hover-strong, rgba(148,163,184,0.18)) 50%, var(--sp-hover, rgba(148,163,184,0.08)) 80%)';
+    const shimmerBg = 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, var(--sp-hover, rgba(148,163,184,0.12)) 0%, var(--sp-hover-strong, rgba(148,163,184,0.26)) 45%, var(--sp-hover, rgba(148,163,184,0.12)) 100%))';
     const shimmerStyle = {
         background: shimmerBg,
-        backgroundSize: '200% 100%',
-        animation: 'pivot-skeleton-shimmer 1.4s ease-in-out infinite',
+        backgroundSize: '220% 100%',
+        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite',
         borderRadius: 6,
     };
 

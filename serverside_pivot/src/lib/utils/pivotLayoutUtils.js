@@ -78,10 +78,12 @@ export const measureLongestHeaderWord = (text, measureFn) => {
 export const measureColumnFitMetric = ({
     columnId,
     baseSize = 100,
+    minSize = 20,
     rows = [],
     getCellRawValue,
     formatCellText,
     formatHierarchyLabel,
+    getHierarchyLabel,
     headerLines = [],
     shortLabel = null,
     headerWrap = false,
@@ -90,91 +92,91 @@ export const measureColumnFitMetric = ({
     sortIndicator = 'arrow',
     measureBodyText,
     measureHeaderText,
+    measureGroupHeaderText = measureHeaderText,
     cellPaddingX = 12,
     headerPaddingX = 12,
     numericPaddingRight = 8,
     hierarchyIndentPx = 24,
     hierarchyExpandPx = 22,
+    hierarchyLeafPx = 18,
     cellOverscan = 4,
     headerOverscan = 4,
 } = {}) => {
     const isHierarchy = columnId === 'hierarchy';
     const base = Math.max(24, Number(baseSize) || 100);
     const cellHorizontalPad = (cellPaddingX * 2) + (isHierarchy ? 0 : numericPaddingRight) + cellOverscan;
-    const minCellPad = isHierarchy
-        ? Math.max(18, Math.round(cellPaddingX * 0.7) + hierarchyExpandPx)
-        : Math.max(4, Math.round(((cellPaddingX * 2) + numericPaddingRight) * 0.35));
-
-    let maxCellTextWidth = 0;
-    let maxHierarchyChrome = isHierarchy ? hierarchyExpandPx : 0;
+    // Keep text and fixed indentation coupled to the row they came from.
+    /** @type {Map<number, number>} */
+    const bodyWidthsByIndent = new Map();
     (Array.isArray(rows) ? rows : []).forEach((row) => {
         if (!row) return;
         const original = row.original || row;
+        let indent = 0;
+        let textWidth;
         if (isHierarchy) {
             const depth = typeof original?.depth === 'number'
                 ? original.depth
                 : (typeof original?._depth === 'number' ? original._depth : (row.depth || 0));
-            const rawHierarchy = original?._label != null
-                ? String(original._label)
-                : (original?._id != null ? String(original._id) : '');
+            const rawHierarchy = typeof getHierarchyLabel === 'function'
+                ? getHierarchyLabel(row)
+                : (original?._label ?? original?._id ?? '');
             const label = typeof formatHierarchyLabel === 'function' ? formatHierarchyLabel(rawHierarchy) : rawHierarchy;
-            maxHierarchyChrome = Math.max(maxHierarchyChrome, (depth * hierarchyIndentPx) + hierarchyExpandPx);
-            maxCellTextWidth = Math.max(maxCellTextWidth, measureBodyText(label));
+            const canExpand = !original?._isTotal && (row.getCanExpand?.() ?? Boolean(original?._has_children));
+            const reportIndent = Math.max(0, Number(original?._reportFormat?.indent) || 0);
+            indent = Math.max(0, depth) * hierarchyIndentPx + reportIndent + (canExpand ? hierarchyExpandPx : hierarchyLeafPx);
+            textWidth = measureBodyText(label, row);
         } else {
             const rawVal = typeof getCellRawValue === 'function' ? getCellRawValue(row, columnId) : original?.[columnId];
             const formatted = typeof formatCellText === 'function' ? formatCellText(rawVal, row) : String(rawVal ?? '');
-            maxCellTextWidth = Math.max(maxCellTextWidth, measureBodyText(formatted));
+            textWidth = measureBodyText(formatted, row);
         }
+        bodyWidthsByIndent.set(indent, Math.max(bodyWidthsByIndent.get(indent) || 0, textWidth));
     });
-
-    const sampleRowCount = Array.isArray(rows) ? rows.length : 0;
-    const totalCellChrome = cellHorizontalPad + (isHierarchy ? maxHierarchyChrome : 0);
-    const cellContentWidth = sampleRowCount > 0
-        ? (maxCellTextWidth + totalCellChrome)
-        : Math.max(maxCellTextWidth + totalCellChrome, base);
 
     let fullHeaderTextWidth = 0;
-    let widestWordTextWidth = 0;
-    (Array.isArray(headerLines) ? headerLines : []).forEach((line) => {
-        fullHeaderTextWidth = Math.max(fullHeaderTextWidth, measureHeaderText(line));
-        widestWordTextWidth = Math.max(widestWordTextWidth, measureLongestHeaderWord(line, measureHeaderText));
+    let minLeafText = 0;
+    let minGroupText = 0;
+    (Array.isArray(headerLines) ? headerLines : []).forEach((line, index) => {
+        const isLeaf = index === headerLines.length - 1;
+        const measure = isLeaf ? measureHeaderText : measureGroupHeaderText;
+        const fullWidth = measure(line);
+        const minWidth = headerWrap ? measureLongestHeaderWord(line, measure) : fullWidth;
+        fullHeaderTextWidth = Math.max(fullHeaderTextWidth, fullWidth);
+        if (isLeaf) minLeafText = minWidth;
+        else minGroupText = Math.max(minGroupText, minWidth);
     });
-    const shortTextWidth = shortLabel ? measureHeaderText(String(shortLabel)) : null;
-
+    if (shortLabel) minLeafText = Math.min(minLeafText, measureHeaderText(String(shortLabel)));
     const sortReserve = canSort && sortIndicator !== 'none' ? 14 : 0;
     const controlsReserve = headerControlsMode === 'always' ? 28 : 4;
     const totalHeaderPad = (headerPaddingX * 2) + sortReserve + controlsReserve + headerOverscan;
-    const compactHeaderPad = Math.max(4, Math.round(headerPaddingX * 2 * 0.35)) + (sortReserve ? 10 : 0) + 2;
-
-    const requiredHeaderText = shortTextWidth !== null
-        ? Math.min(headerWrap ? widestWordTextWidth : fullHeaderTextWidth, shortTextWidth)
-        : (headerWrap ? widestWordTextWidth : fullHeaderTextWidth);
-
-    const headerMinWidth = requiredHeaderText + totalHeaderPad;
-    const headerFullWidth = fullHeaderTextWidth + totalHeaderPad;
-    const contentSize = Math.ceil(Math.max(cellContentWidth, headerMinWidth));
-    const preferredSize = Math.ceil(Math.max(contentSize, headerFullWidth));
-    const textSize = Math.max(maxCellTextWidth, requiredHeaderText);
-    const paddingSize = Math.max(0, contentSize - textSize);
-    const minPaddingSize = Math.ceil(
-        cellContentWidth >= headerMinWidth
-            ? Math.min(totalCellChrome, minCellPad)
-            : Math.min(totalHeaderPad, compactHeaderPad)
-    );
+    /** @param {any} compactTheme @param {any} bodyScale @param {any} headerScale @param {any} groupScale */
+    const getRequiredWidth = (compactTheme, bodyScale, headerScale, groupScale) => {
+        let bodyWidth = 0;
+        bodyWidthsByIndent.forEach((width, indent) => { bodyWidth = Math.max(bodyWidth, width * bodyScale + indent); });
+        const bodyPad = compactTheme
+            ? (compactTheme.cellPaddingX * 2) + (isHierarchy ? 0 : compactTheme.numericPaddingRight) + cellOverscan
+            : cellHorizontalPad;
+        const headerPad = (compactTheme?.headerPaddingX ?? headerPaddingX) * 2 + headerOverscan;
+        return Math.ceil(Math.max(
+            minSize,
+            bodyWidthsByIndent.size === 0 ? base * bodyScale : bodyWidth + bodyPad,
+            minLeafText * headerScale + headerPad + sortReserve + controlsReserve,
+            minGroupText * groupScale + headerPad
+        ));
+    };
+    const contentSize = getRequiredWidth(null, 1, 1, 1);
 
     return {
         id: columnId,
         baseSize: base,
         contentSize,
-        preferredSize,
-        textSize,
-        paddingSize,
-        minPaddingSize,
+        preferredSize: Math.ceil(Math.max(contentSize, fullHeaderTextWidth + totalHeaderPad)),
+        getRequiredWidth,
     };
 };
 
-/** @param {any} [theme] @param {any} [fitScale] @param {any} [fittedFontSize] @param {any} [minFontSize] @returns {any} */
-export const computeCompactFitThemeOverrides = (theme, fitScale, fittedFontSize, minFontSize = 10) => {
+/** @param {any} [theme] @param {any} [fitScale] @param {any} [fittedFontSize] @param {any} [minFontSize] @param {number} [paddingScale] @returns {any} */
+export const computeCompactFitThemeOverrides = (theme, fitScale, fittedFontSize, minFontSize = 10, paddingScale) => {
     const themeObj = theme && typeof theme === 'object' ? theme : {};
     const safeScale = Number.isFinite(fitScale) && fitScale > 0 ? Math.min(1, fitScale) : 1;
     const parsedFloor = parseNumericPx(minFontSize, 10);
@@ -194,15 +196,15 @@ export const computeCompactFitThemeOverrides = (theme, fitScale, fittedFontSize,
         baseCellPad
     );
     const baseNumPad = parseNumericPx(themeObj.numericPaddingRight, 8);
-    const padScale = Math.max(0.28, safeScale);
+    const padScale = paddingScale ?? Math.max(0.28, safeScale);
 
     return {
         fontSize: fittedFontSize,
-        headerFontSize: Math.max(parsedFloor, floorQuarterPx(baseHeaderSize * safeScale)),
-        headerGroupFontSize: Math.max(parsedFloor, floorQuarterPx(baseGroupHeaderSize * safeScale)),
-        cellPaddingX: Math.max(2, Math.round(baseCellPad * padScale)),
-        headerPaddingX: Math.max(2, Math.round(baseHeaderPad * padScale)),
-        numericPaddingRight: Math.max(1, Math.round(baseNumPad * padScale)),
+        headerFontSize: Math.min(baseHeaderSize, Math.max(parsedFloor, floorQuarterPx(baseHeaderSize * safeScale))),
+        headerGroupFontSize: Math.min(baseGroupHeaderSize, Math.max(parsedFloor, floorQuarterPx(baseGroupHeaderSize * safeScale))),
+        cellPaddingX: Math.min(baseCellPad, Math.max(2, Math.round(baseCellPad * padScale))),
+        headerPaddingX: Math.min(baseHeaderPad, Math.max(2, Math.round(baseHeaderPad * padScale))),
+        numericPaddingRight: Math.min(baseNumPad, Math.max(1, Math.round(baseNumPad * padScale))),
     };
 };
 
@@ -238,6 +240,8 @@ export const computeFitToWidthLayout = ({
     containerWidth = 0,
     baseFontSize = 13,
     minFontSize = 10,
+    theme = null,
+    getFixedColumnSize = null,
 } = {}) => {
     /** @type {any} */
     const numericContainerWidth = Number(containerWidth);
@@ -267,9 +271,7 @@ export const computeFitToWidthLayout = ({
             base,
             contentSize: Number.isFinite(Number(col.contentSize)) && Number(col.contentSize) > 0 ? Number(col.contentSize) : null,
             preferredSize: Number.isFinite(Number(col.preferredSize)) && Number(col.preferredSize) > 0 ? Number(col.preferredSize) : null,
-            textSize: Number.isFinite(Number(col.textSize)) && Number(col.textSize) >= 0 ? Number(col.textSize) : null,
-            paddingSize: Number.isFinite(Number(col.paddingSize)) && Number(col.paddingSize) >= 0 ? Number(col.paddingSize) : null,
-            minPaddingSize: Number.isFinite(Number(col.minPaddingSize)) && Number(col.minPaddingSize) >= 0 ? Number(col.minPaddingSize) : null,
+            getRequiredWidth: col.getRequiredWidth,
         };
         if (FIT_FIXED_COL_IDS.has(col.id)) {
             fixedCols.push(entry);
@@ -281,105 +283,75 @@ export const computeFitToWidthLayout = ({
         return { columnSizing: {}, fontSize: parsedFontSize };
     }
     /** @type {any} */
-    const fixedWidth = fixedCols.reduce((sum, col) => sum + col.base, 0);
+    const fixedWidth = fixedCols.reduce((sum, col) => sum + (getFixedColumnSize?.(col.id) ?? col.base), 0);
     /** @type {any} */
-    const availableWidth = Math.max(60, Math.floor(numericContainerWidth) - fixedWidth - 2);
+    const availableWidth = Math.max(0, Math.floor(numericContainerWidth) - fixedWidth - 2);
     const hasContentMeasurements = scalableCols.some((col) => col.contentSize !== null);
 
     if (hasContentMeasurements) {
-        const contentCols = scalableCols.map((col) => {
-            const content = col.contentSize !== null ? col.contentSize : col.base;
-            const preferred = col.preferredSize !== null ? Math.max(content, col.preferredSize) : Math.max(content, col.base);
-            const textWidth = col.textSize !== null ? col.textSize : Math.max(8, content - 16);
-            const padWidth = col.paddingSize !== null ? col.paddingSize : Math.max(0, content - textWidth);
-            const minPad = col.minPaddingSize !== null ? Math.min(padWidth, col.minPaddingSize) : Math.min(padWidth, 6);
-            return { id: col.id, base: col.base, content, preferred, textWidth, padWidth, minPad };
-        });
-        const totalContentAtBase = contentCols.reduce((sum, col) => sum + col.content, 0);
+        const contentCols = scalableCols.map((col) => ({
+            ...col,
+            content: col.contentSize ?? col.base,
+            preferred: col.preferredSize ?? col.contentSize ?? col.base,
+        }));
+        /** @param {number[]} widths */
+        const sum = (widths) => widths.reduce((total, width) => total + width, 0);
+        /** @param {number[]} widths */
+        const sizingFor = (widths) => Object.fromEntries(contentCols.map((col, index) => [col.id, widths[index]]));
+        const baseWidths = contentCols.map((col) => Math.ceil(col.content));
 
-        if (totalContentAtBase <= availableWidth) {
-            let widths = contentCols.map((col) => Math.max(16, Math.ceil(col.content)));
-            let currentSum = widths.reduce((sum, w) => sum + w, 0);
-            if (currentSum <= availableWidth) {
-                const headerDeficits = contentCols.map((col, idx) => Math.max(0, Math.ceil(col.preferred) - widths[idx]));
-                const totalDeficit = headerDeficits.reduce((sum, d) => sum + d, 0);
-                if (totalDeficit > 0) {
-                    const room = availableWidth - currentSum;
-                    const takeRatio = Math.min(1, room / totalDeficit);
-                    widths = widths.map((w, idx) => w + Math.floor(headerDeficits[idx] * takeRatio));
-                    currentSum = widths.reduce((sum, w) => sum + w, 0);
-                }
-                widths = distributeSurplusWidth(
-                    widths,
-                    availableWidth,
-                    contentCols.map((col) => col.preferred)
-                );
-            } else {
-                const trimOrder = widths.map((w, idx) => ({ idx, spare: Math.max(0, w - 16) }));
-                let excess = currentSum - availableWidth;
-                for (let i = trimOrder.length - 1; i >= 0 && excess > 0; i -= 1) {
-                    const take = Math.min(trimOrder[i].spare, excess);
-                    widths[i] -= take;
-                    excess -= take;
-                }
-            }
-            /** @type {Record<string, any>} */
-            const columnSizing = {};
-            contentCols.forEach((col, idx) => {
-                columnSizing[col.id] = widths[idx];
-            });
-            return { columnSizing, fontSize: parsedFontSize };
+        if (sum(baseWidths) <= availableWidth) {
+            const deficits = contentCols.map((col, index) => Math.max(0, Math.ceil(col.preferred) - baseWidths[index]));
+            const deficit = sum(deficits);
+            const share = deficit ? Math.min(1, (availableWidth - sum(baseWidths)) / deficit) : 0;
+            const widths = baseWidths.map((width, index) => width + Math.floor(deficits[index] * share));
+            return {
+                columnSizing: sizingFor(distributeSurplusWidth(widths, availableWidth, contentCols.map((col) => col.preferred))),
+                fontSize: parsedFontSize,
+            };
         }
 
-        const totalMinPad = contentCols.reduce((sum, col) => sum + col.minPad, 0);
-        const totalLinear = contentCols.reduce(
-            (sum, col) => sum + col.textWidth + Math.max(0, col.padWidth - col.minPad),
-            0
-        );
-        const targetScale = totalLinear > 0
-            ? Math.max(0.05, Math.min(1, (availableWidth - totalMinPad) / totalLinear))
-            : 1;
-        const candidateFont = floorQuarterPx(parsedFontSize * targetScale);
-        const fittedFontSize = Math.max(
-            effectiveMinFontSize,
-            Math.min(parsedFontSize, candidateFont > 0 ? candidateFont : effectiveMinFontSize)
-        );
-        const effectiveScale = parsedFontSize > 0 ? Math.min(1, fittedFontSize / parsedFontSize) : targetScale;
+        const baseTheme = { ...theme, fontSize: parsedFontSize };
+        const baseHeaderSize = parseNumericPx(baseTheme.headerFontSize, parsedFontSize);
+        const baseGroupSize = parseNumericPx(baseTheme.headerGroupFontSize, baseHeaderSize);
+        /** @param {number} fontSize @param {number} [paddingScale] */
+        const layoutAt = (fontSize, paddingScale) => {
+            const scale = fontSize / parsedFontSize;
+            const compactTheme = computeCompactFitThemeOverrides(baseTheme, scale, fontSize, effectiveMinFontSize, paddingScale);
+            const headerScale = compactTheme.headerFontSize / baseHeaderSize;
+            const groupScale = compactTheme.headerGroupFontSize / baseGroupSize;
+            const widths = contentCols.map((col) => col.getRequiredWidth
+                ? col.getRequiredWidth(compactTheme, scale, headerScale, groupScale)
+                : Math.max(20, Math.ceil(col.content * scale)));
+            return { fontSize, widths, compactTheme };
+        };
 
-        const targetWidths = contentCols.map(
-            (col) => col.minPad + (col.textWidth + Math.max(0, col.padWidth - col.minPad)) * effectiveScale
-        );
-        const totalTarget = targetWidths.reduce((sum, w) => sum + w, 0);
-        const colFloor = Math.min(20, Math.max(12, Math.floor((availableWidth / contentCols.length) * 0.55)));
-        let widths;
-        if (totalTarget <= availableWidth) {
-            widths = targetWidths.map((w) => Math.max(colFloor, Math.floor(w)));
-            const sumFloor = widths.reduce((sum, w) => sum + w, 0);
-            if (sumFloor < availableWidth) {
-                widths = distributeSurplusWidth(widths, availableWidth, targetWidths);
+        let layout = layoutAt(effectiveMinFontSize);
+        if (sum(layout.widths) <= availableWidth) {
+            // Search the quarter-pixel sizes above the floor for the largest fit.
+            let low = Math.floor(effectiveMinFontSize * 4) + 1;
+            let high = Math.ceil(parsedFontSize * 4) - 1;
+            while (low <= high) {
+                const midpoint = Math.floor((low + high) / 2);
+                const candidate = layoutAt(midpoint / 4);
+                if (sum(candidate.widths) <= availableWidth) {
+                    layout = candidate;
+                    low = midpoint + 1;
+                } else {
+                    high = midpoint - 1;
+                }
             }
         } else {
-            const fitRatio = availableWidth / totalTarget;
-            widths = targetWidths.map((w) => Math.max(colFloor, Math.floor(w * fitRatio)));
+            // Give padding back at the floor. If the text still needs more space,
+            // keep its measured width and let the viewport scroll.
+            layout = layoutAt(effectiveMinFontSize, 0);
         }
-        let finalSum = widths.reduce(/** @param {any} [sum] @param {any} [w] @returns {any} */ (sum, w) => sum + w, 0);
-        if (finalSum > availableWidth) {
-            let remaining = finalSum - availableWidth;
-            for (let i = widths.length - 1; i >= 0 && remaining > 0; i -= 1) {
-                const spare = Math.max(0, widths[i] - colFloor);
-                const take = Math.min(spare, remaining);
-                widths[i] -= take;
-                remaining -= take;
-            }
-        } else if (finalSum < availableWidth) {
-            widths = distributeSurplusWidth(widths, availableWidth, targetWidths);
-        }
-        /** @type {Record<string, any>} */
-        const columnSizing = {};
-        contentCols.forEach((col, idx) => {
-            columnSizing[col.id] = widths[idx];
-        });
-        return { columnSizing, fontSize: fittedFontSize };
+        const { widths, fontSize, compactTheme } = layout;
+        return {
+            columnSizing: sizingFor(distributeSurplusWidth(widths, availableWidth, widths)),
+            fontSize,
+            compactTheme,
+        };
     }
 
     /** @type {any} */

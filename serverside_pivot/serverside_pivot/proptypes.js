@@ -92,4 +92,7 @@ pk.DashTanstackPivot.propTypes = {id:pt.oneOfType([pt.string]),
  savedReports:pt.oneOfType([pt.arrayOf(pt.object)]),
  activeReportId:pt.oneOfType([pt.string]),
  rowSelection:pt.oneOfType([pt.string,pt.shape({valueOf:pt.any}),pt.shape({valueOf:pt.any})]),
- selectedRows:pt.oneOfType([pt.arrayOf(pt.string)])};
+ selectedRows:pt.oneOfType([pt.arrayOf(pt.string)]),
+ streamingConfig:pt.oneOfType([pt.object]),
+ streamUpdates:pt.oneOfType([pt.object]),
+ diffConfig:pt.oneOfType([pt.object])};

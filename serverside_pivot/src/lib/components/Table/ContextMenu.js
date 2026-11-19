@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useLayoutEffect, useRef, useCallback } from 'react';
 import Icons from '../../utils/Icons';
+import { useDismiss, OverlayPortal } from '../../hooks/useDismiss';
 
 const OPEN_DELAY = 80;
 const CLOSE_DELAY = 220;
@@ -14,7 +15,7 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                     <div
                         key={i}
                         role="presentation"
-                        style={{ height: '1px', background: theme?.border || '#e0e0e0', margin: '4px 0' }}
+                        style={{ height: '1px', background: theme?.border || 'var(--sp-border, #e2e8f0)', margin: '4px 0' }}
                     />
                 );
             }
@@ -58,19 +59,19 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                         display: 'flex',
                         alignItems: 'center',
                         gap: '8px',
-                        color: disabled ? (theme?.textSec || '#757575') : (theme?.text || '#111'),
+                        color: disabled ? (theme?.textSec || 'var(--sp-text-sec, #64748b)') : (theme?.text || 'var(--sp-text, #0f172a)'),
                         opacity: disabled ? 0.48 : 1,
                         userSelect: 'none',
                     }}
                 >
                     {action.icon && (
-                        <span style={{ color: theme?.textSec || '#757575', display: 'flex', flexShrink: 0 }}>
+                        <span style={{ color: theme?.textSec || 'var(--sp-text-sec, #64748b)', display: 'flex', flexShrink: 0 }}>
                             {action.icon}
                         </span>
                     )}
                     <span style={{ flex: 1 }}>{action.label}</span>
                     {hasChildren && (
-                        <span aria-hidden="true" style={{ color: theme?.textSec || '#9ca3af', display: 'inline-flex', alignItems: 'center', marginLeft: '4px' }}>
+                        <span aria-hidden="true" style={{ color: theme?.textSec || 'var(--sp-text-sec, #64748b)', display: 'inline-flex', alignItems: 'center', marginLeft: '4px' }}>
                             {Icons && Icons.ChevronRight ? <Icons.ChevronRight /> : '>'}
                         </span>
                     )}
@@ -85,14 +86,17 @@ const menuStyle = (theme) => ({
     background: `var(--sp-glass-bg, ${theme?.surfaceBg || theme?.background || '#fff'})`,
     backdropFilter: 'blur(18px) saturate(180%)',
     WebkitBackdropFilter: 'blur(18px) saturate(180%)',
-    border: `1px solid ${theme?.border || '#ccc'}`,
+    border: `1px solid ${theme?.border || 'var(--sp-border, #cbd5e1)'}`,
     boxShadow: theme?.shadow || theme?.shadowMd || '0 14px 36px rgba(0,0,0,0.18)',
     padding: '5px',
-    borderRadius: '10px',
-    fontSize: '13px',
+    borderRadius: 'var(--sp-radius-lg, 10px)',
+    fontSize: 'var(--sp-fs-base, 13px)',
     minWidth: '190px',
     maxWidth: '300px',
-    color: theme?.text || '#111',
+    maxHeight: 'calc(100vh - 16px)',
+    overflowY: 'auto',
+    pointerEvents: 'auto',
+    color: theme?.text || 'var(--sp-text, #0f172a)',
 });
 
 /** @param {any} p0 @returns {any} */
@@ -175,7 +179,6 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
         else if (e.key === 'Home') { e.preventDefault(); focusAt(0, 1); }
         else if (e.key === 'End') { e.preventDefault(); focusAt(actions.length - 1, -1); }
         else if (e.key === 'ArrowRight' && openIdx === null) {
-            // open sub-menu if hovered item has children
             if (Number.isFinite(currentIndex) && currentIndex >= 0) {
                 const a = actions[currentIndex];
                 if (a && a !== 'separator' && Array.isArray(a.children)) {
@@ -186,7 +189,7 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
         }
     }, [onClose, focusAt, actions, openIdx, openSubmenu]);
 
-    // Clamp position to viewport
+    // Clamp position strictly to the visible viewport
     useLayoutEffect(() => {
         /** @returns {any} */
         const clamp = () => {
@@ -195,14 +198,14 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
             /** @type {any} */
             const rect = menuRef.current?.getBoundingClientRect();
             /** @type {any} */
-            const mw = rect?.width || 200;
+            const mw = rect?.width || 210;
             /** @type {any} */
-            const mh = rect?.height || actions.length * 32 + 20;
+            const mh = Math.min(rect?.height || actions.length * 32 + 20, vh - 16);
             const pad = 8;
             /** @type {any} */
-            let ax = Math.max(pad, Math.min(x, vw - mw - pad));
+            const ax = Math.max(pad, Math.min(x, vw - mw - pad));
             /** @type {any} */
-            let ay = Math.max(pad, Math.min(y, vh - mh - pad));
+            const ay = Math.max(pad, Math.min(y, vh - mh - pad));
             setPos({ x: ax, y: ay });
         };
         clamp();
@@ -226,8 +229,8 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
         /** @type {any} */
         const mw = el.offsetWidth || 200;
         /** @type {any} */
-        const mh = el.offsetHeight || 200;
-        const pad = 6;
+        const mh = Math.min(el.offsetHeight || 200, vh - 16);
+        const pad = 8;
         /** @type {any} */
         let left = anchorRect.right + 2;
         if (left + mw > vw - pad) left = anchorRect.left - mw - 2;
@@ -276,8 +279,15 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
         else if (e.key === 'ArrowUp') { e.preventDefault(); focusSubAt(currentIndex - 1, -1); }
     }, [focusSubAt, openIdx]);
 
+    useDismiss({
+        open: true,
+        onClose,
+        refs: [menuRef, submenuRef],
+        restoreFocus: true,
+    });
+
     return (
-        <>
+        <OverlayPortal theme={theme} zIndex={10001}>
             {/* Root menu */}
             <div
                 ref={menuRef}
@@ -316,7 +326,7 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
                     />
                 </div>
             )}
-        </>
+        </OverlayPortal>
     );
 };
 

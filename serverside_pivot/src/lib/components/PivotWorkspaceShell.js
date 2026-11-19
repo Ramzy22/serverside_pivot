@@ -74,8 +74,22 @@ const baseAnimationStyles = `
     transform: scale(1);
 }
 [data-pivot-workspace-root][data-header-controls="never"] .sp-header-control { display: none !important; }
+[data-pivot-workspace-root] .sp-header-compact-actions {
+    position: absolute;
+    inset: auto 1px 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+[data-pivot-workspace-root] .sp-header-compact-actions > .sp-header-control {
+    flex-shrink: 1 !important;
+    min-width: 0;
+    box-sizing: border-box;
+}
+[data-pivot-workspace-root] .sp-header-compact-actions svg { max-width: 100%; }
 [data-pivot-workspace-root] .sp-btn {
-    transition: background-color 140ms var(--sp-ease-apple, ease), border-color 140ms var(--sp-ease-apple, ease), box-shadow 140ms var(--sp-ease-apple, ease), transform 110ms var(--sp-ease-apple, ease), opacity 140ms ease, filter 140ms ease;
+    transition: background-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), border-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), box-shadow var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), transform var(--sp-dur-instant, 100ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), opacity var(--sp-dur-fast, 140ms) ease, filter var(--sp-dur-fast, 140ms) ease;
 }
 [data-pivot-workspace-root] .sp-btn:not(:disabled):active { transform: scale(0.975); }
 [data-pivot-workspace-root] .sp-btn-ghost:not(:disabled):hover { background: var(--sp-hover) !important; }
@@ -127,6 +141,10 @@ const baseAnimationStyles = `
 [data-pivot-workspace-root] .sp-expander-btn {
     border-radius: 5px;
     transition: background-color 120ms ease, transform 110ms var(--sp-ease-apple, ease);
+}
+[data-pivot-workspace-root] .sp-expander-btn:focus:not(:focus-visible) {
+    outline: none;
+    box-shadow: none;
 }
 [data-pivot-workspace-root] .sp-expander-btn:hover { background: var(--sp-hover); }
 [data-pivot-workspace-root] .sp-expander-btn:active { transform: scale(0.92); }
@@ -195,7 +213,8 @@ const baseAnimationStyles = `
 }
 @keyframes pivot-row-exit {
     0% { opacity: 1; transform: translate3d(0, 0, 0); }
-    100% { opacity: 0; transform: translate3d(0, -8px, 0); }
+    65% { opacity: 0; }
+    100% { opacity: 0; transform: translate3d(0, var(--sp-exit-shift, -8px), 0); }
 }
 @keyframes pivot-hairline-sweep {
     0% { transform: translateX(-110%); }
@@ -205,36 +224,26 @@ const baseAnimationStyles = `
     from { opacity: 0; clip-path: inset(0 0 100% 0); }
     to { opacity: 1; clip-path: inset(0 0 0% 0); }
 }
-@keyframes pivot-halo-pulse {
-    0% { transform: scale(0.92); opacity: 0.85; }
-    70% { transform: scale(1.24); opacity: 0; }
-    100% { transform: scale(1.24); opacity: 0; }
+@keyframes pivot-chevron-breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.48; }
 }
 @keyframes pivot-wave-dot {
     0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
     40% { transform: translateY(-2.5px); opacity: 1; }
 }
 [data-pivot-workspace-root] .sp-expander-fetching {
-    position: relative;
-    background: var(--sp-select, rgba(79,70,229,0.1)) !important;
     color: var(--sp-primary) !important;
-}
-[data-pivot-workspace-root] .sp-expander-fetching::after {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    border-radius: 6px;
-    border: 1.5px solid var(--sp-primary);
-    pointer-events: none;
-    animation: pivot-halo-pulse 900ms cubic-bezier(0.16, 1, 0.3, 1) infinite;
+    animation: pivot-chevron-breathe 900ms ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
     [data-pivot-workspace-root] .pivot-row-animated {
         animation: none !important;
         transition: none !important;
     }
-    [data-pivot-workspace-root] .sp-expander-fetching::after {
+    [data-pivot-workspace-root] .sp-expander-fetching {
         animation: none !important;
+        opacity: 0.72;
     }
 }
 @keyframes pivot-skeleton-shimmer {
@@ -293,7 +302,7 @@ const baseAnimationStyles = `
 [data-pivot-workspace-root] .sp-chip-remove:hover {
     opacity: 1 !important;
     background: rgba(239, 68, 68, 0.14);
-    color: #ef4444 !important;
+    color: var(--sp-danger, #ef4444) !important;
 }
 [data-pivot-workspace-root] .sp-chip-remove:active {
     transform: scale(0.9);
@@ -308,13 +317,51 @@ const baseAnimationStyles = `
 [data-pivot-workspace-root] .sp-drawer-slide {
     animation: pivot-surface-enter 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
+[data-pivot-workspace-root] .sp-col-pin-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), max-width var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
+}
+[data-pivot-workspace-root] .sp-col-tree-row:hover .sp-col-pin-controls,
+[data-pivot-workspace-root] .sp-col-tree-row:focus-within .sp-col-pin-controls {
+    max-width: 68px;
+    opacity: 1;
+    pointer-events: auto;
+}
+[data-pivot-workspace-root] [data-pivot-scroll-container][data-scrolled-y="true"] [data-pivot-sticky-header="true"] {
+    box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.22) !important;
+}
+[data-pivot-workspace-root] [data-pivot-scroll-container][data-scrolled-x="true"] [data-pinned-edge="left"] {
+    box-shadow: 4px 0 10px -4px rgba(0, 0, 0, 0.22) !important;
+}
 @media (prefers-reduced-motion: reduce) {
     [data-pivot-workspace-root] *,
     [data-pivot-workspace-root] *::before,
     [data-pivot-workspace-root] *::after {
         animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+        transition-delay: 0ms !important;
+    }
+    /* Static loading cues: infinite loaders collapse to a single frame under reduced motion. */
+    [data-pivot-workspace-root] [data-row-loader="hairline"] > div {
+        width: 100% !important;
+        transform: none !important;
+        opacity: 0.55;
+    }
+    [data-pivot-workspace-root] [data-row-loader="band"] span {
+        transform: none !important;
+        opacity: 1 !important;
+    }
+    [data-pivot-workspace-root] [data-pivot-loading-indicator="global"] {
+        background-position: 50% 0 !important;
     }
 }
 `;
@@ -335,7 +382,7 @@ export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelA
         cancelled: 'Cancelled', completed: delivering ? 'Preparing download…' : progress?.deliveryFailed ? 'Completed — download failed' : 'Completed', failed: 'Failed', interrupted: 'Interrupted — retry'};
     const safeBg = theme?.surfaceBg || theme?.background || '#fff';
     const safeBorder = theme?.border || 'rgba(128,128,128,0.25)';
-    const safePrimary = theme?.primary || theme?.accent || '#2563eb';
+    const safePrimary = theme?.primary || theme?.accent || 'var(--sp-primary, #4F46E5)';
     const safeSubtleBg = theme?.headerSubtleBg || theme?.hover || 'rgba(128,128,128,0.12)';
     const safeText = theme?.text || 'inherit';
     return (
@@ -345,8 +392,10 @@ export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelA
                 {!terminal && <div role="progressbar" aria-label="Export rows" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : percent}
                     style={{width: '100%', height: 6, background: safeBorder, borderRadius: 999, overflow: 'hidden', position: 'relative'}}>
                     <style>{`@keyframes pivot-bar-slide{0%{transform:translateX(-150%)}100%{transform:translateX(350%)}}`}</style>
-                    <div style={{position: 'absolute', left: 0, top: 0, height: '100%', width: percent === null ? '40%' : `${percent}%`, borderRadius: 999,
-                        background: safePrimary, transition: percent === null ? undefined : 'width 180ms cubic-bezier(0.22, 1, 0.36, 1)', animation: percent === null ? 'pivot-bar-slide 1.4s ease-in-out infinite' : undefined}}/>
+                    <div style={{position: 'absolute', left: 0, top: 0, height: '100%', width: percent === null ? '40%' : '100%', borderRadius: 999,
+                        transform: percent === null ? undefined : `scaleX(${Math.max(0, Math.min(100, Number(percent) || 0)) / 100})`,
+                        transformOrigin: 'left center',
+                        background: safePrimary, transition: percent === null ? undefined : 'transform var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))', animation: percent === null ? 'pivot-bar-slide 1.4s ease-in-out infinite' : undefined}}/>
                 </div>}
                 {progress && <span style={{fontSize: 12, color: theme?.textSec || safeText, fontVariantNumeric: 'tabular-nums'}}>{progress.rowsWritten.toLocaleString()} rows · {progress.bytesWritten.toLocaleString()} bytes</span>}
                 {!terminal && percent !== null && <span style={{fontSize: 12, fontWeight: 600, fontVariantNumeric: 'tabular-nums'}}>{percent}%</span>}
@@ -464,7 +513,7 @@ return (
                         transform: immersiveModeHovering
                             ? 'translateY(0)'
                             : (resolvedExitPosition === 'bottom-right' ? 'translateY(6px)' : 'translateY(-6px)'),
-                        transition: 'opacity 180ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1)',
+                        transition: 'opacity var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), transform var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))',
                     }}
                 >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
