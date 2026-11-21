@@ -12,5 +12,19 @@
       "REQ-TOT-003",
       "REQ-BACK-001"
     ]
+  },
+  "test_measure_filter_visible_totals_match_oracle": {
+    "findings": [
+      "F-TOT-MF-PARENT: runtime path keeps filtered-out leaves in parent and grand totals (leaf v_sum>5 over A{x:1,y:10},B{x:2}: A=11 / GT=13, expected 10 / 10)"
+    ],
+    "requirements": [
+      "REQ-TOT-001",
+      "REQ-TOT-003",
+      "REQ-TOT-006"
+    ]
+  },
+  "vectors": {
+    "null-group-is-not-grand-total": "F-NULL-GT: NULL group rendered as Grand Total; NULL subtree missing (REQ-NULL-002)",
+    "leaf-measure-filter-visible-totals": "F-TOT-MF-PARENT: parents/grand total include filtered-out leaves (REQ-TOT-003)"
   }
 }

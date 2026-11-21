@@ -36,7 +36,7 @@ def test_parent_avg_is_from_records_not_children():  # REQ-TOT-003
     assert rows[()]["v_avg"] == pytest.approx(119 / 5)
 
 
-def test_measure_filter_evaluated_on_e0_and_totals_visible_vs_all():  # REQ-TOT-001..004
+def test_measure_filter_evaluated_on_e0_and_totals_visible_vs_all():  # REQ-TOT-001 REQ-TOT-002 REQ-TOT-003 REQ-TOT-004
     q = Query(rows=["r", "c"], measures=[SUM], measure_filters=[MeasureFilter(2, "v_sum", ">", 3)])
     e0, e = eligible_sets(q, DATA)
     assert len(e0) == 5 and sorted(r["v"] for r in e) == [4, 5, 9, 100]
@@ -64,7 +64,7 @@ def test_scope_is_exact():  # REQ-SEC-003
     assert not in_scope({"t": True}, {"t": (1,)})
 
 
-def test_aggregation_null_and_empty_rules():  # REQ-AGG-001/002/004
+def test_aggregation_null_and_empty_rules():  # REQ-AGG-001 REQ-AGG-002 REQ-AGG-004
     rs = [{"v": None}, {"v": None}]
     assert aggregate("sum", rs, "v") is None
     assert aggregate("count", rs, "v") == 0

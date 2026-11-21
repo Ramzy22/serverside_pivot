@@ -46,7 +46,7 @@ def _assert_rows_match(
 
 
 @pytest.mark.parametrize("seed", [7, 42, 1337])
-def test_randomized_differential_streaming_parity(seed: int):
+def test_randomized_differential_streaming_parity(seed: int):  # REQ-LIVE-002
     rng = random.Random(seed)
     desks = ["Equities", "Rates", "FX"]
     books = ["Alpha", "Beta", "Gamma"]

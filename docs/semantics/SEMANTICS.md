@@ -16,7 +16,7 @@ The key words MUST, MUST NOT and SHOULD are used as in RFC 2119.
 |---|---|
 | REQ-SEC-001 | Row scope is attached to **dataset access**, not to a request shape. Every relation resolved for a protected dataset MUST be `base ∩ scope`. If a protected dataset is resolved with no active grant (lost context, a background thread, a new entry point), the resolution MUST fail with `UnscopedAccessError`. It MUST NOT fail open. |
 | REQ-SEC-002 | A grant that names a column the dataset does not have MUST deny (`ScopeColumnError`). It MUST NOT be ignored. |
-| REQ-SEC-003 | Scope predicates are exact: binary, case-sensitive equality, values converted to the column type without loss. A NULL grant value matches only NULL. An empty value list denies. |
+| REQ-SEC-003 | Scope predicates are exact: binary, case-sensitive equality, values converted to the column type without loss. Grant values are non-null scalars, because the row policy rejects NULL or empty claims. A row whose scope column is NULL is therefore never visible to a claims-scoped principal. (The predicate compiler still treats a NULL value as matching only NULL, defensively.) An empty value list denies. |
 | REQ-SEC-004 | A cache entry (result, viewport, plan, table expression, hierarchy, snapshot) MUST NOT be served to a request whose grant fingerprint differs from the one that produced it. |
 | REQ-SEC-005 | Deny until proven. An execution path that has no passing case in the isolation matrix MUST be denied for protected datasets (`PathNotProvenError`). Every external entry point (FastAPI routes, runtime kinds, Dash callbacks, Flight actions, subscription actions) MUST appear in the matrix, and the suite fails when one does not. |
 | REQ-SEC-006 | Dash reads require a dataset policy and a principal resolver by default. Unauthenticated access is an explicit development opt-in and is never honoured in production. |
@@ -56,7 +56,7 @@ Definitions, for a request over dataset `D`:
 |---|---|
 | REQ-NULL-001 | SQL NULL stays NULL end to end: JSON `null`, never `NaN`, `""`, `"null"` or `"Grand Total"`. |
 | REQ-NULL-002 | A NULL dimension value is its own group, distinct from the empty string and from the grand total. |
-| REQ-ID-001 | A row's identity is `(dataset, presence_mask, [(field_id, typed value)…])`, encoded with `CanonicalPathCodec`. The grand total encodes as `[]` and a NULL member as `[null]`. Identity never comes from joining strings, so values containing `|`, `_` or `/` cannot collide. |
+| REQ-ID-001 | A row's identity is `(dataset, presence_mask, [(field_id, typed value)…])`, encoded with `CanonicalPathCodec`. The grand total is the empty path, and a NULL member is a typed null token, distinct from `""`. Identity never comes from joining strings, so values containing `|`, `_` or `/` cannot collide. |
 | REQ-ID-002 | Absent (a rolled-up level) and NULL (a member whose value is NULL) are different identities. |
 
 ## 5. Pagination and consistency (REQ-PAGE)

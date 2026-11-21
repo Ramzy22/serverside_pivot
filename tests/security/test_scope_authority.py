@@ -104,7 +104,7 @@ def test_nested_scope_cannot_replace_active_grant():
                 pass
 
 
-def test_raw_sql_over_protected_table_is_denied():
+def test_raw_sql_over_protected_table_is_denied():  # REQ-SEC-007
     con = _con()
     with scoped_execution(_grant(tenant=["A"]), connections=[con]):
         with pytest.raises(UnscopedAccessError):

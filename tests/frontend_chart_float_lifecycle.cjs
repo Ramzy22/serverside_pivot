@@ -16,7 +16,7 @@ const hooks = {...React, useCallback: callback => callback, useMemo: callback =>
 const cache = new Map();
 function load(relative) {
     let filename = path.resolve(frontend, 'src/lib', relative);
-    if (!path.extname(filename)) filename += '.js';
+    if (!path.extname(filename)) filename = ['.js', '.jsx', '.ts', '.tsx'].map(ext => filename + ext).find(candidate => fs.existsSync(candidate)) || filename + '.js';
     if (cache.has(filename)) return cache.get(filename).exports;
     const module = {exports: {}};
     cache.set(filename, module);

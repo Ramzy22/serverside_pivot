@@ -9,12 +9,12 @@ const babel = req('@babel/core');
 const cache = new Map();
 function load(relative) {
   let filename = path.resolve(root, 'src/lib', relative);
-  if (!path.extname(filename)) filename += '.js';
+  if (!path.extname(filename)) filename = ['.js', '.jsx', '.ts', '.tsx'].map(ext => filename + ext).find(candidate => fs.existsSync(candidate)) || filename + '.js';
   if (cache.has(filename)) return cache.get(filename).exports;
   const module = {exports: {}};
   cache.set(filename, module);
   const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), {filename,
-    presets: [[req('@babel/preset-env'), {targets: {node: 'current'}, modules: 'commonjs'}], req('@babel/preset-react')]}).code;
+    presets: [[req('@babel/preset-env'), {targets: {node: 'current'}, modules: 'commonjs'}], req('@babel/preset-react'), ...(/\.tsx?$/.test(filename) ? [[req('@babel/preset-typescript'), {isTSX: filename.endsWith('.tsx'), allExtensions: true}]] : [])]}).code;
   new Function('module', 'exports', 'require', code)(module, module.exports, name =>
     name.startsWith('.') ? load(path.relative(path.join(root, 'src/lib'), path.resolve(path.dirname(filename), name))) : req(name));
   return module.exports;

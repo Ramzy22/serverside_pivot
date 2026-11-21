@@ -116,6 +116,7 @@ class Query:
     scope: Mapping[str, Tuple[Any, ...]] = field(default_factory=dict)
     totals: str = "visible"  # REQ-TOT-003/004
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
+    sort_desc: Mapping[str, bool] = field(default_factory=dict)  # sibling order per dimension
 
 
 # ----------------------------------------------------------------- engine
@@ -172,11 +173,6 @@ class Row:
         return len(self.path)
 
 
-def _sort_key(value: Any) -> Tuple[int, Any]:
-    # REQ-BACK-001: NULLS LAST
-    return (1, "") if value is None else (0, value)
-
-
 def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
     """Flattened visible tree in hierarchical order, grand total first."""
     e0, e = eligible_sets(query, data)
@@ -189,10 +185,10 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
         depth = len(prefix) + 1
         if depth > len(query.rows):
             return
-        children = sorted(
-            {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix},
-            key=lambda k: _sort_key(k[-1]),
-        )
+        candidates = {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix}
+        non_null = sorted((k for k in candidates if k[-1] is not None), key=lambda k: k[-1],
+                          reverse=bool(query.sort_desc.get(query.rows[depth - 1])))
+        children = non_null + [k for k in candidates if k[-1] is None]  # NULLS LAST both ways
         for child in children:
             members = [r for r in totals_source if _key(r, query.rows, depth) == child]
             out.append(Row(child, _measures(query, members)))

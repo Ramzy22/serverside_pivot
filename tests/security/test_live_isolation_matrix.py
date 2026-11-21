@@ -107,7 +107,7 @@ def test_poll_after_foreign_tenant_change_stays_scoped():
 
 
 @pytest.mark.parametrize("action", ["poll", "ack", "modify_viewport", "pause", "unsubscribe"])
-def test_foreign_principal_cannot_drive_anothers_subscription(action):
+def test_foreign_principal_cannot_drive_anothers_subscription(action):  # REQ-LIVE-SEC-001
     env = _Env()
     snap = env.cmd(ALICE, "subscribe", {"start": 0, "end": 50}).json()
     hijack = env.cmd(BOB, action, {"subscriptionId": snap["subscriptionId"], "ackSeq": 0, "start": 0, "end": 50})
@@ -119,7 +119,7 @@ def test_foreign_principal_cannot_drive_anothers_subscription(action):
         assert "A-secret" not in hijack.text
 
 
-def test_baseline_capture_compare_and_list_are_scoped():
+def test_baseline_capture_compare_and_list_are_scoped():  # REQ-LIVE-SEC-001
     env = _Env()
     cap = env.cmd(ALICE, "capture_baseline", {"label": "eod"})
     _assert_clean("capture_baseline", cap)

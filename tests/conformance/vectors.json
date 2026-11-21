@@ -1,0 +1,627 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "id": "null-group-is-not-grand-total",
+      "requirements": [
+        "REQ-NULL-002",
+        "REQ-BACK-001"
+      ],
+      "note": "audit r4",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "N",
+              "N",
+              null,
+              null,
+              "S"
+            ]
+          },
+          "c": {
+            "type": "string",
+            "values": [
+              "a",
+              "b",
+              "x",
+              "y",
+              "a"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              10,
+              50,
+              1,
+              2,
+              7
+            ]
+          },
+          "u": {
+            "type": "string",
+            "values": [
+              "k",
+              "k",
+              "m",
+              "m",
+              "k"
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r",
+          "c"
+        ],
+        "measures": [
+          {
+            "alias": "v_sum",
+            "agg": "sum",
+            "field": "v"
+          }
+        ],
+        "measureFilters": [],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_sum": 70
+            }
+          },
+          {
+            "path": [
+              "N"
+            ],
+            "values": {
+              "v_sum": 60
+            }
+          },
+          {
+            "path": [
+              "N",
+              "a"
+            ],
+            "values": {
+              "v_sum": 10
+            }
+          },
+          {
+            "path": [
+              "N",
+              "b"
+            ],
+            "values": {
+              "v_sum": 50
+            }
+          },
+          {
+            "path": [
+              "S"
+            ],
+            "values": {
+              "v_sum": 7
+            }
+          },
+          {
+            "path": [
+              "S",
+              "a"
+            ],
+            "values": {
+              "v_sum": 7
+            }
+          },
+          {
+            "path": [
+              null
+            ],
+            "values": {
+              "v_sum": 3
+            }
+          },
+          {
+            "path": [
+              null,
+              "x"
+            ],
+            "values": {
+              "v_sum": 1
+            }
+          },
+          {
+            "path": [
+              null,
+              "y"
+            ],
+            "values": {
+              "v_sum": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parent-avg-max-distinct-from-records",
+      "requirements": [
+        "REQ-TOT-003",
+        "REQ-AGG-002",
+        "REQ-AGG-003"
+      ],
+      "note": "audit r5/r6",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "N",
+              "N",
+              "S"
+            ]
+          },
+          "c": {
+            "type": "string",
+            "values": [
+              "a",
+              "b",
+              "a"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              10,
+              50,
+              7
+            ]
+          },
+          "u": {
+            "type": "string",
+            "values": [
+              "k",
+              "k",
+              "k"
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r",
+          "c"
+        ],
+        "measures": [
+          {
+            "alias": "v_avg",
+            "agg": "avg",
+            "field": "v"
+          },
+          {
+            "alias": "v_max",
+            "agg": "max",
+            "field": "v"
+          },
+          {
+            "alias": "u_cd",
+            "agg": "count_distinct",
+            "field": "u"
+          }
+        ],
+        "measureFilters": [],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_avg": 22.333333333333332,
+              "v_max": 50,
+              "u_cd": 1
+            }
+          },
+          {
+            "path": [
+              "N"
+            ],
+            "values": {
+              "v_avg": 30.0,
+              "v_max": 50,
+              "u_cd": 1
+            }
+          },
+          {
+            "path": [
+              "N",
+              "a"
+            ],
+            "values": {
+              "v_avg": 10.0,
+              "v_max": 10,
+              "u_cd": 1
+            }
+          },
+          {
+            "path": [
+              "N",
+              "b"
+            ],
+            "values": {
+              "v_avg": 50.0,
+              "v_max": 50,
+              "u_cd": 1
+            }
+          },
+          {
+            "path": [
+              "S"
+            ],
+            "values": {
+              "v_avg": 7.0,
+              "v_max": 7,
+              "u_cd": 1
+            }
+          },
+          {
+            "path": [
+              "S",
+              "a"
+            ],
+            "values": {
+              "v_avg": 7.0,
+              "v_max": 7,
+              "u_cd": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "case-variants-are-distinct-groups",
+      "requirements": [
+        "REQ-BACK-002"
+      ],
+      "note": "",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "A",
+              "a",
+              "A"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              1,
+              10,
+              100
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r"
+        ],
+        "measures": [
+          {
+            "alias": "v_sum",
+            "agg": "sum",
+            "field": "v"
+          }
+        ],
+        "measureFilters": [],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_sum": 111
+            }
+          },
+          {
+            "path": [
+              "A"
+            ],
+            "values": {
+              "v_sum": 101
+            }
+          },
+          {
+            "path": [
+              "a"
+            ],
+            "values": {
+              "v_sum": 10
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "delimiter-values-do-not-collide",
+      "requirements": [
+        "REQ-ID-001"
+      ],
+      "note": "",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "x|||y",
+              "x",
+              "x_y",
+              "x"
+            ]
+          },
+          "c": {
+            "type": "string",
+            "values": [
+              "z",
+              "y|||z",
+              "z",
+              "y_z"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              1,
+              2,
+              4,
+              8
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r",
+          "c"
+        ],
+        "measures": [
+          {
+            "alias": "v_sum",
+            "agg": "sum",
+            "field": "v"
+          }
+        ],
+        "measureFilters": [],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_sum": 15
+            }
+          },
+          {
+            "path": [
+              "x"
+            ],
+            "values": {
+              "v_sum": 10
+            }
+          },
+          {
+            "path": [
+              "x",
+              "y_z"
+            ],
+            "values": {
+              "v_sum": 8
+            }
+          },
+          {
+            "path": [
+              "x",
+              "y|||z"
+            ],
+            "values": {
+              "v_sum": 2
+            }
+          },
+          {
+            "path": [
+              "x_y"
+            ],
+            "values": {
+              "v_sum": 4
+            }
+          },
+          {
+            "path": [
+              "x_y",
+              "z"
+            ],
+            "values": {
+              "v_sum": 4
+            }
+          },
+          {
+            "path": [
+              "x|||y"
+            ],
+            "values": {
+              "v_sum": 1
+            }
+          },
+          {
+            "path": [
+              "x|||y",
+              "z"
+            ],
+            "values": {
+              "v_sum": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "leaf-measure-filter-visible-totals",
+      "requirements": [
+        "REQ-TOT-001",
+        "REQ-TOT-003",
+        "REQ-TOT-006"
+      ],
+      "note": "",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "A",
+              "A",
+              "B"
+            ]
+          },
+          "c": {
+            "type": "string",
+            "values": [
+              "x",
+              "y",
+              "x"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              1,
+              10,
+              2
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r",
+          "c"
+        ],
+        "measures": [
+          {
+            "alias": "v_sum",
+            "agg": "sum",
+            "field": "v"
+          }
+        ],
+        "measureFilters": [
+          {
+            "level": 2,
+            "measure": "v_sum",
+            "op": ">",
+            "value": 5
+          }
+        ],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_sum": 10
+            }
+          },
+          {
+            "path": [
+              "A"
+            ],
+            "values": {
+              "v_sum": 10
+            }
+          },
+          {
+            "path": [
+              "A",
+              "y"
+            ],
+            "values": {
+              "v_sum": 10
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "all-null-measure-sums-to-null",
+      "requirements": [
+        "REQ-AGG-002",
+        "REQ-NULL-001"
+      ],
+      "note": "",
+      "data": {
+        "columns": {
+          "r": {
+            "type": "string",
+            "values": [
+              "A",
+              "A"
+            ]
+          },
+          "v": {
+            "type": "int64",
+            "values": [
+              null,
+              null
+            ]
+          }
+        }
+      },
+      "query": {
+        "rows": [
+          "r"
+        ],
+        "measures": [
+          {
+            "alias": "v_sum",
+            "agg": "sum",
+            "field": "v"
+          },
+          {
+            "alias": "v_cnt",
+            "agg": "count",
+            "field": "v"
+          }
+        ],
+        "measureFilters": [],
+        "totals": "visible"
+      },
+      "expected": {
+        "rows": [
+          {
+            "path": [],
+            "values": {
+              "v_sum": null,
+              "v_cnt": 0
+            }
+          },
+          {
+            "path": [
+              "A"
+            ],
+            "values": {
+              "v_sum": null,
+              "v_cnt": 0
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
