@@ -30,15 +30,15 @@ dependencies = [
     # pivot_engine is included in this distribution and imported by the
     # documented quick start, so its execution dependencies must travel with
     # the wheel rather than live only in pivot_engine/requirements.txt.
-    # The direct backend supports DuckDB's 0.8 legacy fetch API through the
-    # current 1.x conversion API; 2.x needs an explicit compatibility review.
-    "duckdb>=0.8.0,<2.0",
+    # The semantic core is certified on DuckDB 1.5 / Ibis 12 / SQLGlot 29;
+    # each major needs an explicit compatibility review before widening.
+    "duckdb>=1.5,<2",
     "pyarrow>=10.0.0",
     "pyarrow_hotfix>=0.4",
-    "ibis-framework[duckdb]>=4.0.0",
+    "ibis-framework[duckdb]>=12,<13",
     # Ibis 12's Arrow bootstrap still constructs Drop(this=...), whereas
     # SQLGlot 30 emits that form without a table name. Revalidate before 30.x.
-    "sqlglot<30",
+    "sqlglot>=29,<30",
     "pandas>=1.5.0",
     "psutil>=5.9",
 ]
@@ -84,6 +84,12 @@ dev = [
     "werkzeug>=2.2.0",
     "starlette>=0.27.0",
     "tomli>=2.0.0; python_version < '3.11'",
+    # Semantic-core verification: properties, architecture contracts, static checks, mutation.
+    "hypothesis>=6.100",
+    "import-linter>=2.0",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "mutmut>=3.0",
 ]
 qualification = [
     "pytest>=7.0.0",
@@ -111,6 +117,9 @@ packages = [
     "pivot_engine.runtime",
     "pivot_engine.streaming",
     "pivot_engine.transport",
+    "pivot_engine.core",
+    "pivot_engine.core.authority",
+    "pivot_engine.core.physical",
 ]
 
 [tool.setuptools.package-dir]

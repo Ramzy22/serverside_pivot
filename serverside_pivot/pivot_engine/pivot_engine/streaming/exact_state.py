@@ -49,8 +49,7 @@ def _configured_job_ttl(value: Optional[float]) -> Optional[float]:
     return float(value)
 
 
-class ExactCDCStateError(ValueError):
-    """Raised when an event cannot be represented in exact aggregate state."""
+from ..core.identity import ExactCDCStateError  # noqa: E402  (shared with the core codec)
 
 
 @dataclass(frozen=True)
@@ -95,109 +94,7 @@ class _ReverseOrder:
         return self.value > other.value
 
 
-class CanonicalScalarCodec:
-    """Versioned, type-preserving codec for supported pivot scalar values."""
-
-    version = 1
-
-    @classmethod
-    def encode(cls, value: Any) -> str:
-        if value is None:
-            type_name, encoded_value = "none", None
-        elif isinstance(value, bool):
-            type_name, encoded_value = "bool", value
-        elif isinstance(value, int):
-            type_name, encoded_value = "int", str(value)
-        elif isinstance(value, float):
-            if not math.isfinite(value):
-                raise ExactCDCStateError("CDC scalar floats must be finite.")
-            type_name, encoded_value = "float", repr(value)
-        elif isinstance(value, Decimal):
-            type_name, encoded_value = "decimal", str(value)
-        elif isinstance(value, str):
-            type_name, encoded_value = "str", value
-        elif isinstance(value, bytes):
-            type_name = "bytes"
-            encoded_value = base64.b64encode(value).decode("ascii")
-        elif isinstance(value, datetime):
-            type_name, encoded_value = "datetime", value.isoformat()
-        elif isinstance(value, date):
-            type_name, encoded_value = "date", value.isoformat()
-        else:
-            raise ExactCDCStateError(
-                "CDC scalar type is not supported for exact aggregation."
-            )
-        return json.dumps(
-            {"version": cls.version, "type": type_name, "value": encoded_value},
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-    @classmethod
-    def _payload(cls, encoded: str) -> Dict[str, Any]:
-        try:
-            payload = json.loads(encoded)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ExactCDCStateError("CDC scalar payload is invalid.") from exc
-        if (
-            not isinstance(payload, dict)
-            or payload.get("version") != cls.version
-            or not isinstance(payload.get("type"), str)
-            or "value" not in payload
-        ):
-            raise ExactCDCStateError("CDC scalar payload has an unsupported format.")
-        return payload
-
-    @classmethod
-    def decode(cls, encoded: str) -> Any:
-        payload = cls._payload(encoded)
-        type_name = payload["type"]
-        value = payload["value"]
-        try:
-            if type_name == "none" and value is None:
-                return None
-            if type_name == "bool" and isinstance(value, bool):
-                return value
-            if type_name == "int" and isinstance(value, str):
-                return int(value)
-            if type_name == "float" and isinstance(value, str):
-                decoded = float(value)
-                if not math.isfinite(decoded):
-                    raise ValueError("non-finite float")
-                return decoded
-            if type_name == "decimal" and isinstance(value, str):
-                return Decimal(value)
-            if type_name == "str" and isinstance(value, str):
-                return value
-            if type_name == "bytes" and isinstance(value, str):
-                return base64.b64decode(value.encode("ascii"), validate=True)
-            if type_name == "date" and isinstance(value, str):
-                return date.fromisoformat(value)
-            if type_name == "datetime" and isinstance(value, str):
-                return datetime.fromisoformat(value)
-        except (ValueError, InvalidOperation, TypeError) as exc:
-            raise ExactCDCStateError("CDC scalar payload value is invalid.") from exc
-        raise ExactCDCStateError("CDC scalar payload type is invalid.")
-
-    @classmethod
-    def order_key(cls, encoded: str) -> tuple[Any, ...]:
-        payload = cls._payload(encoded)
-        type_name = payload["type"]
-        value = cls.decode(encoded)
-        if type_name in {"int", "float", "decimal"}:
-            return ("number", Decimal(str(value)))
-        if type_name == "none":
-            return ("none", "")
-        if type_name == "bool":
-            return ("bool", int(value))
-        if type_name == "bytes":
-            return ("bytes", value)
-        if type_name in {"date", "datetime"}:
-            return ("temporal", value.isoformat())
-        return (type_name, value)
-
+from ..core.identity import CanonicalScalarCodec  # noqa: E402  (moved to the core)
 
 class ExactMeasureAccumulator:
     """Reversible state for one aggregate measure in one logical group."""

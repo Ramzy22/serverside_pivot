@@ -38,8 +38,7 @@ from ..planner.expression_parser import SafeExpressionParser
 from ..types.pivot_spec import Measure
 from .exact_state import CanonicalScalarCodec
 
-GRAND_TOTAL_CANONICAL_PATH = "[]"
-GRAND_TOTAL_DISPLAY_PATH = "__grand_total__"
+from ..core.identity import GRAND_TOTAL_CANONICAL_PATH, GRAND_TOTAL_DISPLAY_PATH  # noqa: E402
 ROW_TOTAL_COL_KEY = "__RowTotal__"
 
 _BRACKET_REF_RE = re.compile(r"\[([^\]]+)\]")
@@ -67,39 +66,7 @@ class DependencyScope(StrEnum):
     SCOPE_GLOBAL_RANK = "scope_global_rank"
 
 
-class CanonicalPathCodec:
-    """Collision-free typed canonical encoding for multi-level hierarchy paths."""
-
-    @staticmethod
-    def encode(values: Sequence[Any]) -> str:
-        if not values:
-            return GRAND_TOTAL_CANONICAL_PATH
-        encoded_items = [CanonicalScalarCodec.encode(v) for v in values]
-        return json.dumps(encoded_items, ensure_ascii=False, separators=(",", ":"))
-
-    @staticmethod
-    def decode(canonical_path: str) -> Tuple[Any, ...]:
-        if canonical_path in {GRAND_TOTAL_CANONICAL_PATH, GRAND_TOTAL_DISPLAY_PATH, ""}:
-            return ()
-        raw = json.loads(canonical_path)
-        if not isinstance(raw, list):
-            raise ValueError("Canonical path must be a JSON array.")
-        return tuple(CanonicalScalarCodec.decode(item) for item in raw)
-
-    @staticmethod
-    def display_path(values: Sequence[Any]) -> str:
-        """Backward-compatible display path while internal keys use `encode()`."""
-        if not values:
-            return GRAND_TOTAL_DISPLAY_PATH
-        return "|||".join("" if v is None else str(v) for v in values)
-
-    @staticmethod
-    def prefix_paths(values: Sequence[Any]) -> List[str]:
-        """Return canonical paths from depth 0 (Grand Total) through full tuple."""
-        paths = [GRAND_TOTAL_CANONICAL_PATH]
-        for depth in range(1, len(values) + 1):
-            paths.append(CanonicalPathCodec.encode(values[:depth]))
-        return paths
+from ..core.identity import CanonicalPathCodec  # noqa: E402  (moved to the core)
 
 
 def normalize_numeric(value: Any) -> Any:

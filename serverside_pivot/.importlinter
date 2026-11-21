@@ -1,0 +1,43 @@
+[importlinter]
+root_package = pivot_engine
+include_external_packages = True
+
+[importlinter:contract:core-independent]
+name = The semantic core does not depend on edges or legacy engines
+type = forbidden
+source_modules =
+    pivot_engine.core
+forbidden_modules =
+    pivot_engine.runtime
+    pivot_engine.streaming
+    pivot_engine.diff
+    pivot_engine.transport
+    pivot_engine.planner
+    pivot_engine.editing
+    pivot_engine.cdc
+    pivot_engine.cache
+    pivot_engine.common
+    pivot_engine.tanstack_adapter
+    pivot_engine.controller
+    pivot_engine.scalable_pivot_controller
+    pivot_engine.hierarchical_scroll_manager
+    pivot_engine.pruning_manager
+    pivot_engine.progressive_loader
+    pivot_engine.materialized_hierarchy_manager
+    pivot_engine.intelligent_prefetch_manager
+    pivot_engine.complete_rest_api
+    pivot_engine.flight_server
+    pivot_engine.dash_integration
+    pivot_engine.security
+
+[importlinter:contract:core-pure-layers]
+name = IR, registry and logical planning are engine-free (no Ibis / Arrow)
+type = forbidden
+source_modules =
+    pivot_engine.core.ir
+    pivot_engine.core.registry
+    pivot_engine.core.logical
+forbidden_modules =
+    ibis
+    pyarrow
+    pandas

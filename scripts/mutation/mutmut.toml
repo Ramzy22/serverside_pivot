@@ -1,0 +1,14 @@
+# Copied to the mutation workspace as pyproject.toml by run_core_mutation.sh.
+[tool.mutmut]
+paths_to_mutate = [
+    "pivot_engine/core/authority/",
+    "pivot_engine/core/registry.py",
+    "pivot_engine/core/logical.py",
+    "pivot_engine/core/ir.py",
+]
+also_copy = ["pivot_engine/", "tests/"]
+tests_dir = ["tests/"]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-q"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

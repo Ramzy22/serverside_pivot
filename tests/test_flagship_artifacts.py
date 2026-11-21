@@ -31,7 +31,7 @@ from scripts.flagship_artifacts import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("requirement", ["psutil>=5.9", "sqlglot<30"])
+@pytest.mark.parametrize("requirement", ["psutil>=5.9", "sqlglot>=29,<30", "duckdb>=1.5,<2", "ibis-framework>=12,<13"])
 def test_wheel_metadata_declares_engine_runtime_dependencies(tmp_path, requirement):
     try:
         import tomllib

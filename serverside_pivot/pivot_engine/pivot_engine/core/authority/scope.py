@@ -32,7 +32,7 @@ import threading
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
-from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 __all__ = [
     "bind_request_scope",
@@ -201,8 +201,8 @@ class _ConnectionGuard:
     def __init__(self, con: Any) -> None:
         self.protected: set[str] = set()
         self.raw_table = con.table
-        self._raw_sql = getattr(con, "sql", None)
-        self._raw_raw_sql = getattr(con, "raw_sql", None)
+        self._raw_sql: Any = getattr(con, "sql", None)
+        self._raw_raw_sql: Any = getattr(con, "raw_sql", None)
 
     def table(self, name: Any, *args: Any, **kwargs: Any) -> Any:
         return apply_scope(name, self.raw_table(name, *args, **kwargs), protected=self.protected)
@@ -231,9 +231,9 @@ def install_scope_guard(con: Any) -> Optional[_ConnectionGuard]:
     if con is None or not hasattr(con, "table"):
         return None
     with _GUARD_LOCK:
-        guard = getattr(con, _GUARD_ATTR, None)
-        if guard is not None:
-            return guard
+        existing: Optional[_ConnectionGuard] = getattr(con, _GUARD_ATTR, None)
+        if existing is not None:
+            return existing
         guard = _ConnectionGuard(con)
         object.__setattr__(con, _GUARD_ATTR, guard)
         object.__setattr__(con, "table", guard.table)
@@ -253,9 +253,9 @@ def protected_tables(con: Any) -> FrozenSet[str]:
     return frozenset(guard.protected) if guard is not None else frozenset()
 
 
-def connections_of(owner: Any) -> list:
+def connections_of(owner: Any) -> List[Any]:
     """Every Ibis connection reachable from an adapter/controller/planner."""
-    seen: list = []
+    seen: List[Any] = []
 
     def add(con: Any) -> None:
         if con is not None and hasattr(con, "table") and all(con is not s for s in seen):
@@ -407,7 +407,7 @@ def unguarded_table(con: Any, name: Any, *args: Any, **kwargs: Any) -> Any:
     return (guard.raw_table if guard is not None else con.table)(name, *args, **kwargs)
 
 
-def scope_where_sql(grant: Any, quote: Callable[[str], str]) -> Tuple[str, list]:
+def scope_where_sql(grant: Any, quote: Callable[[str], str]) -> Tuple[str, List[Any]]:
     """Exact parameterized ``WHERE`` for raw-SQL components (snapshot capture).
 
     Same semantics as :func:`compile_scope_predicate`: exact equality, NULL
@@ -416,8 +416,8 @@ def scope_where_sql(grant: Any, quote: Callable[[str], str]) -> Tuple[str, list]
     fields = _grant_fields(grant)
     if not fields:
         return "", []
-    clauses: list = []
-    params: list = []
+    clauses: List[str] = []
+    params: List[Any] = []
     for name in sorted(fields):
         values = tuple(fields[name])
         if not values:

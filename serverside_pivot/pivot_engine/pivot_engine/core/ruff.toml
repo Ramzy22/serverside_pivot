@@ -1,0 +1,6 @@
+# Lint policy for the semantic core (stricter than the rest of the package).
+line-length = 120
+
+[lint]
+select = ["E", "F", "B", "BLE", "T20", "S", "UP", "I"]
+ignore = ["S101", "UP006", "UP007", "UP035", "UP045"]
