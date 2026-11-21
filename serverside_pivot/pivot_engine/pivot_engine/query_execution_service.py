@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Dict, Optional
+from .core.authority.scope import run_in_executor_scoped
 
 
 class PivotQueryExecutor:
@@ -69,8 +70,7 @@ class PivotQueryExecutor:
             with controller.planning_lock:
                 return controller.planner.plan(normalized_spec)
 
-        plan_result = await asyncio.get_running_loop().run_in_executor(
-            None,
+        plan_result = await run_in_executor_scoped(asyncio.get_running_loop(), None,
             plan_with_lock,
         )
         planning_finished_at = time.perf_counter()

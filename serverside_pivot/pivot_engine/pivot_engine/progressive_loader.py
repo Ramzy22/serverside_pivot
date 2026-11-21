@@ -9,6 +9,7 @@ from ibis import BaseBackend as IbisBaseBackend
 from ibis.expr.api import Table as IbisTable, Expr
 from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
+from .core.authority.scope import run_in_executor_scoped
 
 
 class ProgressiveDataLoader:
@@ -22,6 +23,8 @@ class ProgressiveDataLoader:
         
     async def load_progressive_chunks(self, spec: PivotSpec, chunk_callback: Optional[Callable] = None):
         """Load data in chunks for progressive rendering"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('progressive_chunks')  # REQ-SEC-005 deny-until-proven
         # Determine chunk boundaries based on data size and complexity
         total_estimated_rows = await self._estimate_total_rows(spec)
         chunk_size = min(self.default_chunk_size, max(self.min_chunk_size, total_estimated_rows // 10))  # Adaptive chunk size
@@ -43,7 +46,7 @@ class ProgressiveDataLoader:
                 chunk_ibis_expr = self._build_chunk_ibis_expression(spec, offset=offset, chunk_size=chunk_size, cursor=None)
             
             # Execute Ibis expression in executor
-            chunk_data = await loop.run_in_executor(None, chunk_ibis_expr.to_pyarrow)
+            chunk_data = await run_in_executor_scoped(loop, None, chunk_ibis_expr.to_pyarrow)
             
             if chunk_data.num_rows == 0:
                 break
@@ -103,7 +106,7 @@ class ProgressiveDataLoader:
         # Load root level first (top-level aggregations)
         root_ibis_expr = self._create_level_ibis_expression(spec, [], spec.rows[0] if spec.rows else '')
         if root_ibis_expr is not None:
-            root_data = await loop.run_in_executor(None, root_ibis_expr.to_pyarrow)
+            root_data = await run_in_executor_scoped(loop, None, root_ibis_expr.to_pyarrow)
             
             level_info = {
                 'level': 0,
@@ -123,7 +126,7 @@ class ProgressiveDataLoader:
             if level < len(spec.rows):
                 level_ibis_expr = self._create_level_ibis_expression(spec, path, spec.rows[level])
                 if level_ibis_expr is not None:
-                    level_data = await loop.run_in_executor(None, level_ibis_expr.to_pyarrow)
+                    level_data = await run_in_executor_scoped(loop, None, level_ibis_expr.to_pyarrow)
                     
                     level_info = {
                         'level': level,
@@ -187,7 +190,7 @@ class ProgressiveDataLoader:
         try:
             # Need to create an expression that returns a scalar, then execute it
             count_expr = filtered_table.count()
-            row_count = await loop.run_in_executor(None, count_expr.execute)
+            row_count = await run_in_executor_scoped(loop, None, count_expr.execute)
             return row_count
         except Exception as e:
             print(f"Error estimating row count: {e}")

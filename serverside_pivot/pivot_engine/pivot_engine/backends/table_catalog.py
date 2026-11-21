@@ -31,6 +31,15 @@ def _default_schema_cache_ttl() -> float:
         return 300.0
 
 
+class _RawConnection:
+    """Expose a connection's unscoped ``table()`` to the catalog's base cache."""
+
+    def __init__(self, con: Any) -> None:
+        self._con = con
+        guard = getattr(con, "_pivot_scope_guard", None)
+        self.table = guard.raw_table if guard is not None else con.table
+
+
 class IbisTableCatalog:
     """Registry of lazy Ibis table expressions and cached schema metadata."""
 
@@ -131,17 +140,32 @@ class IbisTableCatalog:
         *,
         fallback_con: Optional[Any] = None,
     ) -> Any:
-        """Resolve ``table_name`` to an Ibis ``Table`` expression."""
+        """Resolve ``table_name`` to an Ibis ``Table`` expression.
+
+        The catalog caches only *unscoped* base relations; the active row
+        scope is applied on every call (REQ-SEC-001), so a cached relation can
+        never carry one tenant's grant into another tenant's request.
+        """
+        from ..core.authority.scope import apply_scope, protected_tables
+
         key = str(table_name or "").strip()
         if not key:
             raise ValueError("table_name must be a non-empty string")
+        con = fallback_con if fallback_con is not None else self._con
+        base = self._resolve_base(key, con)
+        protected = set(protected_tables(con))
+        with self._lock:
+            registered_backend = self._registered_backends.get(key)
+        if registered_backend is not None:
+            protected |= protected_tables(registered_backend)
+        return apply_scope(key, base, protected=protected)
 
+    def _resolve_base(self, key: str, con: Optional[Any]) -> Any:
         with self._lock:
             registered = self._registered_tables.get(key)
         if registered is not None:
             return registered
 
-        con = fallback_con if fallback_con is not None else self._con
         if con is None or not hasattr(con, "table"):
             raise ValueError(f"Cannot resolve table '{key}': no Ibis connection is configured")
 
@@ -152,7 +176,7 @@ class IbisTableCatalog:
                 if cached_expr is not None and cached_expr[0] is con and cached_expr[2] > now:
                     return cached_expr[1]
 
-        resolved_expr = self._resolve_unregistered_table(key, con)
+        resolved_expr = self._resolve_unregistered_table(key, _RawConnection(con))
         if self.schema_cache_ttl > 0 and resolved_expr is not None:
             with self._lock:
                 self._table_expr_cache[key] = (con, resolved_expr, now + self.schema_cache_ttl)
@@ -214,7 +238,8 @@ class IbisTableCatalog:
                 if cached is not None and cached[2] > now:
                     return cached[0], list(cached[1])
 
-        table_expr = self.resolve_table(key, fallback_con=fallback_con)
+        # Schema metadata only: no rows are read, so the base relation is used.
+        table_expr = self._resolve_base(key, fallback_con if fallback_con is not None else self._con)
         schema_fn = getattr(table_expr, "schema", None)
         schema = schema_fn() if callable(schema_fn) else None
         raw_cols = getattr(table_expr, "columns", None)

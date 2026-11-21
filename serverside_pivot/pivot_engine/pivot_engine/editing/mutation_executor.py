@@ -6,6 +6,7 @@ from collections import OrderedDict
 from contextlib import nullcontext
 import decimal, json, math, re
 from typing import Any, Callable, Dict, List, Optional
+from ..core.authority.scope import run_in_executor_scoped
 
 
 class DatabaseMutationExecutor:
@@ -1452,7 +1453,7 @@ class DatabaseMutationExecutor:
                 },
             }
 
-        result = await loop.run_in_executor(None, execute_transaction)
+        result = await run_in_executor_scoped(loop, None, execute_transaction)
         if any(result["applied"].values()):
             applied_counts = result.get("applied") or {}
             structural_changed = bool(
@@ -1481,6 +1482,6 @@ class DatabaseMutationExecutor:
         def execute_update():
             self.controller._execute_parameterized_mutation(sql, [value, row_id])
 
-        await loop.run_in_executor(None, execute_update)
+        await run_in_executor_scoped(loop, None, execute_update)
         self.controller._clear_mutation_caches(table_name)
         return {"status": "success", "updated": 1}

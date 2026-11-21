@@ -107,17 +107,29 @@ class HierarchicalVirtualScrollManager:
         # Cache per spec object identity to avoid rebuilding the ibis expression
         # tree (with all CASE WHEN custom-dimension columns) for every sub-query
         # within a single hierarchical request (up to 7+ calls per request).
+        #
+        # ``id()`` values are reused after garbage collection, and resolved
+        # relations carry the active row scope, so an entry is only valid for
+        # the *same* spec object under the *same* grant (REQ-SEC-004).
+        from .core.authority.scope import current_scope
+
         cache = getattr(self, "_table_for_spec_cache", None)
         if cache is None:
             self._table_for_spec_cache = {}
             cache = self._table_for_spec_cache
-        key = id(spec)
-        if key not in cache:
-            cache[key] = self.planner.builder.apply_custom_dimensions(
-                self._resolve_table(spec.table),
-                getattr(spec, "custom_dimensions", []),
-            )
-        return cache[key]
+        grant = current_scope().grant_for(spec.table)
+        key = (id(spec), getattr(grant, "scope_fingerprint", None))
+        cached = cache.get(key)
+        if cached is not None and cached[0] is spec:
+            return cached[1]
+        expr = self.planner.builder.apply_custom_dimensions(
+            self._resolve_table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
+        if len(cache) >= 64:
+            cache.clear()
+        cache[key] = (spec, expr)
+        return expr
 
     def _to_pyarrow(self, expr):
         if not self._uses_duckdb():

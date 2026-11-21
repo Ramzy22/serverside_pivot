@@ -34,6 +34,7 @@ from pivot_engine.runtime.export_jobs import ExportJobSnapshot
 from pivot_engine.runtime.export_job_store import LocalExportJobStore
 from pivot_engine.runtime.contracts import validate_runtime_request_v1
 from pivot_engine.tanstack_adapter import TanStackResponse
+from pivot_engine.core.authority.scope import unguarded_table
 
 
 def _job_request(action, job_id=None, *, request_id=None, **payload):
@@ -1143,7 +1144,7 @@ def test_http_transport_mutations_are_default_deny_and_tenant_scoped_including_h
     def sales_by_tenant():
         return {
             row["tenant"]: row["sales"]
-            for row in adapter.controller.planner.con.table("sales")
+            for row in unguarded_table(adapter.controller.planner.con, "sales")
             .execute()
             .to_dict("records")
         }
@@ -1384,7 +1385,7 @@ def test_http_transaction_history_cannot_override_the_authenticated_session():
     )
 
     current_sales = (
-        adapter.controller.planner.con.table("sales").execute().to_dict("records")[0]["sales"]
+        unguarded_table(adapter.controller.planner.con, "sales").execute().to_dict("records")[0]["sales"]
     )
     assert forged_undo.status_code == 403
     assert current_sales == 999
@@ -1465,7 +1466,7 @@ def test_http_transport_preserves_an_explicit_permitted_tenant_key():
 
     rows_by_tenant = {
         row["tenant"]: row["sales"]
-        for row in adapter.controller.planner.con.table("sales")
+        for row in unguarded_table(adapter.controller.planner.con, "sales")
         .execute()
         .to_dict("records")
     }

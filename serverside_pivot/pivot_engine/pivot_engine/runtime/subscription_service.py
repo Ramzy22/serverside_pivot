@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..diff.baseline_comparison_service import BaselineComparisonService
+from .dataset_authorization import RuntimeDatasetAuthorizationError
 from ..diff.snapshot_provider import (
     SnapshotAuthorizationError,
     SnapshotDescriptor,
@@ -323,7 +324,67 @@ class RuntimeSubscriptionService:
     def snapshot_provider(self) -> SnapshotProvider:
         return self._ensure_stack()[1]
 
+    # Actions that address an existing subscription by id (REQ-LIVE-SEC-001).
+    _SUBSCRIPTION_ID_ACTIONS = frozenset({
+        "poll", "sync", "stream_sync", "ack", "modify_viewport", "set_baseline",
+        "update_options", "pause", "resume", "unfreeze", "set_pause_mode",
+        "freeze", "unsubscribe",
+    })
+
+    @staticmethod
+    def _principal_key(principal: Any) -> str:
+        for attr in ("id", "subject", "username", "sub"):
+            value = getattr(principal, attr, None)
+            if value is None and isinstance(principal, Mapping):
+                value = principal.get(attr)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
+    def _require_owner(self, broker: Any, sub_id: str, principal: Any, row_scope: Any) -> None:
+        """Only the principal + grant that created a subscription may drive it."""
+        sub = broker.get_subscription(sub_id) if sub_id else None
+        if sub is None:
+            return  # the broker reports unknown/expired ids itself
+        same_principal = self._principal_key(sub.principal) == self._principal_key(principal)
+        same_scope = (getattr(sub.row_scope, "scope_fingerprint", None) or "global") == (
+            getattr(row_scope, "scope_fingerprint", None) or "global"
+        )
+        if not (same_principal and same_scope):
+            raise RuntimeDatasetAuthorizationError("Subscription is not owned by this principal.")
+
     def handle_command(
+        self,
+        *,
+        table: str,
+        action: str,
+        payload: Mapping[str, Any],
+        state: Mapping[str, Any],
+        principal: Any = None,
+        row_scope: Any = None,
+    ) -> Dict[str, Any]:
+        """Dispatch a command with ownership checks and the grant bound to dataset access."""
+        from ..core.authority.scope import connections_of, is_protecting, scoped_execution
+
+        _, snapshot_provider, _, _, broker = self._ensure_stack()
+        act = str(action or "").strip().lower()
+        if act in self._SUBSCRIPTION_ID_ACTIONS:
+            self._require_owner(broker, str(payload.get("subscriptionId") or ""), principal, row_scope)
+        if act in {"delete_baseline", "clear_baseline"}:
+            snap_id = str(payload.get("baselineId") or payload.get("snapshotId") or "")
+            if snap_id:
+                # Raises SnapshotAuthorizationError for a foreign scope.
+                snapshot_provider.get_descriptor(
+                    snap_id, principal=principal, row_scope=row_scope, require_unexpired=False
+                )
+        connections = connections_of(self._adapter_getter()) if is_protecting(row_scope) else ()
+        with scoped_execution(row_scope, connections=connections):
+            return self._dispatch_command(
+                table=table, action=act, payload=payload, state=state,
+                principal=principal, row_scope=row_scope,
+            )
+
+    def _dispatch_command(
         self,
         *,
         table: str,

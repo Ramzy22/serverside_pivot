@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import atexit
 import inspect
 import json
@@ -588,6 +589,37 @@ def _is_production_environment() -> bool:
     return resolve_runtime_environment() == "production"
 
 
+def _dev_unauthenticated_from_env() -> bool:
+    import os
+
+    return str(os.environ.get("PIVOT_DEV_UNAUTHENTICATED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_dash_authorization_requirement(
+    require_dataset_authorization: Optional[bool] = None,
+    *,
+    dev_unauthenticated: Optional[bool] = None,
+) -> bool:
+    """Dash reads require a dataset policy by default (REQ-SEC-006).
+
+    Unauthenticated access is an explicit development opt-in
+    (``dev_unauthenticated=True`` or ``PIVOT_DEV_UNAUTHENTICATED=1``) and is
+    never honoured in production.
+    """
+    if require_dataset_authorization is not None:
+        return bool(require_dataset_authorization) or _is_production_environment()
+    if _is_production_environment():
+        return True
+    opt_in = _dev_unauthenticated_from_env() if dev_unauthenticated is None else bool(dev_unauthenticated)
+    if opt_in:
+        logging.getLogger(__name__).warning(
+            "serverside_pivot Dash runtime is running WITHOUT dataset authorization "
+            "(development opt-in). Never enable this in production."
+        )
+        return False
+    return True
+
+
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
     with _DASH_RESOURCE_LOCK:
         return _get_runtime_payload_store_locked(app)
@@ -829,7 +861,7 @@ def _register_runtime_subscription_endpoint(app: Any) -> None:
                     principal_getter=registration.principal_getter,
                     table=table,
                     operation="read",
-                    require_authorization=_is_production_environment(),
+                    require_authorization=resolve_dash_authorization_requirement(),
                 )
             )
             principal = auth_result.principal
@@ -1067,8 +1099,9 @@ def register_dash_pivot_transport_callback(
     if callback_key in registry:
         return False
 
-    if require_dataset_authorization is None:
-        require_dataset_authorization = _is_production_environment()
+    require_dataset_authorization = resolve_dash_authorization_requirement(
+        require_dataset_authorization
+    )
 
     include_drill_store = drill_store_id is not None
     _register_runtime_payload_endpoint(app)

@@ -40,6 +40,7 @@ from pivot_engine.backends.duckdb_backend import (
     _validate_duckdb_memory_envelope,
 )
 from pivot_engine.resource_governor import ResourceLimits
+from ..core.authority.scope import run_in_executor_scoped
 from pivot_engine.backends.execution import (
     CancellationUnavailableError,
     DatabaseExecution,
@@ -467,7 +468,7 @@ class IbisBackend:
     ) -> Any:
         """Preserve normal async Ibis execution when no hard deadline is requested."""
         loop = asyncio.get_running_loop()
-        task = loop.run_in_executor(None, self.execute, query, params, return_arrow)
+        task = run_in_executor_scoped(loop, None, self.execute, query, params, return_arrow)
         query_id = f"ibis-query-{next(self._query_id_counter)}"
         with self._running_queries_lock:
             self._running_queries[query_id] = task
@@ -531,8 +532,7 @@ class IbisBackend:
         execution = DatabaseExecution(f"ibis-query-{next(self._query_id_counter)}")
         with self._running_queries_lock:
             self._running_queries[execution.query_id] = execution
-        worker = asyncio.get_running_loop().run_in_executor(
-            None,
+        worker = run_in_executor_scoped(asyncio.get_running_loop(), None,
             self._execute_duckdb_ibis_with_lease,
             query,
             params,

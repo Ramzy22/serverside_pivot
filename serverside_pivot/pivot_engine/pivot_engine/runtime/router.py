@@ -141,6 +141,31 @@ class RuntimeRequestRouter:
         *,
         export_lease: Optional[ResourceLease] = None,
     ) -> PivotServiceResponse:
+        """Process one request with its row grant bound to every dataset read.
+
+        The grant on ``context.row_scope`` is server-issued.  Browser state
+        (Dash) is never trusted to carry it: the scope is attached to dataset
+        access itself for the whole request (REQ-SEC-001).
+        """
+        from ..core.authority.scope import connections_of, is_protecting, scoped_execution
+
+        # Only a protecting grant needs the adapter's connections guarded; do
+        # not touch the adapter otherwise (distributed editing rejects before
+        # adapter lookup).
+        grant = context.row_scope
+        connections = connections_of(self._adapter_getter()) if is_protecting(grant) else ()
+        with scoped_execution(grant, connections=connections):
+            return await self._process_async_scoped(
+                state, context, export_lease=export_lease
+            )
+
+    async def _process_async_scoped(
+        self,
+        state: PivotViewState,
+        context: PivotRequestContext,
+        *,
+        export_lease: Optional[ResourceLease] = None,
+    ) -> PivotServiceResponse:
         """Process one pivot request and return a transport-neutral response."""
         service_started_at = time.perf_counter()
         trigger_kind = (

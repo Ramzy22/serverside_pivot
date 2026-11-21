@@ -219,15 +219,34 @@ class CompletePivotAPI:
             content={"detail": self._internal_error_detail(request, exc)},
         )
 
-    def _authorize_dataset(self, user: User, table: str, operation: str = "read") -> Any:
+    def _authorize_dataset(
+        self, user: User, table: str, operation: str = "read", *, bind: bool = True
+    ) -> Any:
+        """Authorize and, for a data route, bind the grant to this request.
+
+        ``bind=False`` only computes the grant (e.g. to store it with a
+        websocket subscription); it must be used outside request handlers.
+        """
         try:
-            return self.dataset_authorizer.authorize(
+            grant = self.dataset_authorizer.authorize(
                 principal=user,
                 table=table,
                 operation=operation,
             )
         except RuntimeDatasetAuthorizationError as exc:
             raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from exc
+        # Attach the grant to dataset access for the rest of this request
+        # (REQ-SEC-001): every relation the route resolves is scoped, and
+        # unscoped resolution of the protected dataset fails closed.
+        if not bind:
+            return grant
+        from .core.authority.scope import UnscopedAccessError, bind_request_scope, connections_of
+
+        try:
+            bind_request_scope(grant, connections=connections_of(self.controller))
+        except UnscopedAccessError as exc:
+            raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from exc
+        return grant
 
     @staticmethod
     def _apply_row_scope(pivot_spec: PivotSpec, user: User, row_scope: Any) -> PivotSpec:
@@ -319,6 +338,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -356,6 +377,8 @@ class CompletePivotAPI:
                 raise
             except ExportLimitError as exc:
                 raise HTTPException(status_code=413, detail="Export exceeds the configured limit.") from exc
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -388,6 +411,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result.__dict__
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -409,6 +434,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -437,6 +464,8 @@ class CompletePivotAPI:
                         "range_size": request.end_row - request.start_row
                     }
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -458,6 +487,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -479,6 +510,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -509,6 +542,8 @@ class CompletePivotAPI:
                 )
             except HTTPException:
                 raise
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -530,6 +565,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -554,6 +591,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -571,6 +610,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -604,6 +645,8 @@ class CompletePivotAPI:
                     status="success",
                     data={"message": f"CDC setup complete for {request.table_name}"}
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -627,6 +670,8 @@ class CompletePivotAPI:
                     status="success",
                     data={"message": f"Push CDC setup complete for {request.table_name}"}
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -643,12 +688,14 @@ class CompletePivotAPI:
                     status="success",
                     data={"message": "Change accepted", "mode": mode}
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
         @self.app.get("/pivot/schema/{table_name}")
         async def get_schema_endpoint(table_name: str, user: User = Depends(get_current_user)):
-            self._authorize_dataset(user, table_name, "schema")
+            self._authorize_dataset(user, table_name, "schema", bind=False)
             try:
                 # This would typically query the database schema
                 # For now, return mock schema based on a sample query
@@ -675,6 +722,8 @@ class CompletePivotAPI:
                     status="success",
                     data=schema_info
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -710,6 +759,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -734,6 +785,8 @@ class CompletePivotAPI:
                     status="success",
                     data=result
                 )
+            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
     
@@ -845,7 +898,7 @@ class RealTimePivotAPI(CompletePivotAPI):
 
     def _subscription_scope(self, principal: User, table_name: str) -> Optional[Any]:
         try:
-            return self._authorize_dataset(principal, table_name, "subscribe")
+            return self._authorize_dataset(principal, table_name, "subscribe", bind=False)
         except HTTPException:
             return None
 

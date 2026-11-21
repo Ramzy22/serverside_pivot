@@ -316,8 +316,12 @@ class PivotFlightServer(fl.FlightServerBase):
             row_scope = self._authorize_read(principal, table_name)
             _table_name, scoped_spec = self._scope_pivot_spec(spec, row_scope)
             
-            # The result is a PyArrow Table
-            table = self._controller.run_pivot_arrow(scoped_spec)
+            # The result is a PyArrow Table.  The grant is bound to dataset
+            # access for the query (REQ-SEC-001), not only to the spec.
+            from .core.authority.scope import connections_of, scoped_execution
+
+            with scoped_execution(row_scope, connections=connections_of(self._controller)):
+                table = self._controller.run_pivot_arrow(scoped_spec)
             ticket_id = self._store_result(
                 table,
                 table_name=table_name if self._require_auth else None,

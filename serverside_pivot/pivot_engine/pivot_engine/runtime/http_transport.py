@@ -981,6 +981,15 @@ def register_runtime_http_transport(
                 content={"type": "AUTH_REVOKED", "code": "authorization_denied", "message": str(exc)},
             )
 
+        # Bind the grant to dataset access for this request and every frame
+        # the stream generator evaluates (REQ-SEC-001).
+        from ..core.authority.scope import bind_request_scope, connections_of, is_protecting
+
+        if is_protecting(row_scope):
+            bind_request_scope(
+                row_scope,
+                connections=connections_of(gateway.subscription_service._adapter_getter()),
+            )
         spec = build_pivot_spec_from_subscription_state(table, state)
         viewport = build_viewport_window_from_payload(payload, state)
         baseline_id = payload.get("baselineId") or payload.get("snapshotId")

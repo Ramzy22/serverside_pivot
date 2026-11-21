@@ -18,6 +18,7 @@ from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLe
 from .export_jobs import ExportJobSnapshot, EXPORT_JOB_TERMINAL_PHASES
 from .models import PivotRequestContext, PivotViewState
 from .export_service import ExportWriteControl, current_export_write
+from ..core.authority.scope import submit_with_scope
 
 
 log = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class ExportJobRunner:
                 execution = _Execution(job, context, lease, control, epoch=claimed.owner_epoch)
                 control.progress = lambda rows, size: self._progress(execution, rows, size)
                 self._active[job.job_id] = execution
-                execution.future = self._executor.submit(self._run, execution, deepcopy(state))
+                execution.future = submit_with_scope(self._executor, self._run, execution, deepcopy(state))
                 execution.future.add_done_callback(
                     lambda future: self._finalize(execution) if future.cancelled() else None,
                 )

@@ -149,6 +149,11 @@ def _build_rls_where_sql(row_scope: Any) -> Tuple[str, List[Any]]:
     """Build parameterized SQL WHERE clauses for a RowScope if claim filters exist."""
     if row_scope is None:
         return "", []
+    if isinstance(getattr(row_scope, "field_values", None), Mapping):
+        # Server-issued grant: exact, typed, NULL-aware (REQ-SEC-003).
+        from ..core.authority.scope import scope_where_sql
+
+        return scope_where_sql(row_scope, lambda name: quote_ident(name))
     filters = getattr(row_scope, "filters", None)
     if not filters:
         apply_fn = getattr(row_scope, "apply_to_filters", None)

@@ -102,6 +102,9 @@ def _is_production_environment() -> bool:
     return resolve_runtime_environment() == "production"
 
 
+from .runtime.dash_callbacks import resolve_dash_authorization_requirement as _resolve_dash_auth
+
+
 def register_pivot_app(
     app: Any,
     adapter_getter: Callable[[], Any],
@@ -113,6 +116,7 @@ def register_pivot_app(
     drill_authorizer: Optional[Callable[[Any, str], bool]] = None,
     runtime_dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
     runtime_principal_getter: Optional[Callable[[Any], Any]] = None,
+    dev_unauthenticated: Optional[bool] = None,
 ) -> None:
     """
     Wire a pivot component into a Dash app with minimal boilerplate.
@@ -292,5 +296,7 @@ def register_pivot_app(
         sort_options_default=_layout_sort_options,
         dataset_authorizer=runtime_dataset_authorizer,
         principal_getter=runtime_principal_getter,
-        require_dataset_authorization=production,
+        require_dataset_authorization=_resolve_dash_auth(
+            True if production else None, dev_unauthenticated=dev_unauthenticated
+        ),
     )

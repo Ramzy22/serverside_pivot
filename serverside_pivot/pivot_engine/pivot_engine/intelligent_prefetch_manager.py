@@ -6,6 +6,7 @@ import asyncio
 import ibis
 from ibis.expr.api import Table as IbisTable
 from pivot_engine.types.pivot_spec import PivotSpec
+from .core.authority.scope import run_in_executor_scoped
 
 class UserPatternAnalyzer:
     def __init__(self, cache):
@@ -48,6 +49,9 @@ class IntelligentPrefetchManager:
         Args:
             velocity: Scroll velocity (e.g. rows per second). High velocity triggers larger prefetch.
         """
+        from .core.authority.scope import current_scope
+        if current_scope().active:  # REQ-SEC-005: unproven for protected datasets
+            return
         if not self.virtual_scroll_manager:
             return
             
@@ -76,7 +80,7 @@ class IntelligentPrefetchManager:
                 spec, next_start, next_end, expanded_paths
             )
             
-        await loop.run_in_executor(None, fetch)
+        await run_in_executor_scoped(loop, None, fetch)
         return {"status": "prefetched", "range": (next_start, next_end), "multiplier": multiplier}
 
     async def determine_prefetch_strategy(self, user_session: Dict[str, Any], spec: PivotSpec, expanded_paths: List[List[str]]) -> List[List[str]]:
@@ -194,7 +198,7 @@ class IntelligentPrefetchManager:
                 final_query = filtered_ranked.select(selection)
                 
                 # Execute asynchronously
-                result = await loop.run_in_executor(None, final_query.execute)
+                result = await run_in_executor_scoped(loop, None, final_query.execute)
                 
                 # Process result to list of (parent_tuple, child_val)
                 output = []
@@ -214,7 +218,7 @@ class IntelligentPrefetchManager:
                 selection = parent_dims + [target_dim]
                 fallback_query = query.select(selection).distinct().limit(limit_per_parent * len(parent_paths) * 2)
                 
-                result = await loop.run_in_executor(None, fallback_query.execute)
+                result = await run_in_executor_scoped(loop, None, fallback_query.execute)
                      
                 output = []
                 if hasattr(result, 'to_dict'):
@@ -247,7 +251,7 @@ class IntelligentPrefetchManager:
             
             # Execute asynchronously
             if hasattr(self.backend, 'execute'):
-                 result = await loop.run_in_executor(None, query.execute)
+                 result = await run_in_executor_scoped(loop, None, query.execute)
                  if hasattr(result, 'tolist'): # Series/Array
                      return result.tolist()
                  elif hasattr(result, '__getitem__'): # DataFrame

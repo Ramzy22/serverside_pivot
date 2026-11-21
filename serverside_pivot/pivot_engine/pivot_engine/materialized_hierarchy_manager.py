@@ -12,6 +12,7 @@ from ibis import BaseBackend as IbisBaseBackend
 from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.util.sql_builder import quote_ident
 from pivot_engine.backends.capabilities import resolve_backend_capabilities
+from .core.authority.scope import run_in_executor_scoped
 
 
 class MaterializedHierarchyManager:
@@ -85,7 +86,7 @@ class MaterializedHierarchyManager:
             self._create_materialized_hierarchy_sync(spec, job_id)
         else:
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self._create_materialized_hierarchy_sync, spec, job_id)
+            run_in_executor_scoped(loop, None, self._create_materialized_hierarchy_sync, spec, job_id)
         
         return job_id
 
@@ -220,6 +221,9 @@ class MaterializedHierarchyManager:
         """
         Find the best materialized rollup table for the given query.
         """
+        from .core.authority.scope import current_scope
+        if current_scope().active:  # REQ-SEC-005: unproven for protected datasets
+            return None
         # Identifying rollups by hash makes this precise
         # If no exact match found, we don't guess (to avoid "column not found" errors)
         return self.get_rollup_table_name(spec, len(spec.rows))

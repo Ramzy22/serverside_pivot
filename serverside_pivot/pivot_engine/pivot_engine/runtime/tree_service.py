@@ -7,6 +7,7 @@ import math
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState
+from ..core.authority.scope import run_in_executor_scoped
 
 
 def _stringify_path(parts: Iterable[Any]) -> str:
@@ -396,12 +397,13 @@ class TreeRuntimeService:
         def execute_rows() -> List[Dict[str, Any]]:
             frame = table_expr.execute()
             if hasattr(frame, "to_dict"):
-                return frame.to_dict("records")
+                # SQL NULL stays null (pandas uses NaN) — REQ-NULL-001.
+                return frame.astype(object).where(frame.notna(), None).to_dict("records")
             if isinstance(frame, list):
                 return frame
             return []
 
-        worker = loop.run_in_executor(None, execute_rows)
+        worker = run_in_executor_scoped(loop, None, execute_rows)
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:

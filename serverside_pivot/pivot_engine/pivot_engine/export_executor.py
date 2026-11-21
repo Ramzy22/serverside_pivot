@@ -12,6 +12,7 @@ import pyarrow as pa
 
 from .export_limits import ExportLimits
 from .resource_governor import ResourceExhaustedError, ResourceKind
+from .core.authority.scope import run_in_executor_scoped
 
 
 def iter_bounded_record_batches(
@@ -119,7 +120,7 @@ class PivotExportExecutor:
         controller = self._controller
         normalized_spec = controller._normalize_spec(spec)
         self._validate_requested_rows(normalized_spec)
-        plan_result = await asyncio.get_running_loop().run_in_executor(None, controller.planner.plan, normalized_spec)
+        plan_result = await run_in_executor_scoped(asyncio.get_running_loop(), None, controller.planner.plan, normalized_spec)
         queries = plan_result.get("queries", [])
         if not queries:
             yield b""

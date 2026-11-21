@@ -38,6 +38,7 @@ from pivot_engine.backends.execution import (
     resolve_query_timeout_seconds,
 )
 from pivot_engine.resource_governor import ResourceLimits
+from ..core.authority.scope import run_in_executor_scoped, submit_with_scope
 
 
 _MAX_DUCKDB_THREADS = 1024
@@ -536,7 +537,7 @@ class DuckDBBackend:
         loop = asyncio.get_running_loop()
         execution = DatabaseExecution(f"duckdb-query-{next(self._query_id_counter)}")
         self._register_execution(execution)
-        worker = loop.run_in_executor(None, self._execute_with_lease, query, execution)
+        worker = run_in_executor_scoped(loop, None, self._execute_with_lease, query, execution)
         worker.add_done_callback(lambda _worker: self._unregister_execution(execution))
 
         try:
@@ -849,7 +850,7 @@ def execute_parallel(
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(backend.execute, q)
+            submit_with_scope(executor, backend.execute, q)
             for q in queries
         ]
         results = [f.result() for f in futures]

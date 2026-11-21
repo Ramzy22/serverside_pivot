@@ -220,6 +220,8 @@ class ProgressiveHierarchicalLoader:
                                        user_preferences: Optional[Dict[str, Any]] = None,
                                        progress_callback=None):
         """Load hierarchy progressively, level by level"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('pruned_hierarchical')  # REQ-SEC-005 deny-until-proven
         result = {'levels': [], 'metadata': {}}
 
         # Load top level first

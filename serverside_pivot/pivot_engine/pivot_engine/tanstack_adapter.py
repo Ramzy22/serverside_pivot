@@ -21,6 +21,7 @@ from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService, TransactionAdapterMixin
 from .types.pivot_spec import PivotSpec, Measure, MeasureAxisConfig
 from .security import User, apply_rls_to_spec
+from .core.authority.scope import row_scoped
 from .formula_mixin import FormulaEngineMixin
 from .hierarchy_rows import (
     build_visible_hierarchy_rows,
@@ -1109,6 +1110,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         )
         return resolved
 
+    @row_scoped
     async def apply_full_export_layout(
         self, response: "TanStackResponse", request: "TanStackRequest",
         *, user: Optional[User] = None, row_scope: Any = None,
@@ -1985,6 +1987,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             "row_fields": row_fields,
         }
 
+    @row_scoped
     async def handle_request(
         self,
         request: TanStackRequest,
@@ -2069,6 +2072,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         return tanstack_result
 
+    @row_scoped
     async def handle_hierarchical_request(
         self,
         request: TanStackRequest,
@@ -2345,6 +2349,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
+    @row_scoped
     async def handle_virtual_scroll_request(
         self,
         request: TanStackRequest,
@@ -3442,6 +3447,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         # ... existing ...
         pass
 
+    @row_scoped
     async def get_unique_values(
         self,
         table_name: str,
@@ -3623,6 +3629,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             table, rows, mode=mode, key_fields=key_fields, source=source
         )
 
+    @row_scoped
     def capture_baseline(
         self,
         table: str,
@@ -3647,6 +3654,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             time_travel_token=time_travel_token,
         )
 
+    @row_scoped
     def freeze_snapshot(
         self,
         table: str,

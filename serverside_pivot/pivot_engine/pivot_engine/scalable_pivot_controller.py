@@ -65,6 +65,7 @@ from pivot_engine.cdc.cdc_manager import PivotCDCManager
 from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
 from pivot_engine.intelligent_prefetch_manager import IntelligentPrefetchManager, UserPatternAnalyzer
 from pivot_engine.pruning_manager import HierarchyPruningManager, ProgressiveHierarchicalLoader
+from .core.authority.scope import run_in_executor_scoped
 
 
 def _positive_env_float(name: str, default: float) -> float:
@@ -858,12 +859,12 @@ class ScalablePivotController(PivotController):
             else self._uses_duckdb_ibis()
         )
         if not requires_lock:
-            return await loop.run_in_executor(None, expr.execute)
+            return await run_in_executor_scoped(loop, None, expr.execute)
 
         def execute_with_lock():
             return self.execution_locks.run(table_name, expr.execute)
 
-        return await loop.run_in_executor(None, execute_with_lock)
+        return await run_in_executor_scoped(loop, None, execute_with_lock)
 
     async def setup_cdc(self, table_name: str, change_stream):
         """Setup CDC for real-time tracking of data changes"""
@@ -1939,6 +1940,8 @@ class ScalablePivotController(PivotController):
 
     async def run_progressive_load(self, spec: PivotSpec, chunk_callback: Optional[Callable] = None):
         """Run progressive data loading for large datasets"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('progressive_chunks')  # REQ-SEC-005 deny-until-proven
         if self.progressive_loader is None:
             raise ValueError("Progressive data loading requires an Ibis connection.")
         result = await self.progressive_loader.load_progressive_chunks(spec, chunk_callback)
@@ -2652,6 +2655,8 @@ class ScalablePivotController(PivotController):
 
     async def run_hierarchical_progressive(self, spec: PivotSpec, expanded_paths: List[List[str]], level_callback: Optional[Callable] = None):
         """Run hierarchical data loading progressively by levels"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('hierarchical_progressive')  # REQ-SEC-005 deny-until-proven
         if self.progressive_loader is None:
             raise ValueError("Hierarchical progressive loading requires an Ibis connection.")
         result = await self.progressive_loader.load_hierarchical_progressive(spec, expanded_paths, level_callback)
@@ -2691,7 +2696,7 @@ class ScalablePivotController(PivotController):
                 with self._execution_lock_for_table(getattr(spec, "table", None)):
                     self.materialized_hierarchy_manager.create_materialized_hierarchy(spec)
 
-            await loop.run_in_executor(None, _materialize_with_lock)
+            await run_in_executor_scoped(loop, None, _materialize_with_lock)
             print(f"Smart materialization completed for table {spec.table}")
         except Exception as e:
             print(f"Smart materialization failed: {e}")
@@ -2727,7 +2732,7 @@ class ScalablePivotController(PivotController):
                     tasks.append(self.backend.execute_async(query_expr))
                 elif self.backend and hasattr(self.backend, 'execute'):
                     # Fallback to sync execute in executor
-                    tasks.append(loop.run_in_executor(None, self.backend.execute, query_expr))
+                    tasks.append(run_in_executor_scoped(loop, None, self.backend.execute, query_expr))
                 else:
                      print(f"Error: Cannot execute legacy query format with current backend.")
                      tasks.append(asyncio.create_task(asyncio.sleep(0, result=pa.table({})))) # Dummy task
@@ -2991,6 +2996,8 @@ class ScalablePivotController(PivotController):
                                               user_preferences: Optional[Dict[str, Any]] = None,
                                               progress_callback: Optional[Callable] = None):
         """Run progressive hierarchical loading with pruning"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('pruned_hierarchical')  # REQ-SEC-005 deny-until-proven
         result = self.progressive_hierarchy_loader.load_progressive_hierarchy(
             spec, expanded_paths, user_preferences, progress_callback
         )
@@ -2999,6 +3006,8 @@ class ScalablePivotController(PivotController):
     def run_pruned_hierarchical_pivot(self, spec: PivotSpec, expanded_paths: List[List[str]],
                                       user_preferences: Optional[Dict[str, Any]] = None):
         """Run hierarchical pivot with pruning based on user preferences"""
+        from .core.authority.scope import require_proven_path
+        require_proven_path('pruned_hierarchical')  # REQ-SEC-005 deny-until-proven
         return self.progressive_hierarchy_loader.load_progressive_hierarchy(
             spec, expanded_paths, user_preferences
         )
@@ -3085,12 +3094,15 @@ class ScalablePivotController(PivotController):
         loop = asyncio.get_running_loop()
 
         # Compute total_rows before applying limit/offset
-        total = await loop.run_in_executor(None, table_expr.count().execute)
+        total = await run_in_executor_scoped(loop, None, table_expr.count().execute)
 
         query = table_expr.limit(limit, offset=offset)
-        result = await loop.run_in_executor(None, query.execute)
+        result = await run_in_executor_scoped(loop, None, query.execute)
 
-        return {"rows": result.to_dict('records'), "total_rows": int(total)}
+        # SQL NULL must stay null on the wire: pandas represents it as NaN,
+        # which is neither correct nor JSON-serializable (REQ-NULL-001).
+        records = result.astype(object).where(result.notna(), None).to_dict('records')
+        return {"rows": records, "total_rows": int(total)}
 
     def _get_table_columns(self, table_name: str) -> List[str]:
         if hasattr(self.planner, "get_table_schema_and_columns"):
@@ -3538,6 +3550,6 @@ class ScalablePivotController(PivotController):
         def execute_update():
             self._execute_parameterized_mutation(sql, [value, row_id])
 
-        await loop.run_in_executor(None, execute_update)
+        await run_in_executor_scoped(loop, None, execute_update)
         self._clear_mutation_caches(table_name)
         return {"status": "success", "updated": 1}
