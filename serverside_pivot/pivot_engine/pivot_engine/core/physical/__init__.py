@@ -19,8 +19,16 @@ STRATEGIES: Dict[str, Callable[[LogicalPlan, Any], Any]] = {
 }
 
 
+# Measured with scripts/benchmark_core_strategies.py (DuckDB 1.5, 10M rows):
+# leaf_partials is 1.13-1.27x faster while the partial grain stays well below
+# the row count, and ~4x slower once the grain is near-unique (6 dims fully
+# expanded).  Without cardinality statistics the grain depth is the proxy.
+MAX_PARTIAL_GRAIN = 4
+
+
 def choose(plan: LogicalPlan, schema: Any) -> str:
-    """Rule-based choice; defaults are set from benchmarks (scripts/benchmark_core_strategies.py)."""
-    if len(plan.rows) >= 2 and leaf_partials.supports(plan, schema):
+    """Rule-based physical choice (see the benchmark note above)."""
+    grain = len(plan.levels[-1].keys) if plan.levels else 0
+    if 1 <= grain <= MAX_PARTIAL_GRAIN and leaf_partials.supports(plan, schema):
         return "leaf_partials"
     return "union_all"

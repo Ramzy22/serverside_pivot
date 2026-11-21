@@ -28,6 +28,6 @@ Status values:
 | F-ROLLUP-CRASH | ROLLUP / CUBE crash (schema mismatch in the union) | — | `test_legacy_findings.py::test_rollup_and_cube_execute` | legacy |
 | F-PIVOT-MEDIAN | Pivot drops non-additive measures (median) | AGG-001 | `test_legacy_findings.py::test_pivot_keeps_every_measure` | legacy |
 | F-PIVOT-DELIM | Pivot column keys joined with `|` collide | ID-001 | `test_legacy_findings.py::test_pivot_column_keys_with_delimiters_do_not_collide` | legacy (row identity on the runtime path passes: vector `delimiter-values-do-not-collide`) |
-| F-CACHES | ~20 ad-hoc caches, some keyed by `id()` | SEC-004 | `test_tenant_isolation_matrix.py::test_cache_is_not_shared_across_tenants`; one manager in M1 `core/cache.py` | partially fixed (S0: hierarchy cache keyed by grant), pending M1 |
-| F-SILENT | Failures returned as empty tables or NULL columns | AGG-001 | M1 `core/exec` typed errors | pending M1 |
+| F-CACHES | ~20 ad-hoc caches, some keyed by `id()` | SEC-004 | `test_tenant_isolation_matrix.py::test_cache_is_not_shared_across_tenants`, `tests/core/test_cache.py` | core manager done (M1: keys include the scope fingerprint and revision); legacy caches are removed in M4 |
+| F-SILENT | Failures returned as empty tables or NULL columns | AGG-001 | `tests/core/test_core_semantics.py::test_invalid_queries_are_typed_errors`, `tests/core/test_spec.py` | fixed in the core (M1); legacy paths are removed in M4 |
 | F-FRONT-RACE | Out-of-order responses, column-window stamping, duplicate identities in the frontend | PAGE-004, ID-001 | M3 tests | pending M3 |

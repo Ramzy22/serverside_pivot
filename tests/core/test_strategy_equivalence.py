@@ -65,3 +65,22 @@ def test_decimal_average_is_not_claimed_by_leaf_partials():
     con = _con(pa.table({"r": ["A"], "c": ["x"], "v": pa.array([1], pa.decimal128(10, 2))}))
     q = PivotQuery(dataset="t", rows=("r", "c"), measures=(MeasureRef("m", "avg", "v"),))
     assert not leaf_partials.supports(logical_plan(q), con.table("t").schema())
+
+
+def test_chooser_follows_the_measured_rule():
+    from pivot_engine.core.physical import MAX_PARTIAL_GRAIN
+
+    cols = {f"d{i}": ["x"] for i in range(MAX_PARTIAL_GRAIN + 1)}
+    con = _con(pa.table({**cols, "v": [1]}))
+    schema = con.table("t").schema()
+
+    def chosen(depth, agg="sum", expanded=None):
+        q = PivotQuery(dataset="t", rows=tuple(f"d{i}" for i in range(depth)),
+                       measures=(MeasureRef("m", agg, "v"),), expanded=expanded)
+        return choose(logical_plan(q), schema)
+
+    assert chosen(2) == "leaf_partials"
+    assert chosen(MAX_PARTIAL_GRAIN) == "leaf_partials"
+    assert chosen(MAX_PARTIAL_GRAIN + 1) == "union_all"  # near-unique grain
+    assert chosen(MAX_PARTIAL_GRAIN + 1, expanded=frozenset({("x",)})) == "leaf_partials"  # visible grain is 2
+    assert chosen(2, agg="median") == "union_all"

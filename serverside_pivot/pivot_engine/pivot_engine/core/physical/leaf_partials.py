@@ -66,11 +66,23 @@ def _merge(leaf: Any, plan: LogicalPlan) -> Dict[str, Any]:
 
 
 def _from_leaf_partials(source: Any, plan: LogicalPlan) -> LevelAggregate:
-    leaf = source.group_by(list(plan.rows)).aggregate(**_partials(source, plan))
+    grain = list(plan.levels[-1].keys)  # deepest level that can show a node
+    if not grain:
+        return _direct_grand_total(source, plan)
+    leaf = source.group_by(grain).aggregate(**_partials(source, plan))
 
     def aggregate(keys: Sequence[str]) -> Any:
         merged = _merge(leaf, plan)
         return leaf.group_by(list(keys)).aggregate(**merged) if keys else leaf.aggregate(**merged)
+
+    return aggregate
+
+
+def _direct_grand_total(source: Any, plan: LogicalPlan) -> LevelAggregate:
+    leaf = source.aggregate(**_partials(source, plan))
+
+    def aggregate(keys: Sequence[str]) -> Any:
+        return leaf.aggregate(**_merge(leaf, plan))
 
     return aggregate
 

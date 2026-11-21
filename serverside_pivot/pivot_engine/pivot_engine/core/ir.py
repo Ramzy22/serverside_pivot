@@ -21,6 +21,7 @@ __all__ = [
     "SortKey",
     "Window",
     "PREDICATE_OPS",
+    "from_wire",
 ]
 
 PREDICATE_OPS = frozenset({"=", "!=", ">", ">=", "<", "<=", "in", "not_in", "is_null", "is_not_null"})
@@ -142,3 +143,33 @@ class PivotQuery:
                 if not isinstance(path, tuple) or not 1 <= len(path) < max(1, len(self.rows)):
                     raise IRValidationError(f"expanded path {path!r} is not a parent path.")
         return self
+
+
+def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> PivotQuery:
+    """Build a query from its wire form (``core/spec/semantic-ir.schema.json``).
+
+    Structural errors are :class:`IRValidationError`; semantic validation
+    against the dataset schema happens in :meth:`PivotQuery.validate`.
+    """
+    try:
+        expanded = obj.get("expanded")
+        window = obj.get("window") or {}
+        return PivotQuery(
+            dataset=str(dataset or obj["dataset"]),
+            rows=tuple(obj["rows"]),
+            measures=tuple(MeasureRef(m["alias"], m["agg"], m.get("field")) for m in obj["measures"]),
+            filters=tuple(Predicate(f["field"], f["op"], _freeze(f.get("value"))) for f in obj.get("filters", ())),
+            measure_filters=tuple(
+                MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
+            ),
+            sort=tuple(SortKey(s["field"], bool(s.get("desc", False))) for s in obj.get("sort", ())),
+            totals=obj.get("totals", "visible"),
+            expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
+            window=Window(int(window.get("offset", 0)), window.get("limit")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IRValidationError(f"malformed query: {exc!r}") from None
+
+
+def _freeze(value: Any) -> Any:
+    return tuple(value) if isinstance(value, list) else value
