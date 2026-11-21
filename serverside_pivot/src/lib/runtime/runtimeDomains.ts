@@ -1,6 +1,7 @@
 import type React from 'react';
 
 import type { JsonObject, RuntimeCommandKind, RuntimeRequestV1, RuntimeResponseV1 } from './runtimeContract';
+import type { ViewportSubscriptionStore } from './useViewportSubscriptionStore';
 
 /** Public Dash props accepted by the runtime root. */
 export interface PivotRuntimeProps {
@@ -743,7 +744,7 @@ export interface WorkspacePresentation {
     readonly virtualRows: WorkspaceCollection;
     readonly visibleLeafColumns: WorkspaceCollection;
     readonly zoomLevel: number;
-    readonly liveSubscriptionStore?: unknown;
+    readonly liveSubscriptionStore?: ViewportSubscriptionStore | null;
 }
 
 /** Narrow workspace-to-transport port for server chart request scheduling. */
