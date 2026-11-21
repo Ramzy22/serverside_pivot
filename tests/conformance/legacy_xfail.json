@@ -1,0 +1,16 @@
+{
+  "_comment": "Known legacy-engine divergences from docs/semantics/SEMANTICS.md. Each entry maps to an audit finding and must flip to passing when the core replaces the engine (M2). Remove an entry when it passes.",
+  "test_engine_matches_oracle_hierarchy": {
+    "findings": [
+      "F-NULL-GT: NULL dimension rendered as Grand Total (REQ-NULL-002)",
+      "F-TOT-FALLBACK: fallback hierarchy sums avg/max/distinct (REQ-TOT-003)",
+      "F-CASE: grouping/filters case-folded (REQ-BACK-002)",
+      "F-NULL-LEAF: a NULL member at the leaf level is dropped (minimal: [{r:'A', c:null}]) (REQ-NULL-002)"
+    ],
+    "requirements": [
+      "REQ-NULL-002",
+      "REQ-TOT-003",
+      "REQ-BACK-001"
+    ]
+  }
+}
