@@ -204,6 +204,7 @@ def tree(
     for part in parts[1:]:
         union = union.union(part, distinct=False)
     union, ancestor = _with_ancestor_measures(union, parts, plan)
+    union, member_key = _with_member_keys(union, source, plan)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
         below = (union[DEPTH] >= i).cast("int8")  # 1 for the descendants of a level-i group
@@ -213,6 +214,8 @@ def tree(
         for field, desc, is_measure, absolute in plan.sort:
             if is_measure:
                 value = union[ancestor[(i, field)]]
+            elif field == k and k in member_key:  # REQ-SORT-003: the member's key; ties by member value
+                value = union[member_key[k]]
             elif field == k:
                 value, dimension_sorted = union[k], True
             else:
@@ -298,6 +301,21 @@ def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> 
         joined = union.left_join(ancestors, predicates)
         union = joined.select(*[joined[c] for c in union.columns],
                               *[joined[names[(i, a)]] for a in dict.fromkeys(measures)])
+    return union, names
+
+
+def _with_member_keys(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[str, str]]:
+    """Attach MIN(key) over each node's level-i ancestor records, for dimensions ordered by a key (REQ-SORT-003)."""
+    names: Dict[str, str] = {}
+    for dim, by in plan.member_keys:
+        i = plan.rows.index(dim) + 1
+        keys = list(plan.rows[:i])
+        name = names[dim] = f"__key{i}"
+        lookup = source.group_by(keys).aggregate(**{name: source[by].min()})
+        lookup = lookup.select(**{f"__kanc{i}_{j}": lookup[k] for j, k in enumerate(keys)}, **{name: lookup[name]})
+        predicates = [union[k].identical_to(lookup[f"__kanc{i}_{j}"]) for j, k in enumerate(keys)]
+        joined = union.left_join(lookup, predicates)
+        union = joined.select(*[joined[c] for c in union.columns], joined[name])
     return union, names
 
 

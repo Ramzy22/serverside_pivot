@@ -119,6 +119,10 @@
           },
           "absolute": {
             "type": "boolean"
+          },
+          "by": {
+            "description": "REQ-SORT-003: order a row dimension's members by MIN of this column over each member's records.",
+            "type": "string"
           }
         }
       }

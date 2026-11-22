@@ -338,6 +338,21 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         ctes.push(`__sorted AS (SELECT u.*, ${extra.join(', ')} FROM __tree u ${joins.join(' ')})`);
         tree = '__sorted';
     }
+    // REQ-SORT-003: a dimension ordered by a member key gets MIN(key) over each level-i ancestor's records.
+    const memberKeys = sort.filter((s) => rows.includes(s.field) && typeof s.by === 'string');
+    if (memberKeys.length) {
+        const joins: string[] = [];
+        const extra: string[] = [];
+        memberKeys.forEach((s) => {
+            const i = rows.indexOf(s.field) + 1;
+            const keys = rows.slice(0, i).map(quoteIdent).join(', ');
+            const name = quoteIdent(`__key${i}`);
+            extra.push(`k${i}.${name} AS ${name}`);
+            joins.push(`LEFT JOIN (SELECT ${keys}, MIN(${quoteIdent(s.by as string)}) AS ${name} FROM ${source} GROUP BY ${keys}) k${i} ON ${nullSafeJoin('t', `k${i}`, rows.slice(0, i))}`);
+        });
+        ctes.push(`__keyed AS (SELECT t.*, ${extra.join(', ')} FROM ${tree} t ${joins.join(' ')})`);
+        tree = '__keyed';
+    }
     const order: string[] = [];
     rows.forEach((k, idx) => {
         const i = idx + 1;
@@ -347,6 +362,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         sort.forEach((s) => {
             let expr: string;
             if (!rows.includes(s.field)) expr = quoteIdent(`__sort${i}_${s.field}`);
+            else if (s.field === k && typeof s.by === 'string') expr = quoteIdent(`__key${i}`); // ties: member value
             else if (s.field === k) { expr = quoteIdent(k); dimensionSorted = true; } else return;
             if (s.absolute) expr = `abs(${expr})`;
             order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);

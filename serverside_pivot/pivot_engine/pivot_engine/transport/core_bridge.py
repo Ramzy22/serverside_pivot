@@ -339,7 +339,16 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         sort_type = str(s.get("sortType") or "").strip().lower()
         absolute = bool(s.get("absoluteSort")) or sort_type in {"absolute", "abs", "absolute_value", "absolute-value"}
         semantic = s.get("semanticType") or s.get("semantic") or s.get("sortSemantic")
-        if s.get("sortKeyField"):
+        key_field = s.get("sortKeyField")
+        if key_field and key_field in families and s.get("field") in rows:
+            # REQ-SORT-003: members ordered by MIN(key) (legacy: a hidden sort key per member).
+            if absolute or semantic or (sort_type and sort_type not in {"alphanumeric", "basic", "default", "natural"}):
+                reasons.append("custom member order with a sort type")
+            elif str(s.get("nulls") or "last").lower() != "last":
+                reasons.append(f"nulls {s.get('nulls')!r}")
+            else:
+                sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", False, str(key_field)))
+        elif key_field and key_field in families:
             reasons.append("custom member order")
         elif semantic:
             reasons.append(f"semantic sort {semantic!r}")

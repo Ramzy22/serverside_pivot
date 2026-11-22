@@ -38,6 +38,7 @@ class LogicalPlan:
     values_from: str  # "E" (visible) or "E0" (all_data)
     descending: Dict[str, bool]  # row dimension -> descending (its own level)
     sort: Tuple[Tuple[str, bool, bool, bool], ...] = ()  # (field, descending, is_measure, absolute), in precedence
+    member_keys: Tuple[Tuple[str, str], ...] = ()  # (row dimension, key column): REQ-SORT-003
 
     @property
     def rows(self) -> Tuple[str, ...]:
@@ -73,4 +74,5 @@ def plan(query: PivotQuery) -> LogicalPlan:
         values_from="E" if query.totals == "visible" else "E0",
         descending={s.field: s.desc for s in query.sort if s.field in query.rows},
         sort=tuple((s.field, s.desc, s.field not in query.rows, s.absolute) for s in query.sort),
+        member_keys=tuple((s.field, s.by) for s in query.sort if s.by is not None),
     )

@@ -77,7 +77,7 @@ def _oracle(records, query: PivotQuery):
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute) for s in query.sort],
+        sort=[(s.field, s.desc, s.absolute, s.by) for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
@@ -142,7 +142,10 @@ def queries(draw):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
                     SortKey(alias, desc=draw(st.booleans()),
-                            absolute=agg not in {"min", "max"} and draw(st.booleans()))]
+                            absolute=agg not in {"min", "max"} and draw(st.booleans())),
+                    # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
+                    SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
+                            by=draw(st.sampled_from(["w", "k"])))]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):

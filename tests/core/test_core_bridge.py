@@ -307,3 +307,46 @@ def test_tabular_subtotals_post_order_matches_legacy(totals, window):
     core = run("on")
     assert core_shadow.STATS["core_served_hierarchy"] > served, "the core must serve the tabular subtotal layout"
     assert core == run("off")
+
+
+@pytest.mark.parametrize("order", ["asc", "desc"])
+def test_member_key_sort_is_core_served_and_matches_legacy(order):
+    """REQ-SORT-003: a sortKeyField orders members by MIN(key) (tenor labels by days), served by the core."""
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    pillars = [("1D", 1), ("1M", 30), ("10M", 304), ("1Y", 365), ("10Y", 3650), ("100Y", 36500)]
+
+    def run(mode):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+                "pillar": [p for p, _ in pillars] * 2, "__sortkey__pillar": [d for _, d in pillars] * 2,
+                "desk": ["X"] * len(pillars) + ["Y"] * len(pillars), "pv": [float(i) for i in range(2 * len(pillars))]}))
+            request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA, table="t",
+                columns=[{"id": "desk"}, {"id": "pillar"}, {"id": "pv_sum", "aggregationField": "pv", "aggregationFn": "sum"}],
+                filters={}, sorting=[{"id": "pillar", "desc": order == "desc", "sortKeyField": "__sortkey__pillar"}],
+                grouping=["desk", "pillar"], aggregations=[], pagination={"pageIndex": 0, "pageSize": 100}, totals=False)
+            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["X"], ["Y"]]))
+            return [(r.get("_path"), r.get("pv_sum")) for r in response.data]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = run("on")
+    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    labels = [path.split("|||")[1] for path, _ in core if path and "|||" in path and path.startswith("X")]
+    expected = [p for p, _ in pillars]
+    assert labels == (expected if order == "asc" else expected[::-1])
+    assert core == run("off")

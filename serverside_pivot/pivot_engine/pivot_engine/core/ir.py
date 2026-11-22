@@ -93,12 +93,14 @@ class SortKey:
     ``field`` is a row dimension (orders its own level by value) or a measure
     alias (orders siblings at every level by the node's value).  NULLS LAST in
     both directions (REQ-BACK-001).  ``absolute`` orders a numeric value by its
-    magnitude (REQ-SORT-002).
+    magnitude (REQ-SORT-002).  ``by`` (dimension entries only) orders the
+    level's members by MIN(by) over each member's records (REQ-SORT-003).
     """
 
     field: str
     desc: bool = False
     absolute: bool = False
+    by: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +252,13 @@ class PivotQuery:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
             if s.absolute and not _numeric_sort_target(s.field, self.rows, self.measures, schema):
                 raise IRValidationError(f"absolute sort needs a numeric value, not {s.field!r}.")
+            if s.by is not None:
+                if s.field not in self.rows:
+                    raise IRValidationError(f"a member key ('by') orders a row dimension, not {s.field!r}.")
+                if s.by not in schema:
+                    raise IRValidationError(f"unknown member key column {s.by!r}.")
+                if s.absolute:
+                    raise IRValidationError("a member key sort cannot be absolute.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
         if self.subtotals not in {"before", "after"}:
@@ -337,7 +346,7 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             measure_filters=tuple(
                 MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
             ),
-            sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)))
+            sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)), s.get("by"))
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
@@ -375,7 +384,8 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         "filters": [filt(f) for f in query.filters],
         "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
                            for f in query.measure_filters],
-        "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute} for k in query.sort],
+        "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute, **({"by": k.by} if k.by else {})}
+                 for k in query.sort],
         "totals": query.totals,
         "window": {"offset": query.window.offset, "limit": query.window.limit},
         "columns": list(query.columns),

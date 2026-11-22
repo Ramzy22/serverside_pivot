@@ -43,6 +43,10 @@ export interface PivotQuery {
     field: string;
     desc?: boolean;
     absolute?: boolean;
+    /**
+     * REQ-SORT-003: order a row dimension's members by MIN of this column over each member's records.
+     */
+    by?: string;
   }[];
   totals?: "visible" | "all_data";
   /**

@@ -173,7 +173,7 @@ class Query:
     subtotals: str = "before"  # REQ-LAYOUT-001: group row before (pre-order) or after (post-order) its descendants
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
     sort_desc: Mapping[str, bool] = field(default_factory=dict)  # shorthand: dimension -> descending
-    sort: Sequence[Tuple[Any, ...]] = ()  # REQ-SORT-001/002: (field, descending[, absolute]), in precedence
+    sort: Sequence[Tuple[Any, ...]] = ()  # REQ-SORT-001/002/003: (field, descending[, absolute[, by]]), in precedence
     columns: Sequence[str] = ()  # REQ-PIV-001
     column_members: Sequence[Tuple[Any, ...]] = ()
     derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
@@ -247,18 +247,21 @@ def _nulls_last(a: Any, b: Any, desc: bool) -> int:
 
 
 def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ...]],
-                    values: Mapping[Tuple[Any, ...], Mapping[str, Any]]) -> List[Tuple[Any, ...]]:
+                    values: Mapping[Tuple[Any, ...], Mapping[str, Any]],
+                    member_keys: Optional[Mapping[str, Mapping[Tuple[Any, ...], Any]]] = None) -> List[Tuple[Any, ...]]:
     dim = query.rows[depth - 1]
-    entries = [(e[0], e[1], len(e) > 2 and bool(e[2])) for e in query.sort] or [
-        (f, d, False) for f, d in query.sort_desc.items()]
+    entries = [(e[0], e[1], len(e) > 2 and bool(e[2]), e[3] if len(e) > 3 else None) for e in query.sort] or [
+        (f, d, False, None) for f, d in query.sort_desc.items()]
     aliases = {m.alias for m in query.measures}
 
     def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
         dim_sorted = False
-        for f, desc, absolute in entries:
+        for f, desc, absolute, by in entries:
             mag = (lambda v: None if v is None else abs(v)) if absolute else (lambda v: v)
             if f in aliases:
                 c = _nulls_last(mag(values[x][f]), mag(values[y][f]), desc)
+            elif f == dim and by is not None:  # REQ-SORT-003: the member's key, then the member value
+                c = _nulls_last((member_keys or {})[by][x], (member_keys or {})[by][y], desc)
             elif f == dim:
                 dim_sorted = True
                 c = _nulls_last(mag(x[-1]), mag(y[-1]), desc)
@@ -271,6 +274,11 @@ def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ..
     import functools
 
     return sorted(candidates, key=functools.cmp_to_key(compare))
+
+
+def _min_or_none(values: Sequence[Any]) -> Any:
+    present = [v for v in values if v is not None]
+    return min(present) if present else None
 
 
 def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
@@ -290,7 +298,13 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
         candidates = {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix}
         values = {c: _measures(query, [r for r in totals_source if _key(r, query.rows, depth) == c])
                   for c in candidates}
-        children = _order_siblings(query, depth, candidates, values)
+        member_keys = {}
+        for entry in query.sort:
+            by = entry[3] if len(entry) > 3 else None
+            if entry[0] == query.rows[depth - 1] and by is not None:
+                member_keys[by] = {c: _min_or_none([r.get(by) for r in totals_source if _key(r, query.rows, depth) == c])
+                                   for c in candidates}
+        children = _order_siblings(query, depth, candidates, values, member_keys)
         for child in children:
             if not post_order:
                 out.append(Row(child, values[child]))
