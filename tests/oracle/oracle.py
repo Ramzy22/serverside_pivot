@@ -172,7 +172,7 @@ class Query:
     totals: str = "visible"  # REQ-TOT-003/004
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
     sort_desc: Mapping[str, bool] = field(default_factory=dict)  # shorthand: dimension -> descending
-    sort: Sequence[Tuple[str, bool]] = ()  # REQ-SORT-001: (dimension or measure alias, descending), in precedence
+    sort: Sequence[Tuple[Any, ...]] = ()  # REQ-SORT-001/002: (field, descending[, absolute]), in precedence
     columns: Sequence[str] = ()  # REQ-PIV-001
     column_members: Sequence[Tuple[Any, ...]] = ()
     derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
@@ -248,17 +248,19 @@ def _nulls_last(a: Any, b: Any, desc: bool) -> int:
 def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ...]],
                     values: Mapping[Tuple[Any, ...], Mapping[str, Any]]) -> List[Tuple[Any, ...]]:
     dim = query.rows[depth - 1]
-    entries = list(query.sort) or [(f, d) for f, d in query.sort_desc.items()]
+    entries = [(e[0], e[1], len(e) > 2 and bool(e[2])) for e in query.sort] or [
+        (f, d, False) for f, d in query.sort_desc.items()]
     aliases = {m.alias for m in query.measures}
 
     def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
         dim_sorted = False
-        for f, desc in entries:
+        for f, desc, absolute in entries:
+            mag = (lambda v: None if v is None else abs(v)) if absolute else (lambda v: v)
             if f in aliases:
-                c = _nulls_last(values[x][f], values[y][f], desc)
+                c = _nulls_last(mag(values[x][f]), mag(values[y][f]), desc)
             elif f == dim:
                 dim_sorted = True
-                c = _nulls_last(x[-1], y[-1], desc)
+                c = _nulls_last(mag(x[-1]), mag(y[-1]), desc)
             else:
                 continue
             if c:

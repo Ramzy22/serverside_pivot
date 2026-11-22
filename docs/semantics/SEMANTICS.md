@@ -40,6 +40,7 @@ Definitions, for a request over dataset `D`:
 | REQ-TOT-005 | Expansion state never changes eligibility or totals. It only changes which rows are materialized. |
 | REQ-TOT-006 | The grand total is the same on every page, on a cache hit, and with or without measure filters. |
 | REQ-TOT-007 | A measure filter that names no level (the UI's column filter on a measure) applies at the deepest row level; parents and the grand total are then visible totals (REQ-TOT-003). |
+| REQ-TOT-008 | When totals are enabled, the grand total row always exists, even over an empty E (its measures follow the registry's empty-input rules), so `total_rows` is at least 1. |
 
 ## 3. Aggregation (REQ-AGG)
 
@@ -58,12 +59,19 @@ Definitions, for a request over dataset `D`:
 | Id | Requirement |
 |---|---|
 | REQ-SORT-001 | Siblings are ordered by the sort entries in precedence order. A dimension entry orders only its own level by member value. A measure entry orders the siblings at every level by the node's own value. Ties, and levels without a dimension entry, fall back to the member value ascending. NULL sorts last in both directions, for members and for measure values. A parent always precedes its children. |
+| REQ-SORT-002 | An `absolute` sort entry orders a numeric dimension or measure by its magnitude, with the same direction and NULLS LAST rules. It is invalid on non-numeric values. |
 
 ## 3b. Column pivot (REQ-PIV)
 
 | Id | Requirement |
 |---|---|
 | REQ-PIV-001 | A column pivot has explicit, ordered column members (the column window). Each cell is the measure over the node's records whose column values equal the member, with null-safe typed equality, so a NULL member is the NULL group. Every registry aggregation is supported in cells, including holistic ones. The node's own measure is the row total. The column catalog is the distinct members over E0, ordered by value with NULLS LAST. Two members whose display keys collide are an error, never a merge. |
+
+## 3c. Records (REQ-DET)
+
+| Id | Requirement |
+|---|---|
+| REQ-DET-001 | Drill-through and detail list the E0 records whose path dimensions equal the node's typed path, with null-safe equality, so a NULL member selects the NULL group. Pages follow a total order: the requested sort keys (NULLS LAST), then every column ascending, so pages concatenate to the full list without overlap. Search is a case-insensitive substring over every column's text form and never matches NULL. |
 
 ## 4. NULL and identity (REQ-NULL, REQ-ID)
 

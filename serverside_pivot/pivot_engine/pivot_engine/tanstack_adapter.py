@@ -1910,6 +1910,54 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
 
 
+    async def _drill_routed(
+        self,
+        spec: Any,
+        extra_filters: List[Dict[str, Any]],
+        drill_payload: Dict[str, Any],
+        *,
+        limit: int,
+        offset: int,
+        sort_col: Optional[str],
+        sort_dir: str,
+        text_filter: str,
+        legacy: Callable[[], Awaitable[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Drill-through from the core, legacy, or both (``PIVOT_CORE``, see runtime/core_shadow.py)."""
+        from .runtime import core_shadow
+        from .transport.core_bridge import CoreUnsupported, core_drill_through
+
+        mode = core_shadow.core_mode()
+        if mode == "off":
+            return await legacy()
+        resolve = getattr(self.controller, "resolve_table", None)
+        if resolve is None:
+            core_shadow.record_unsupported(["controller without resolve_table"])
+            return await legacy()
+        try:
+            core_result = await run_in_executor_scoped(
+                asyncio.get_running_loop(),
+                None,
+                lambda: core_drill_through(
+                    resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
+                    sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
+                ),
+            )
+        except CoreUnsupported as exc:
+            core_shadow.record_unsupported(exc.reasons)
+            return await legacy()
+        if mode == "on":
+            return core_result
+        legacy_result = await legacy()
+        try:
+            core_shadow.record_drill_shadow(
+                {"table": getattr(spec, "table", None), "sorted": bool(sort_col), "search": bool(text_filter)},
+                legacy_result, core_result,
+            )
+        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
+            _adapter_logger.warning("core drill shadow comparison failed", exc_info=True)
+        return legacy_result
+
     async def handle_drill_through(
         self, request: TanStackRequest, drill_payload: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -1921,6 +1969,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         # 2. Extract drill filters from payload
         drill_filters_raw = drill_payload.get("filters", {})
+        payload_filters_raw = dict(drill_filters_raw or {})
         row_path = drill_payload.get("row_path") or drill_payload.get("rowPath") or ""
         row_fields = (
             drill_payload.get("row_fields") or drill_payload.get("pathFields") or []
@@ -1941,30 +1990,23 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         # Convert frontend filter format to pivot engine format
         # This mirrors logic in convert_tanstack_request_to_pivot_spec
-        drill_filters = []
-        for field_name, filter_obj in drill_filters_raw.items():
-            if isinstance(filter_obj, dict):
-                if "conditions" in filter_obj:
-                    for cond in filter_obj["conditions"]:
-                        drill_filters.append(
-                            {
-                                "field": field_name,
-                                "op": self._map_tanstack_operator(
-                                    cond.get("type", "eq")
-                                ),
-                                "value": cond.get("value"),
-                            }
-                        )
-                else:
-                    drill_filters.append(
+        def _convert_drill_filters(raw_filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+            converted: List[Dict[str, Any]] = []
+            for field_name, filter_obj in (raw_filters or {}).items():
+                if not isinstance(filter_obj, dict):
+                    continue
+                conditions = filter_obj["conditions"] if "conditions" in filter_obj else [filter_obj]
+                for cond in conditions:
+                    converted.append(
                         {
                             "field": field_name,
-                            "op": self._map_tanstack_operator(
-                                filter_obj.get("type", "eq")
-                            ),
-                            "value": filter_obj.get("value"),
+                            "op": self._map_tanstack_operator(cond.get("type", "eq")),
+                            "value": cond.get("value"),
                         }
                     )
+            return converted
+
+        drill_filters = _convert_drill_filters(drill_filters_raw)
 
         page = max(int(drill_payload.get("page", 0) or 0), 0)
         page_size_raw = drill_payload.get(
@@ -1979,15 +2021,28 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if text_filter is None:
             text_filter = drill_payload.get("filterText", "")
 
-        # 3. Call controller (returns dict with 'rows' and 'total_rows')
-        result = await self.controller.get_drill_through_data(
+        # 3. Call the core and/or the controller (dict with 'rows' and 'total_rows')
+        async def _legacy_drill() -> Dict[str, Any]:
+            return await self.controller.get_drill_through_data(
+                spec,
+                drill_filters,
+                limit=page_size,
+                offset=page * page_size,
+                sort_col=sort_col,
+                sort_dir="desc" if sort_dir == "desc" else "asc",
+                text_filter=str(text_filter or ""),
+            )
+
+        result = await self._drill_routed(
             spec,
-            drill_filters,
+            _convert_drill_filters(payload_filters_raw),
+            drill_payload,
             limit=page_size,
             offset=page * page_size,
             sort_col=sort_col,
             sort_dir="desc" if sort_dir == "desc" else "asc",
             text_filter=str(text_filter or ""),
+            legacy=_legacy_drill,
         )
         return {
             "rows": result.get("rows", []),
@@ -2394,13 +2449,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_unsupported(["controller without resolve_table"])
             return await legacy()
         cache = self.__dict__.setdefault("_core_total_rows_cache", {})
+        capture: Optional[Dict[str, Any]] = {} if mode == "shadow" and core_shadow.capture_enabled() else None
         try:
             core_view = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
                 None,
                 lambda: core_hierarchy_view(
                     resolve, pivot_spec, target_paths, start_row, end_row,
-                    include_grand_total_row=include_grand_total, total_cache=cache,
+                    include_grand_total_row=include_grand_total, total_cache=cache, capture=capture,
                 ),
             )
         except CoreUnsupported as exc:
@@ -2412,7 +2468,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         try:
             summary = core_shadow.summarize_spec(pivot_spec)
             summary["has_case_variants"] = _has_case_variant_siblings(core_view.get("rows") or [])
-            core_shadow.record_shadow(summary, legacy_view, core_view)
+            summary.update(totals=bool(getattr(pivot_spec, "totals", False)), include_grand_total=include_grand_total,
+                           window=[start_row, end_row], expanded=repr(target_paths)[:200])
+            core_shadow.record_shadow(summary, legacy_view, core_view, capture)
         except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
             _adapter_logger.warning("core shadow comparison failed", exc_info=True)
         return legacy_view

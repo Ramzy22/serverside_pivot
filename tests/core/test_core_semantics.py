@@ -21,6 +21,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from pivot_engine.core.exec import execute
+from pivot_engine.core.ir import from_wire, to_wire
 from pivot_engine.core.ir import (
     DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
@@ -75,7 +76,7 @@ def _oracle(records, query: PivotQuery):
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc) for s in query.sort],
+        sort=[(s.field, s.desc, s.absolute) for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
@@ -139,7 +140,8 @@ def queries(draw):
     if len(rows) == 2 and draw(st.booleans()):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
-                    SortKey(alias, desc=draw(st.booleans()))]
+                    SortKey(alias, desc=draw(st.booleans()),
+                            absolute=agg not in {"min", "max"} and draw(st.booleans()))]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):
@@ -215,6 +217,12 @@ def test_core_equals_oracle(records, query):
     _assert_equal(_core(_con(_table(records)), query), _oracle(records, query))
 
 
+@settings(max_examples=examples(150), deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(query=queries())
+def test_wire_form_round_trips(query):
+    assert from_wire(to_wire(query)) == query
+
+
 @settings(max_examples=examples(40), deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(records=RECORDS, query=queries(), page=st.integers(1, 4))
 def test_core_pages_concatenate_to_unpaged(records, query, page):  # REQ-PAGE-001
@@ -277,3 +285,19 @@ def test_window_measures_rank_by_measure_within_the_parent():  # REQ-AGG-005, RE
     assert got[("A", "x")] == (3, 2, 1, 1.0, 1 / 39, 1.0)
     assert got[("A", "y")][:2] == (1, 1) and got[("A", "z")][:2] == (1, 1)  # ties share the rank
     assert got[("B", "y")] == (None, None, 20, 20.0, None, -1.0)  # NULL has no rank; zero count -> null_value
+
+
+def test_absolute_sort_orders_by_magnitude():  # REQ-SORT-002
+    records = [{"r": b, "c": "x", "v": v, "w": 1} for b, v in (("Low", 5), ("Large Loss", -100), ("Gain", 30),
+                                                                ("Mid Loss", -50))]
+    q = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("s", "sum", "v"),),
+                   sort=(SortKey("s", desc=True, absolute=True),))
+    assert [p for p, _ in _core(_con(_table(records)), q)] == [(), ("Large Loss",), ("Mid Loss",), ("Gain",), ("Low",)]
+    with pytest.raises(IRValidationError, match="absolute sort needs a numeric value, not 'r'."):
+        execute(PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("s", "sum", "v"),),
+                           sort=(SortKey("r", absolute=True),)), _con(_table(records)).table)
+
+
+def test_grand_total_exists_over_empty_data():  # REQ-TOT-008
+    q = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("s", "sum", "v"), MeasureRef("n", "count", "v")))
+    assert _core(_con(_table([])), q) == [((), {"s": None, "n": 0})]

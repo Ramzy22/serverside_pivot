@@ -8,7 +8,7 @@ fallback (REQ-AGG-001, F-SILENT).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, FrozenSet, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 from .registry import REGISTRY, UnknownAggregationError
 
@@ -92,11 +92,13 @@ class SortKey:
 
     ``field`` is a row dimension (orders its own level by value) or a measure
     alias (orders siblings at every level by the node's value).  NULLS LAST in
-    both directions (REQ-BACK-001).
+    both directions (REQ-BACK-001).  ``absolute`` orders a numeric value by its
+    magnitude (REQ-SORT-002).
     """
 
     field: str
     desc: bool = False
+    absolute: bool = False
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,8 @@ class PivotQuery:
         for s in self.sort:
             if s.field not in self.rows and s.field not in aliases:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
+            if s.absolute and not _numeric_sort_target(s.field, self.rows, self.measures, schema):
+                raise IRValidationError(f"absolute sort needs a numeric value, not {s.field!r}.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
         if self.window.offset < 0 or (self.window.limit is not None and self.window.limit < 0):
@@ -294,6 +298,17 @@ class PivotQuery:
         return self
 
 
+def _numeric_sort_target(name: str, rows: Tuple[str, ...], measures: Tuple[MeasureRef, ...],
+                         schema: Mapping[str, str]) -> bool:
+    numeric = {"integer", "floating", "decimal"}
+    if name in rows or name not in {m.alias for m in measures}:
+        return schema.get(name) in numeric
+    m = next(m for m in measures if m.alias == name)
+    if m.agg in {"min", "max"}:
+        return m.field is not None and schema.get(m.field) in numeric
+    return True  # every other aggregation yields a number
+
+
 def cell_name(member_index: int, alias: str) -> str:
     """Output column of one pivot cell; display names are an edge concern."""
     return f"__c{member_index}__{alias}"
@@ -318,7 +333,8 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             measure_filters=tuple(
                 MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
             ),
-            sort=tuple(SortKey(s["field"], bool(s.get("desc", False))) for s in obj.get("sort", ())),
+            sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)))
+                       for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
@@ -335,6 +351,39 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
         raise IRValidationError(f"malformed query: {exc!r}") from None
 
 
+def to_wire(query: PivotQuery) -> Dict[str, Any]:
+    """The wire form of a query (``core/spec/semantic-ir.schema.json``); ``from_wire`` inverts it."""
+
+    def thaw(value: Any) -> Any:
+        return list(value) if isinstance(value, (tuple, list, set, frozenset)) else value
+
+    def filt(f: Filter) -> Dict[str, Any]:
+        if isinstance(f, PredicateGroup):
+            return {"op": f.op, "conditions": [filt(i) for i in f.items]}
+        return {"field": f.field, "op": f.op, "value": thaw(f.value), "caseSensitive": f.case_sensitive}
+
+    out: Dict[str, Any] = {
+        "dataset": query.dataset,
+        "rows": list(query.rows),
+        "measures": [{"alias": m.alias, "agg": m.agg, "field": m.field, "weight": m.weight, "q": m.q}
+                     for m in query.measures],
+        "filters": [filt(f) for f in query.filters],
+        "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
+                           for f in query.measure_filters],
+        "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute} for k in query.sort],
+        "totals": query.totals,
+        "window": {"offset": query.window.offset, "limit": query.window.limit},
+        "columns": list(query.columns),
+        "columnMembers": [list(m) for m in query.column_members],
+        "derived": [{"alias": d.alias, "func": d.func, "of": d.of, "of2": d.of2, "desc": d.desc,
+                     "frame": None if d.frame is None else list(d.frame), "nullValue": d.null_value}
+                    for d in query.derived],
+    }
+    if query.expanded is not None:
+        out["expanded"] = sorted((list(p) for p in query.expanded), key=repr)
+    return out
+
+
 def _freeze(value: Any) -> Any:
     return tuple(value) if isinstance(value, list) else value
 
@@ -343,3 +392,40 @@ def _filter_from_wire(obj: Mapping[str, Any]) -> Filter:
     if "conditions" in obj:
         return PredicateGroup(str(obj["op"]).lower(), tuple(_filter_from_wire(c) for c in obj["conditions"]))
     return Predicate(obj["field"], obj["op"], _freeze(obj.get("value")), bool(obj.get("caseSensitive", True)))
+
+
+@dataclass(frozen=True)
+class DetailQuery:
+    """Records under one node (drill-through / detail), paged (REQ-DET-001)."""
+
+    dataset: str
+    filters: Tuple[Filter, ...] = ()
+    path_fields: Tuple[str, ...] = ()
+    path: Tuple[Any, ...] = ()  # typed values; None is the NULL member
+    search: Optional[str] = None  # case-insensitive substring over every column
+    sort: Tuple[SortKey, ...] = ()
+    window: Window = field(default_factory=Window)
+
+    def validate(self, schema: Mapping[str, str]) -> DetailQuery:
+        if not self.dataset:
+            raise IRValidationError("dataset is required.")
+        probe = PivotQuery(dataset=self.dataset, rows=(), measures=(MeasureRef("__n", "count", None),),
+                           filters=self.filters, window=self.window)
+        probe.validate(schema)  # filters and window share the pivot rules
+        if len(self.path) != len(self.path_fields):
+            raise IRValidationError(f"path {list(self.path)!r} does not match the fields {list(self.path_fields)}.")
+        if len(set(self.path_fields)) != len(self.path_fields):
+            raise IRValidationError("path fields must be unique.")
+        for name in self.path_fields:
+            if name not in schema:
+                raise IRValidationError(f"path field references unknown column {name!r}.")
+        if self.search is not None and not isinstance(self.search, str):
+            raise IRValidationError("search must be text.")
+        if len({s.field for s in self.sort}) != len(self.sort):
+            raise IRValidationError("each sort field may appear once.")
+        for key in self.sort:
+            if key.field not in schema:
+                raise IRValidationError(f"sort key references unknown column {key.field!r}.")
+            if key.absolute and schema[key.field] not in {"integer", "floating", "decimal"}:
+                raise IRValidationError(f"absolute sort needs a numeric value, not {key.field!r}.")
+        return self

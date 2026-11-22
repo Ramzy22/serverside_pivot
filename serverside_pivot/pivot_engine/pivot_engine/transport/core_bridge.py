@@ -20,16 +20,17 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
-from ..core.exec import column_members, execute, fingerprint
+from ..core.exec import column_members, detail, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    DerivedMeasure, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    DerivedMeasure, DetailQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
 from ..core.registry import type_family
 
-__all__ = ["CoreUnsupported", "core_hierarchy_view", "legacy_column_key", "spec_to_query"]
+__all__ = ["CoreUnsupported", "core_drill_through", "core_hierarchy_view", "legacy_column_key",
+           "spec_to_query"]
 
 GRAND_TOTAL_ID = "Grand Total"
 ALL_EXPANDED = "__ALL__"
@@ -225,6 +226,56 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
     return frozenset(out)
 
 
+# Every PivotSpec / Measure / PivotConfig field the bridge interprets, or that
+# has no effect on the hierarchy view's values (display-only).  Any other field
+# with a non-default value is rejected by name, so the mapping is complete by
+# construction rather than silently partial.
+_SPEC_FIELDS = {"table", "rows", "columns", "measures", "filters", "custom_dimensions", "sort", "offset", "cursor",
+                "totals", "having", "subtotals", "grouping_config", "pivot_config", "measure_axis", "drill_paths",
+                "group_allow_unbalanced",
+                "limit",  # the hierarchy view is windowed by start/end rows
+                "column_sort_options"}  # orders the column catalog only; cells are keyed by member
+_MEASURE_FIELDS = {"field", "agg", "alias", "weighted_field", "expression", "percentile", "separator",
+                   "null_handling", "filter_condition", "ratio_numerator", "ratio_denominator", "ratio_null_value",
+                   "window_func", "window_group_by", "window_order_by", "window_frame_start", "window_frame_end",
+                   "ratio_format"}  # display formatting only
+_PIVOT_CONFIG_FIELDS = {"enabled", "top_n", "order_by_measure", "include_totals_column", "column_cursor",
+                        "materialized_column_values",
+                        "null_column_label"}  # display only; cell keys use the legacy key
+_SORT_KEYS = {"field", "order", "sortType", "absoluteSort", "nulls", "semanticType", "semantic", "sortSemantic",
+              "sortKeyField"}
+_FILTER_KEYS = {"field", "op", "value", "caseSensitive", "conditions"}
+
+
+def _uninterpreted(obj: Any, known: FrozenSet[str], label: str, reasons: List[str]) -> None:
+    import dataclasses
+
+    if obj is None or not dataclasses.is_dataclass(obj):
+        return
+    for f in dataclasses.fields(obj):
+        if f.name in known:
+            continue
+        if f.default is not dataclasses.MISSING:
+            default: Any = f.default
+        elif f.default_factory is not dataclasses.MISSING:
+            default = f.default_factory()
+        else:
+            default = object()
+        if getattr(obj, f.name) != default:
+            reasons.append(f"{label} field {f.name!r}")
+
+
+def _unknown_keys(f: Any, reasons: List[str]) -> None:
+    if not isinstance(f, Mapping):
+        reasons.append(f"filter {f!r}")
+        return
+    extra = set(f) - _FILTER_KEYS
+    if extra:
+        reasons.append(f"filter keys {sorted(extra)}")
+    for c in f.get("conditions") or []:
+        _unknown_keys(c, reasons)
+
+
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
                   end_row: Optional[int] = None) -> PivotQuery:
     """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
@@ -235,6 +286,16 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     """
     reasons: List[str] = []
     families = {name: type_family(dtype) for name, dtype in schema.items()}
+    _uninterpreted(spec, frozenset(_SPEC_FIELDS), "spec", reasons)
+    _uninterpreted(getattr(spec, "pivot_config", None), frozenset(_PIVOT_CONFIG_FIELDS), "pivot_config", reasons)
+    for m in spec.measures or []:
+        _uninterpreted(m, frozenset(_MEASURE_FIELDS), "measure", reasons)
+    for f in spec.filters or []:
+        _unknown_keys(f, reasons)
+    for s in (spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])):
+        extra = set(s) - _SORT_KEYS if isinstance(s, Mapping) else {"<not a mapping>"}
+        if extra:
+            reasons.append(f"sort keys {sorted(extra)}")
     for attr, label in (("custom_dimensions", "custom dimensions"),
                         ("having", "having"), ("subtotals", "explicit subtotals"),
                         ("drill_paths", "drill paths"), ("cursor", "keyset cursor"),
@@ -271,10 +332,19 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     sort: List[SortKey] = []
     raw_sort = spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])
     for s in raw_sort:
+        sort_type = str(s.get("sortType") or "").strip().lower()
+        absolute = bool(s.get("absoluteSort")) or sort_type in {"absolute", "abs", "absolute_value", "absolute-value"}
+        semantic = s.get("semanticType") or s.get("semantic") or s.get("sortSemantic")
         if s.get("sortKeyField"):
             reasons.append("custom member order")
+        elif semantic:
+            reasons.append(f"semantic sort {semantic!r}")
+        elif str(s.get("nulls") or "last").lower() != "last":
+            reasons.append(f"nulls {s.get('nulls')!r}")
+        elif sort_type and not absolute and sort_type not in {"alphanumeric", "basic", "default", "natural"}:
+            reasons.append(f"sort type {sort_type!r}")
         elif s.get("field") in rows or (s.get("field") in aliases and not columns):
-            sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc"))
+            sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", absolute))
         elif s.get("field") in aliases:
             reasons.append("sort by measure with column pivot")
         else:
@@ -376,8 +446,12 @@ def core_hierarchy_view(
     *,
     include_grand_total_row: bool = False,
     total_cache: Optional[Dict[str, int]] = None,
+    capture: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The ``run_hierarchy_view`` contract, answered by the core.
+
+    ``capture`` (shadow referee, opt-in) receives the core query and, for
+    datasets of at most ``CAPTURE_MAX_ROWS`` records, the scoped data.
 
     The flattened list is the visible nodes in tree order followed, when
     ``spec.totals``, by the grand total.  ``rows`` is its inclusive
@@ -388,6 +462,8 @@ def core_hierarchy_view(
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     query, keys = _resolve_members(query, spec, resolver)
+    if capture is not None:
+        _capture(capture, query, relation)
     totals = bool(getattr(spec, "totals", False))
     totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
 
@@ -395,13 +471,18 @@ def core_hierarchy_view(
         return _legacy_row(record, query, keys, totals_column)
 
     nodes = _visible_node_count(query, relation, total_cache) - 1
-    rows = [legacy(r) for r in execute(query, resolver).records()]
     grand_total = None
-    if totals and (include_grand_total_row or int(start_row) <= nodes <= int(end_row)):
-        gt = execute(replace(query, window=Window(0, 1)), resolver).records()
-        grand_total = legacy(gt[0])
-        if int(start_row) <= nodes <= int(end_row):
-            rows.append(dict(grand_total))
+    if totals and int(start_row) == 0:  # the core orders the grand total first: one query serves both
+        limit = None if query.window.limit is None else query.window.limit + 1
+        records = execute(replace(query, window=Window(0, limit)), resolver).records()
+        grand_total, records = legacy(records[0]), records[1:]
+    else:
+        records = execute(query, resolver).records()
+    rows = [legacy(r) for r in records]
+    if totals and grand_total is None and (include_grand_total_row or int(start_row) <= nodes <= int(end_row)):
+        grand_total = legacy(execute(replace(query, window=Window(0, 1)), resolver).records()[0])
+    if grand_total is not None and int(start_row) <= nodes <= int(end_row):
+        rows.append(dict(grand_total))
     formula_sources: List[Dict[str, Any]] = []
     if totals and include_grand_total_row and query.rows:
         top = execute(replace(query, expanded=frozenset(), window=Window(1, None)), resolver).records()
@@ -416,6 +497,27 @@ def core_hierarchy_view(
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
         "profile": {"engine": "core"},
     }
+
+
+CAPTURE_MAX_ROWS = 2000
+
+
+def _capture(capture: Dict[str, Any], query: PivotQuery, relation: Any) -> None:
+    import base64
+
+    import pyarrow as pa
+
+    capture["query"] = to_wire(query)
+    counted = relation.count()
+    verify_scoped(counted)
+    if int(counted.to_pyarrow().as_py()) > CAPTURE_MAX_ROWS:
+        return
+    verify_scoped(relation)
+    table = relation.to_pyarrow()
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    capture["data"] = base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
 
 
 def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[str, int]]) -> int:
@@ -434,3 +536,64 @@ def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[s
             cache.clear()
         cache[key] = total
     return total
+
+
+# --------------------------------------------------------------------- drill-through
+
+
+def _node_path(payload: Mapping[str, Any], fields: Sequence[str], families: Mapping[str, str]) -> Tuple[Any, ...]:
+    """The typed node path: the canonical ``rowKey`` when sent, else the display path."""
+    key = payload.get("rowKey") or payload.get("row_key")
+    if key:
+        path = CanonicalPathCodec.decode(str(key))
+        if len(path) != len(fields):
+            raise CoreUnsupported(["row key does not match the row fields"])
+        return tuple(path)
+    display = payload.get("row_path") or payload.get("rowPath") or ""
+    parts = str(display).split("|||") if display else []
+    if len(parts) != len(fields):
+        raise CoreUnsupported(["display path does not match the row fields"])
+    if any(part == "" for part in parts):
+        raise CoreUnsupported(["display path with an empty or NULL member (send rowKey)"])
+    return tuple(_coerce(part, families[f]) for part, f in zip(parts, fields, strict=True))
+
+
+def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: Sequence[Mapping[str, Any]],
+                       payload: Mapping[str, Any], *, limit: int, offset: int, sort_col: Optional[str],
+                       sort_dir: str, text_filter: str) -> Dict[str, Any]:
+    """The ``get_drill_through_data`` contract, answered by the core (REQ-DET-001)."""
+    relation = resolve(spec.table)
+    families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
+    reasons: List[str] = []
+    if getattr(spec, "custom_dimensions", None):
+        reasons.append("custom dimensions")
+    fields = payload.get("row_fields") or payload.get("pathFields") or payload.get("rowFields") or []
+    fields = [str(f) for f in fields] if isinstance(fields, list) else []
+    unknown = [f for f in fields if f not in families]
+    if unknown:
+        reasons.append(f"unknown row fields {unknown}")
+    aliases = frozenset(str(m.alias) for m in spec.measures or [])
+    filters: List[Any] = []
+    for f in [*(spec.filters or []), *extra_filters]:
+        if set(_flatten_fields(f)) & aliases:
+            reasons.append("measure filter in drill-through")
+            continue
+        mapped = _dimension_filter(f, families, reasons)
+        if mapped is not None:
+            filters.append(mapped)
+    if sort_col and sort_col not in families:
+        reasons.append(f"sort on {sort_col!r}")
+    if reasons:
+        raise CoreUnsupported(reasons)
+    path = _node_path(payload, fields, families)
+    query = DetailQuery(
+        dataset=str(spec.table),
+        filters=tuple(filters),
+        path_fields=tuple(fields),
+        path=path,
+        search=text_filter or None,
+        sort=(SortKey(sort_col, sort_dir == "desc"),) if sort_col else (),
+        window=Window(max(0, int(offset)), max(0, int(limit))),
+    )
+    table, total = detail(query, lambda _name: relation)
+    return {"rows": table.to_pylist(), "total_rows": total}

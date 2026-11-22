@@ -24,7 +24,7 @@ import os
 import pathlib
 import threading
 from collections import Counter
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 __all__ = ["STATS", "classify", "compare_views", "core_mode", "record_shadow", "record_unsupported"]
 
@@ -81,11 +81,25 @@ def _same(a: Any, b: Any) -> bool:
         return bool(a == b)
 
 
-def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], rows: Sequence[str]) -> List[Dict[str, Any]]:
-    """Differences between two ``run_hierarchy_view`` results (rows, order, values, totals)."""
+def _grand_total_of(view: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    gt = view.get("grand_total_row")
+    if gt:
+        return gt
+    return next((r for r in view.get("rows") or [] if _is_grand_total(r)), None)
+
+
+def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], rows: Sequence[str], *,
+                  grand_total_requested: bool = True) -> List[Dict[str, Any]]:
+    """Differences between two ``run_hierarchy_view`` results.
+
+    Nodes are compared by identity, order and every value column.  The grand
+    total is compared by value wherever both sides carry it (legacy fast paths
+    return it outside ``rows`` and sometimes unrequested; the response layer
+    places it), and its absence counts only when it was requested.
+    """
     diffs: List[Dict[str, Any]] = []
-    legacy_rows = list(legacy.get("rows") or [])
-    core_rows = list(core.get("rows") or [])
+    legacy_rows = [r for r in legacy.get("rows") or [] if not _is_grand_total(r)]
+    core_rows = [r for r in core.get("rows") or [] if not _is_grand_total(r)]
     lp, cp = [_path(r, rows) for r in legacy_rows], [_path(r, rows) for r in core_rows]
     if lp != cp:
         diffs.append({"kind": "rows", "legacy_only": [list(p) for p in lp if p not in cp],
@@ -99,15 +113,14 @@ def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], rows: Sequ
         bad = {k: [row.get(k), other.get(k)] for k in _value_keys(row, other, rows)
                if not _same(row.get(k), other.get(k))}
         if bad:
-            diffs.append({"kind": "values", "path": list(path), "depth": 0 if path == GRAND_TOTAL else len(path),
-                          "measures": bad})
-    lgt, cgt = legacy.get("grand_total_row"), core.get("grand_total_row")
-    if (lgt is None) != (cgt is None):
-        diffs.append({"kind": "grand_total_presence", "legacy": lgt is not None, "core": cgt is not None})
-    elif lgt is not None and cgt is not None:
+            diffs.append({"kind": "values", "path": list(path), "depth": len(path), "measures": bad})
+    lgt, cgt = _grand_total_of(legacy), _grand_total_of(core)
+    if lgt is not None and cgt is not None:
         bad = {k: [lgt.get(k), cgt.get(k)] for k in _value_keys(lgt, cgt, rows) if not _same(lgt.get(k), cgt.get(k))}
         if bad:
             diffs.append({"kind": "grand_total_values", "measures": bad})
+    elif grand_total_requested and (lgt is None) != (cgt is None):
+        diffs.append({"kind": "grand_total_presence", "legacy": lgt is not None, "core": cgt is not None})
     if legacy.get("total_rows") is not None and legacy.get("total_rows") != core.get("total_rows"):
         diffs.append({"kind": "total_rows", "legacy": legacy.get("total_rows"), "core": core.get("total_rows")})
     return diffs
@@ -151,9 +164,15 @@ def classify(diff: Mapping[str, Any], *, spec_summary: Mapping[str, Any], core_r
     return "unclassified"
 
 
+def capture_enabled() -> bool:
+    """Opt-in: shadow entries then carry the scoped dataset (local referee use only)."""
+    return os.environ.get("PIVOT_CORE_SHADOW_CAPTURE", "").strip() == "1"
+
+
 def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any],
-                  core: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    diffs = compare_views(legacy, core, spec_summary.get("rows") or [])
+                  core: Mapping[str, Any], capture: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
+    diffs = compare_views(legacy, core, spec_summary.get("rows") or [],
+                          grand_total_requested=bool(spec_summary.get("include_grand_total", True)))
     for d in diffs:
         d["class"] = classify(d, spec_summary=spec_summary, core_rows=core.get("rows") or [], legacy=legacy)
     with _LOCK:
@@ -163,6 +182,8 @@ def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any],
             STATS[d["class"]] += 1
     if diffs:
         entry = {"at": _dt.datetime.now(_dt.timezone.utc).isoformat(), "spec": dict(spec_summary), "diffs": diffs}
+        if capture:
+            entry["capture"] = dict(capture)
         try:
             out = _shadow_dir()
             out.mkdir(parents=True, exist_ok=True)
@@ -173,6 +194,63 @@ def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any],
         if any(d["class"] == "unclassified" for d in diffs):
             _LOG.warning("core shadow: unclassified difference for %s", spec_summary.get("table"))
     return diffs
+
+
+def _canonical_record(rec: Mapping[str, Any]) -> str:
+    def norm(v: Any) -> Any:
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return v
+
+    return json.dumps({k: norm(v) for k, v in sorted(rec.items())}, default=str, sort_keys=True)
+
+
+def compare_drill(legacy: Mapping[str, Any], core: Mapping[str, Any], *, ordered: bool) -> List[Dict[str, Any]]:
+    """Drill-through differences: total and the page's records (as a multiset unless ordered)."""
+    diffs: List[Dict[str, Any]] = []
+    if legacy.get("total_rows") != core.get("total_rows"):
+        diffs.append({"kind": "drill_total", "legacy": legacy.get("total_rows"), "core": core.get("total_rows")})
+    lr = [_canonical_record(r) for r in legacy.get("rows") or []]
+    cr = [_canonical_record(r) for r in core.get("rows") or []]
+    if (lr != cr) if ordered else (sorted(lr) != sorted(cr)):
+        diffs.append({"kind": "drill_rows", "legacy_count": len(lr), "core_count": len(cr),
+                      "order_only": sorted(lr) == sorted(cr)})
+    return diffs
+
+
+def record_drill_shadow(summary: Mapping[str, Any], legacy: Mapping[str, Any],
+                        core: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    diffs = compare_drill(legacy, core, ordered=bool(summary.get("sorted")))
+    for d in diffs:
+        # Unsorted legacy pages have no defined order, so a page can hold other records (F-DRILL-ORDER).
+        unordered_page = d["kind"] == "drill_rows" and not summary.get("sorted") and not any(
+            x["kind"] == "drill_total" for x in diffs)
+        d["class"] = "legacy:F-DRILL-ORDER" if unordered_page else "unclassified"
+    _record("drill", summary, diffs)
+    return diffs
+
+
+def _record(kind: str, summary: Mapping[str, Any], diffs: List[Dict[str, Any]]) -> None:
+    with _LOCK:
+        STATS[f"{kind}_shadow_requests"] += 1
+        STATS[f"{kind}_shadow_identical" if not diffs else f"{kind}_shadow_differing"] += 1
+        for d in diffs:
+            STATS[d["class"]] += 1
+    if not diffs:
+        return
+    entry = {"at": _dt.datetime.now(_dt.timezone.utc).isoformat(), "request": kind, "spec": dict(summary),
+             "diffs": diffs}
+    try:
+        out = _shadow_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        with _LOCK, open(out / f"shadow-{_dt.date.today().isoformat()}.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, default=str) + "\n")
+    except OSError:
+        _LOG.warning("could not write the core shadow report", exc_info=True)
+    if any(d["class"] == "unclassified" for d in diffs):
+        _LOG.warning("core shadow: unclassified %s difference for %s", kind, summary.get("table"))
 
 
 def record_unsupported(reasons: Sequence[str]) -> None:

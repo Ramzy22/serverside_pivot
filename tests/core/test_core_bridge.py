@@ -114,6 +114,12 @@ def test_expansion_paths_are_coerced_and_filtered():
     (dict(filters=[{"op": "OR", "conditions": [{"field": "v_sum", "op": ">", "value": 1},
                                                {"field": "r", "op": "=", "value": "A"}]}]), "compound measure filter"),
     (dict(rows=["r", "zz"]), "unknown row fields ['zz']"),
+    (dict(full_rows=["r", "c", "hidden"]), "spec field 'full_rows'"),
+    (dict(unbalanced_values=["x"]), "spec field 'unbalanced_values'"),
+    (dict(sort=[{"field": "r", "order": "asc", "collation": "nocase"}]), "sort keys ['collation']"),
+    (dict(sort=[{"field": "r", "nulls": "first"}]), "nulls 'first'"),
+    (dict(sort=[{"field": "r", "semanticType": "tenor"}]), "semantic sort 'tenor'"),
+    (dict(filters=[{"field": "r", "op": "=", "value": "A", "regex": True}]), "filter keys ['regex']"),
 ])
 def test_unsupported_features_are_named(kw, reason):
     with pytest.raises(CoreUnsupported) as info:
@@ -227,3 +233,10 @@ def test_window_and_ratio_measures_map_to_derived():  # REQ-AGG-005, REQ-AGG-007
     assert [(r["_path"], r["rk"], r["mv"], r["avg"]) for r in rows] == [
         ("A", 2, 6.0, 3.0), ("B", 1, 6.5, 7.0), ("", 3, 4.5, 2.0), ("__grand_total__", 1, 15.0, 3.75)]
     assert not any(k.startswith("__base_") for r in rows for k in r)
+
+
+def test_absolute_sort_maps_and_orders_by_magnitude():  # REQ-SORT-002
+    q = spec_to_query(spec(sort=[{"field": "v_sum", "order": "desc", "sortType": "absolute"}]), True, SCHEMA)
+    assert q.sort == (SortKey("v_sum", True, True),)
+    q = spec_to_query(spec(sort=[{"field": "v_sum", "order": "desc", "absoluteSort": True}]), True, SCHEMA)
+    assert q.sort == (SortKey("v_sum", True, True),)

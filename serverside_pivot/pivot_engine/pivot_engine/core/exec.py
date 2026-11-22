@@ -15,7 +15,7 @@ from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
-from .ir import PivotQuery, PredicateGroup
+from .ir import DetailQuery, PivotQuery, PredicateGroup
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
@@ -40,7 +40,7 @@ def canonical(query: PivotQuery) -> str:
         "measures": [[m.alias, m.agg, m.field, m.weight, m.q] for m in query.measures],
         "filters": [_canonical_filter(f, scalar) for f in query.filters],
         "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],
-        "sort": [[k.field, k.desc] for k in query.sort],
+        "sort": [[k.field, k.desc, k.absolute] for k in query.sort],
         "totals": query.totals,
         "expanded": None if query.expanded is None
         else sorted(CanonicalPathCodec.encode(list(p)) for p in query.expanded),
@@ -124,3 +124,16 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
         expr = expr.limit(limit, offset=offset)
     verify_scoped(expr)
     return tuple(tuple(r[c] for c in query.columns) for r in expr.to_pyarrow().to_pylist())
+
+
+def detail(query: DetailQuery, resolve: Resolver) -> Tuple[Any, int]:
+    """(Arrow page, total matching records) for a drill-through / detail query."""
+    from .physical.detail import lower_detail
+
+    relation = resolve(query.dataset)
+    schema = relation.schema()
+    query.validate({name: type_family(dtype) for name, dtype in schema.items()})
+    page, count = lower_detail(query, relation)
+    verify_scoped(page)
+    verify_scoped(count)
+    return page.to_pyarrow(), int(count.to_pyarrow().as_py())

@@ -208,13 +208,15 @@ def tree(
     for i, k in enumerate(q.rows, start=1):
         order.append((union[DEPTH] >= i).cast("int8"))  # parent before its children
         dimension_sorted = False
-        for field, desc, is_measure in plan.sort:
+        for field, desc, is_measure, absolute in plan.sort:
             if is_measure:
                 value = union[ancestor[(i, field)]]
             elif field == k:
                 value, dimension_sorted = union[k], True
             else:
                 continue  # a dimension entry orders only its own level
+            if absolute:
+                value = value.abs()
             order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
         if not dimension_sorted:  # deterministic tie-break: the member value, ascending
             order += [union[k].isnull().cast("int8"), union[k].asc()]
@@ -272,7 +274,7 @@ def output_columns(plan: LogicalPlan) -> List[str]:
 
 def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, str], str]]:
     """Attach, for each level i, the sorted measures of the row's level-i ancestor (REQ-SORT-001)."""
-    measures = [field for field, _desc, is_measure in plan.sort if is_measure]
+    measures = [field for field, _desc, is_measure, _abs in plan.sort if is_measure]
     names: Dict[Tuple[int, str], str] = {}
     if not measures:
         return union, names
