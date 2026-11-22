@@ -265,6 +265,7 @@ export class DuckDbWasmExecutor {
     private wasmRetryAfter = 0;
     private dbInstance: DuckDbInstanceLike | null = null;
     private dbConn: DuckDbConnectionLike | null = null;
+    private worker: Worker | null = null;
     private registeredTableSignature = '';
     private preparedCache: PreparedDatasetCache | null = null;
     private cachedAvailableFields: string[] | null = null;
@@ -320,6 +321,40 @@ export class DuckDbWasmExecutor {
         this.config = { ...this.config, ...config };
         this.telemetry.activeEngine = resolveClientEngineKind(this.config, this.rows.length, this.wasmReady);
         this.telemetry.lastUpdatedAt = Date.now();
+    }
+
+    /**
+     * Release the DuckDB connection, database and worker. The executor stays usable:
+     * the next request re-initialises DuckDB-Wasm (safe under React StrictMode remounts).
+     */
+    public dispose(): void {
+        const conn = this.dbConn as (DuckDbConnectionLike & { close?: () => unknown }) | null;
+        const db = this.dbInstance as (DuckDbInstanceLike & { terminate?: () => unknown }) | null;
+        const injected = this.config.duckdbWasmInstance === this.dbInstance;
+        try {
+            if (conn && typeof conn.close === 'function') void conn.close();
+        } catch (_err) {
+            // closing an already closed connection is harmless
+        }
+        if (!injected) {
+            try {
+                if (db && typeof db.terminate === 'function') void db.terminate();
+            } catch (_err) {
+                // ignore termination failures
+            }
+            try {
+                if (this.worker) this.worker.terminate();
+            } catch (_err) {
+                // ignore termination failures
+            }
+        }
+        this.worker = null;
+        this.dbConn = null;
+        this.dbInstance = null;
+        this.wasmReady = false;
+        this.wasmInitializing = null;
+        this.registeredTableSignature = '';
+        this.telemetry = { ...this.telemetry, wasmReady: false, lastUpdatedAt: Date.now() };
     }
 
     public getTelemetry(): ClientEngineTelemetry {
@@ -418,6 +453,8 @@ export class DuckDbWasmExecutor {
 
                 this.dbInstance = db;
                 this.dbConn = conn;
+                this.worker = worker;
+                createdWorker = null;
                 this.wasmReady = true;
                 this.wasmRetryAfter = 0;
                 return true;

@@ -83,6 +83,11 @@ export class ClientPivotTransport implements ClientPivotTransportInterface {
         });
     }
 
+    /** Release DuckDB-Wasm resources (the transport stays usable and re-initialises lazily). */
+    public dispose(): void {
+        this.executor.dispose();
+    }
+
     public setData(rows: Array<{ [key: string]: unknown }>): void {
         const nextRows = Array.isArray(rows) ? rows : [];
         this.executor.setData(nextRows);

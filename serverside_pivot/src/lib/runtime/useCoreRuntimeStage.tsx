@@ -9,6 +9,8 @@ import { buildClientFilterOptionMap, collectDataFieldIds, isAutoDataFieldId } fr
 import { buildReportEditorSelectionFromRow } from '../utils/reportEditorSelection';
 import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, DEFAULT_CHART_GRAPH_HEIGHT, DEFAULT_FLOATING_CHART_PANEL_HEIGHT, DEFAULT_TABLE_CANVAS_SIZE, VALID_CHART_TYPES, VALID_CHART_SORT_MODES, VALID_CHART_INTERACTION_MODES, VALID_CHART_SERVER_SCOPES, GRAND_TOTAL_ROW_ID, MISSING_PERSISTED_VALUE, normalizeCustomDimensionsValue, applyCustomDimensionsToRows, decorateAvailableFieldsWithCustomDimensions, getPreferredChartOrientation, cloneSerializable, normalizeViewModeValue, normalizeDetailModeValue, normalizeTreeConfigValue, normalizeDetailConfigValue, normalizeLegacyPivotModeValue, normalizeReportDefValue, collectReportFields, normalizeSavedReportsValue, normalizeActiveReportIdValue, clampFloatingChartRect, normalizeChartDefinition, sanitizeChartDefinitions, normalizeLockedChartRequest, sanitizeChartCanvasPanes, normalizeChartServerWindowConfig, coerceTransportNumber, normalizeRuntimeDataEnvelope, clampSidebarWidth, clampDecimalPlaces, normalizeDefaultValueFormat, mergeSparseColSchema, isSparseSchemaRangeLoaded, normalizePerformanceConfigValue, buildLargeColumnAdvisory, normalizeRowPinningState, getPinnedSideForRow, sanitizeGrandTotalPinOverride, resolveGrandTotalPinState } from '../hooks/usePivotNormalization';
 const EXPAND_ALL_STATE_KEY = '__ALL__';
+// One stable empty dataset: a fresh `[]` default per render invalidated the client caches and DuckDB registration.
+const EMPTY_DATA = [];
 const normalizeLayoutModeValue = value => {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return normalized === 'outline' || normalized === 'tabular' ? normalized : 'hierarchy';
@@ -106,7 +108,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   });
   ({
     id: stage.id,
-    data: stage.inputData = [],
+    data: stage.inputData = EMPTY_DATA,
     style: stage.style = {},
     setProps: stage.setProps,
     serverSide: stage.serverSide = false,
@@ -315,6 +317,11 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   }
   stage.clientTransportRef = useRef(null);
   const ownsClientTransportRef = useRef(false);
+  useEffect(() => () => {
+    // Release DuckDB-Wasm (worker, database) of a transport this component created.
+    const owned = ownsClientTransportRef.current ? stage.clientTransportRef.current : null;
+    if (owned && typeof owned.dispose === 'function') owned.dispose();
+  }, []);
   if (stage.clientRuntimeActive) {
     if (hasPassedClientTransport) {
       stage.clientTransportRef.current = payloadTransport;

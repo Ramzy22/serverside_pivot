@@ -217,10 +217,10 @@ def transport(tmp_path_factory):
     files = tmp / "files"
     files.mkdir()
 
-    def run(rows, request):
+    def run(rows, request, config=None):
         con = duckdb.connect()
         con.execute(f"SET file_search_path = '{files.as_posix()}'")
-        proc.stdin.write(json.dumps({"rows": rows, "request": request}) + "\n")
+        proc.stdin.write(json.dumps({"rows": rows, "request": request, "config": config or {}}) + "\n")
         proc.stdin.flush()
         while True:
             msg = json.loads(proc.stdout.readline())
@@ -268,3 +268,12 @@ def test_client_transport_falls_back_exactly_and_says_why(transport):
     assert "response" in reply, reply.get("error")
     assert reply["telemetry"]["coreServed"] is False
     assert "formula" in reply["telemetry"]["coreFallbackReason"]
+
+
+def test_client_transport_dispose_releases_and_reinitialises(transport):
+    rows = [{"r": "A", "v": 1.0}, {"r": "B", "v": 2.0}]
+    request = {"kind": "data", "state": {"rowFields": ["r"], "colFields": [], "expanded": True,
+                                         "valConfigs": [{"field": "v", "agg": "sum"}]}, "payload": {"start": 0, "end": 50}}
+    reply = transport(rows, request, {"disposeBetween": True})
+    assert "response" in reply, reply.get("error")
+    assert reply["telemetry"]["coreServed"] is True and reply["telemetry"]["wasmReady"] is True

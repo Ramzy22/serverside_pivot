@@ -126,6 +126,10 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
             tableName: runtimeProps.table || 'client_data',
         });
     }
+    useEffect(() => () => {
+        // Release DuckDB-Wasm (worker, database) of the internally created client transport.
+        if (clientTransportRef.current) clientTransportRef.current.dispose();
+    }, []);
     const activeTransport = (useClientTransport && clientTransportRef.current)
         ? clientTransportRef.current
         : (transport as PivotTransport);

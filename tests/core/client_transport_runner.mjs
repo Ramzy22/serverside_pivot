@@ -27,12 +27,18 @@ const instance = {
 };
 
 for (;;) {
-    const { rows, request, config } = await next();
+    const { rows, request, config: rawConfig } = await next();
+    const config = rawConfig || {};
     try {
         const transport = new ClientPivotTransport({ executionMode: 'client', clientEngine: 'duckdb-wasm',
             duckdbWasmInstance: instance, tableName: 'client_t', ...(config || {}) });
         transport.setData(rows);
-        const response = await transport.request(request);
+        let response = await transport.request(request);
+        if (config && config.disposeBetween) {
+            transport.dispose();
+            if (transport.getTelemetry().wasmReady) throw new Error('dispose left DuckDB ready');
+            response = await transport.request(request);
+        }
         send({ response, telemetry: transport.getTelemetry() });
     } catch (err) {
         send({ error: String((err && err.stack) || err) });
