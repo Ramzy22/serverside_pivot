@@ -596,3 +596,31 @@ def test_first_last_without_an_order_field_is_a_typed_error():
     rows = view("ts")["rows"]  # a: ts 2 -> 1; b: 3; the grand total: ts 5 -> 3
     assert [(r.get("g"), bool(r.get("_isTotal")), r["v_last"]) for r in rows] == [
         ("a", False, 1), ("b", False, 3), (None, True, 3)]
+
+
+def test_core_pivot_table_contract():
+    """The run_pivot contract from the core: leaves in the flat order (NULLS LAST), the grand total last
+    with totals, limit 0 = no limit, offset/limit windows, legacy cell names, one row without row fields."""
+    import pyarrow as pa
+
+    from pivot_engine.transport.core_bridge import core_pivot_table
+    from pivot_engine.types.pivot_spec import Measure, PivotConfig, PivotSpec
+
+    con = ibis.duckdb.connect()
+    con.create_table("t", pa.table({"region": ["N", "N", "S", None, "E"], "q": ["Q1", "Q2", "Q1", "Q2", "Q1"],
+                                    "v": [1.0, 2.0, 4.0, 8.0, None]}))
+    m = [Measure(field="v", agg="sum", alias="v_sum")]
+
+    def table(**kw):
+        spec = PivotSpec(table="t", rows=kw.pop("rows", ["region"]), measures=kw.pop("measures", m), filters=[], **kw)
+        return core_pivot_table(con.table, spec)
+
+    leaves = [("E", None), ("N", 3.0), ("S", 4.0), (None, 8.0)]
+    assert [(r["region"], r["v_sum"]) for r in table(limit=0).to_pylist()] == leaves
+    assert [(r["region"], r["v_sum"]) for r in table(totals=True).to_pylist()] == leaves + [(None, 15.0)]
+    assert [(r["region"], r["v_sum"]) for r in table(limit=2, offset=1).to_pylist()] == leaves[1:3]
+    assert table(rows=[], totals=True).to_pylist() == [{"v_sum": 15.0}]  # one row (legacy duplicated it)
+    pivot = table(columns=["q"], pivot_config=PivotConfig(enabled=True, include_totals_column=True))
+    assert pivot.column_names == ["region", "Q1_v_sum", "Q2_v_sum", "__RowTotal__v_sum"]
+    assert pivot.to_pylist()[1] == {"region": "N", "Q1_v_sum": 1.0, "Q2_v_sum": 2.0, "__RowTotal__v_sum": 3.0}
+    assert str(pivot.schema.field("Q1_v_sum").type) == "double"

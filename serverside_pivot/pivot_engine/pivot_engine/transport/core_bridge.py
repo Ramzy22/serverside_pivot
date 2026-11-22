@@ -799,6 +799,20 @@ def core_hierarchy_view(
     }
 
 
+def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
+    """Run a core read under the controller's execution lock for ``table``.
+
+    The core shares the controller's backend connection, which is not safe for
+    concurrent use: core reads queue on the same per-table lock as every other
+    read of that table.
+    """
+    lock_for = getattr(controller, "_execution_lock_for_table", None)
+    if lock_for is None:
+        return fn()
+    with lock_for(table):
+        return fn()
+
+
 def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     """The ``run_pivot`` contract (one row per leaf group), answered by the core as an Arrow table.
 
@@ -806,7 +820,9 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     cells ``<column key>_<alias>`` (and ``__RowTotal__<alias>`` with the totals
     column).  Rows are the leaves of the flat layout (REQ-LAYOUT-002) in its
     order, windowed by ``spec.offset``/``spec.limit``; with no row fields the
-    single row is the grand total.  ``spec.totals`` adds no row, as in legacy.
+    single row is the grand total.  With ``spec.totals`` the grand total
+    follows the leaves (its row fields NULL), at every depth, when the window
+    reaches it: the consumer contract the hierarchy view reads.
     """
     import copy
 
@@ -816,7 +832,7 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
 
     relation = resolve(spec.table)
     offset = max(0, int(getattr(spec, "offset", 0) or 0))
-    limit = getattr(spec, "limit", None)
+    limit = getattr(spec, "limit", None) or None  # the run_pivot contract: limit 0 (or None) = no limit
     plain = copy.copy(spec)
     plain.offset = 0
     cell_sorts: List[Tuple[int, str, str, bool]] = []
@@ -825,9 +841,9 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     query, keys = _resolve_members(query, spec, resolver, cell_sorts)
     totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
     end = None if limit is None else offset + max(0, int(limit))
-    if query.rows:  # leaves first, the grand total last: a window over the leaves never needs it
+    if query.rows:  # the flat layout: leaves first, the grand total last
         frame = execute(replace(query, window=Window(offset, None if end is None else end - offset)), resolver)
-        table = frame.table.filter(pc.greater(frame.table[DEPTH], 0))
+        table = frame.table if getattr(spec, "totals", False) else frame.table.filter(pc.greater(frame.table[DEPTH], 0))
     else:
         frame = execute(replace(query, window=Window()), resolver)
         table = frame.table.slice(offset, None if end is None else max(0, end - offset))

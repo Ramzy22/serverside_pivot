@@ -35,6 +35,25 @@ class PivotQueryExecutor:
         controller._request_count += 1
         normalized_spec = controller._normalize_spec(spec)
 
+        core_table = await self._core_table(normalized_spec)
+        if core_table is not None:
+            execute_finished_at = time.perf_counter()
+            return self._format_result(
+                core_table,
+                normalized_spec,
+                return_format=return_format,
+                profile_sink=profile_sink,
+                started_at=started_at,
+                planning_started_at=None,
+                planning_finished_at=None,
+                execute_started_at=started_at,
+                execute_finished_at=execute_finished_at,
+                needs_column_discovery=False,
+                query_count=1,
+                execution_profile={"engine": "core"},
+                path="core",
+            )
+
         if controller._can_use_sparse_materialized_pivot(normalized_spec):
             execution_profile: Dict[str, Any] = {}
             execute_started_at = time.perf_counter()
@@ -110,6 +129,26 @@ class PivotQueryExecutor:
             query_count=len(plan_result.get("queries", []) or []),
             execution_profile=execution_profile,
         )
+
+    async def _core_table(self, spec: Any) -> Any:
+        """The pivot from the core (``PIVOT_CORE=on``), or None for the legacy planner."""
+        from .runtime import core_shadow
+        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_pivot_table
+
+        if core_shadow.core_mode() != "on":
+            return None
+        resolve = getattr(self._controller, "resolve_table", None)
+        if resolve is None:
+            return None
+        try:
+            table = await run_in_executor_scoped(asyncio.get_running_loop(), None,
+                                                 lambda: core_locked_call(self._controller, spec.table,
+                                                                          lambda: core_pivot_table(resolve, spec)))
+        except CoreUnsupported as exc:
+            core_shadow.record_unsupported(exc.reasons)
+            return None
+        core_shadow.record_served("pivot")
+        return table
 
     async def _schedule_materialization_if_needed(
         self,

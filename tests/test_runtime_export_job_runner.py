@@ -971,6 +971,14 @@ def test_real_backend_failure_cannot_publish_an_empty_successful_bounded_export(
         return await execute({"sql": "SELECT CAST('not-a-number' AS INTEGER)"}, **kwargs)
 
     monkeypatch.setattr(backend, "execute_async", invalid_native_statement)
+    # The same real backend failure on the core read path (PIVOT_CORE=on serves the export's pivot).
+    import duckdb
+    from pivot_engine.transport import core_bridge
+
+    def invalid_core_statement(*_args, **_kwargs):
+        return duckdb.sql("SELECT CAST('not-a-number' AS INTEGER)").fetchall()
+
+    monkeypatch.setattr(core_bridge, "core_pivot_table", invalid_core_statement)
     runner, store, payloads, governor, service, context, job = setup_runner(
         tmp_path, adapter, governor=adapter.controller.resource_governor)
     state = PivotViewState(row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum"}],

@@ -1759,8 +1759,11 @@ async def test_wide_materialized_window_uses_sparse_materialized_pivot_path(adap
     profile = {}
     result = await adapter.controller.run_pivot_async(spec, return_format="arrow", force_refresh=True, profile_sink=profile)
 
-    assert profile["planner"]["path"] == "sparse_materialized"
-    assert profile["plannerExecution"]["mode"] == "sparse_materialized"
+    if os.environ.get("PIVOT_CORE") == "on":  # the core serves the pivot; the legacy sparse path is not used
+        assert profile["planner"]["path"] == "core"
+    else:
+        assert profile["planner"]["path"] == "sparse_materialized"
+        assert profile["plannerExecution"]["mode"] == "sparse_materialized"
     assert result.num_rows == 10
     first_row = result.slice(0, 1).to_pylist()[0]
     assert first_row["row_id"] == 0
@@ -3243,9 +3246,14 @@ async def test_topn_query_skips_column_discovery_when_materialized_values_are_pr
     )
 
     assert isinstance(result, pa.Table)
-    assert len(execute_calls) == 1
-    assert profile_sink["plannerExecution"]["columnDiscoverySkipped"] is True
-    assert profile_sink["plannerExecution"]["materializedColumns"] == 2
+    if os.environ.get("PIVOT_CORE") == "on":  # the core serves it: only the requested members become cells
+        assert profile_sink["planner"]["path"] == "core" and execute_calls == []
+        assert sorted(c for c in result.column_names if c.endswith("_sum")) == [
+            "Canada_cost_sum", "Canada_sales_sum", "USA_cost_sum", "USA_sales_sum"]
+    else:
+        assert len(execute_calls) == 1
+        assert profile_sink["plannerExecution"]["columnDiscoverySkipped"] is True
+        assert profile_sink["plannerExecution"]["materializedColumns"] == 2
 
 
 def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():

@@ -1920,7 +1920,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     ) -> Dict[str, Any]:
         """Drill-through from the core, legacy, or both (``PIVOT_CORE``, see runtime/core_shadow.py)."""
         from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_drill_through
+        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_drill_through
 
         mode = core_shadow.core_mode()
         if mode == "off":
@@ -1934,10 +1934,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_result = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
                 None,
-                lambda: core_drill_through(
+                lambda: core_locked_call(self.controller, spec.table, lambda: core_drill_through(
                     resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
                     sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
-                ),
+                )),
             )
         except CoreUnsupported as exc:
             core_shadow.record_unsupported(exc.reasons)
@@ -2425,7 +2425,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                               include_grand_total: bool) -> Optional[Dict[str, Any]]:
         """The flat tabular view from the core (``PIVOT_CORE=on``), or None for the legacy flat path."""
         from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_hierarchy_view
+        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_hierarchy_view
 
         if core_shadow.core_mode() != "on":
             return None
@@ -2436,9 +2436,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         try:
             view = await run_in_executor_scoped(
                 asyncio.get_running_loop(), None,
-                lambda: core_hierarchy_view(resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
-                                            include_grand_total_row=include_grand_total, total_cache=cache,
-                                            flat=True),
+                lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
+                    resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
+                    include_grand_total_row=include_grand_total, total_cache=cache, flat=True)),
             )
         except CoreUnsupported as exc:
             core_shadow.record_unsupported(exc.reasons)
@@ -2463,7 +2463,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         the core cannot express is served by legacy, with the reason counted.
         """
         from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_hierarchy_view
+        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_hierarchy_view
 
         mode = core_shadow.core_mode()
         if mode == "off":
@@ -2479,11 +2479,11 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_view = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
                 None,
-                lambda: core_hierarchy_view(
+                lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
                     resolve, pivot_spec, target_paths, start_row, end_row,
                     include_grand_total_row=include_grand_total, total_cache=cache, capture=capture,
                     tabular_subtotals=tabular_subtotals,
-                ),
+                )),
             )
         except CoreUnsupported as exc:
             core_shadow.record_unsupported(exc.reasons)
@@ -3732,7 +3732,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     ) -> Optional[tuple]:
         """Filter options from the core when ``PIVOT_CORE`` is on (shadow compares); ``None`` = legacy."""
         from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_unique_values
+        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_unique_values
 
         mode = core_shadow.core_mode()
         resolve = getattr(self.controller, "resolve_table", None)
@@ -3743,7 +3743,8 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_result = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
                 None,
-                lambda: core_unique_values(resolve, spec, column_id, search=search, limit=limit, offset=offset),
+                lambda: core_locked_call(self.controller, spec.table, lambda: core_unique_values(
+                    resolve, spec, column_id, search=search, limit=limit, offset=offset)),
             )
         except CoreUnsupported as exc:
             core_shadow.record_unsupported(exc.reasons)
