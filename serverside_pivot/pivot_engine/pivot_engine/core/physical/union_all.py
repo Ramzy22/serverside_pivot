@@ -20,7 +20,7 @@ from ..ir import CASE_FOLDING_OPS, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from .lowering import lower as lower_measure
 
-__all__ = ["DEPTH", "LevelAggregate", "build", "lower", "output_columns", "tree", "tree_of"]
+__all__ = ["DEPTH", "LevelAggregate", "build", "filtered", "lower", "output_columns", "tree", "tree_of"]
 
 # (keys) -> relation with ``keys`` + one column per measure alias.
 LevelAggregate = Callable[[Sequence[str]], Any]
@@ -90,12 +90,31 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
 
 
 def _measures(table: Any, plan: LogicalPlan, aliases: Sequence[str] = ()) -> Dict[str, Any]:
+    """Row-total measures, then one conditional aggregate per pivot cell (REQ-PIV-001)."""
     wanted = set(aliases) if aliases else None
     out = {}
     for m in plan.query.measures:
         if wanted is None or m.alias in wanted:
             out[m.alias] = lower_measure(m, table)
+    if wanted is None:
+        schema = table.schema()
+        for _j, member, m, name in plan.query.cells():
+            out[name] = lower_measure(m, table, _member_condition(table, schema, plan.query.columns, member))
     return out
+
+
+def _member_condition(table: Any, schema: Any, columns: Sequence[str], member: Tuple[Any, ...]) -> Any:
+    """Null-safe typed equality to one column member (a NULL member is the NULL group)."""
+    cond = None
+    for k, v in zip(columns, member, strict=True):
+        term = table[k].isnull() if v is None else table[k].identical_to(ibis.literal(v, type=schema[k]))
+        cond = term if cond is None else (cond & term)
+    return cond
+
+
+def filtered(relation: Any, query: Any) -> Any:
+    """E0 before measure filters: the scoped relation with the row filters applied."""
+    return relation.filter([_predicate(relation, p) for p in query.filters]) if query.filters else relation
 
 
 def _semi_join_on_keys(left: Any, right: Any, keys: Sequence[str]) -> Any:
@@ -150,8 +169,8 @@ def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: Lo
     cols: Dict[str, Any] = {}
     for k in plan.rows:
         cols[k] = rel[k] if k in keys else ibis.null().cast(schema[k])
-    for m in plan.query.measures:
-        cols[m.alias] = rel[m.alias]
+    for name in plan.query.aggregate_columns():
+        cols[name] = rel[name]
     cols[DEPTH] = ibis.literal(level.depth, type="int16")
     return rel.select(**cols)
 
@@ -172,7 +191,7 @@ def tree(
     """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, and the order key."""
     schema = relation.schema()
     q = plan.query
-    e0 = relation.filter([_predicate(relation, p) for p in q.filters]) if q.filters else relation
+    e0 = filtered(relation, q)
     e = _eligible(e0, plan)
     source = e if plan.values_from == "E" else e0
     aggregate = level_aggregate(source, plan)
@@ -180,7 +199,7 @@ def tree(
     # Align measure types across levels (a global aggregate and a grouped one
     # may differ in nullability/width on some backends).
     target = parts[-1].schema()
-    parts = [p.cast({m.alias: target[m.alias] for m in q.measures}) for p in parts]
+    parts = [p.cast({name: target[name] for name in q.aggregate_columns()}) for p in parts]
     union = parts[0]
     for part in parts[1:]:
         union = union.union(part, distinct=False)
@@ -199,11 +218,56 @@ def tree(
             order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
         if not dimension_sorted:  # deterministic tie-break: the member value, ascending
             order += [union[k].isnull().cast("int8"), union[k].asc()]
+    if q.derived:
+        return _with_derived(union, order, plan)
     return union, order
 
 
+ORD = "__ord"
+
+
+def _with_derived(union: Any, order: List[Any], plan: LogicalPlan) -> Tuple[Any, List[Any]]:
+    """Derived measures over the visible tree; siblings share a parent partition (REQ-AGG-005/007)."""
+    q = plan.query
+    union = union.mutate(**{ORD: ibis.row_number().over(order_by=order)})  # display order, total
+    parents = {f"__p{j}": ibis.ifelse(union[DEPTH] > j + 1, union[k], ibis.null().cast(union[k].type()))
+               for j, k in enumerate(q.rows)}
+    union = union.mutate(**parents)
+    grand = sorted({d.of for d in q.derived if d.func == "percent_of_total"})
+    if grand:
+        totals = union.filter(union[DEPTH] == 0).select(**{f"__gt_{a}": union[a] for a in grand})
+        union = union.cross_join(totals)
+    partition = [union[DEPTH], *(union[name] for name in parents)]  # after the join: one relation
+    exprs: Dict[str, Any] = {}
+    for d in q.derived:
+        value = union[d.of]
+        if d.func == "ratio":
+            den = union[d.of2]
+            fallback = ibis.literal(None if d.null_value is None else float(d.null_value), type="float64")
+            exprs[d.alias] = ibis.ifelse(den.isnull() | (den == 0), fallback,
+                                         value.cast("float64") / den.cast("float64"))
+        elif d.func == "percent_of_total":
+            total = union[f"__gt_{d.of}"]
+            exprs[d.alias] = ibis.ifelse(total.isnull() | (total == 0), ibis.null().cast("float64"),
+                                         value.cast("float64") / total.cast("float64"))
+        elif d.func in {"rank", "dense_rank"}:
+            w = ibis.window(group_by=partition,
+                            order_by=[value.isnull().cast("int8"), value.desc() if d.desc else value.asc()])
+            ranked = (ibis.rank() if d.func == "rank" else ibis.dense_rank()).over(w) + 1
+            exprs[d.alias] = ibis.ifelse(value.isnull(), ibis.null().cast("int64"), ranked.cast("int64"))
+        else:
+            frame = d.frame if d.frame is not None else (None, 0)
+            w = ibis.window(group_by=partition, order_by=[union[ORD]], rows=frame)
+            agg = value.sum() if d.func == "cumulative" else value.cast("float64").mean()
+            exprs[d.alias] = agg.over(w)
+    union = union.mutate(**exprs)
+    keep = [c for c in union.columns if not c.startswith("__p") and not c.startswith("__gt_")]
+    union = union.select(*keep)
+    return union, [union[ORD]]
+
+
 def output_columns(plan: LogicalPlan) -> List[str]:
-    return [*plan.rows, *(m.alias for m in plan.query.measures), DEPTH]
+    return [*plan.rows, *plan.query.value_columns(), DEPTH]
 
 
 def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, str], str]]:

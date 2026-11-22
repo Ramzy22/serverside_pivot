@@ -22,7 +22,7 @@ from hypothesis import strategies as st
 
 from pivot_engine.core.exec import execute
 from pivot_engine.core.ir import (
-    IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
 
 from ..oracle.oracle import Measure as OMeasure
@@ -76,6 +76,9 @@ def _oracle(records, query: PivotQuery):
         totals=query.totals,
         expanded=None if query.expanded is None else list(query.expanded),
         sort=[(s.field, s.desc) for s in query.sort],
+        columns=list(query.columns),
+        column_members=list(query.column_members),
+        derived=list(query.derived),
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -112,7 +115,7 @@ def test_core_conforms_to_every_vector(vector):
 
 DIM = st.sampled_from(["A", "a", "B", "", "x|y", "x_y", None])
 RECORDS = st.lists(
-    st.fixed_dictionaries({"r": DIM, "c": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
+    st.fixed_dictionaries({"r": DIM, "c": DIM, "k": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
                            "w": st.one_of(st.none(), st.integers(0, 4))}),
     min_size=0, max_size=16,
 )
@@ -137,13 +140,31 @@ def queries(draw):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
                     SortKey(alias, desc=draw(st.booleans()))]
-    sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique=True)))
+    sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):
         window = Window(offset=draw(st.integers(0, 6)), limit=draw(st.integers(0, 6)))
     filters = tuple(draw(st.lists(FILTERS, max_size=2)))
+    derived = ()
+    if draw(st.booleans()):  # REQ-AGG-005 / REQ-AGG-007
+        func = draw(st.sampled_from(["ratio", "percent_of_total", "rank", "dense_rank", "cumulative", "moving_avg"]))
+        if draw(st.booleans()):  # several derived measures share one tree (mixed joins and windows)
+            derived = (DerivedMeasure("pt", "percent_of_total", alias), DerivedMeasure("rk", "rank", alias))
+        elif func == "ratio":
+            measures = measures + (MeasureRef("k_count", "count", "v"),)
+            derived = (DerivedMeasure("d", "ratio", alias, "k_count", null_value=draw(st.sampled_from([None, -1.0]))),)
+        elif func in {"cumulative", "moving_avg"}:
+            frame = draw(st.sampled_from([None, (None, 0), (-1, 1), (-2, 0), (0, None), (1, 2)]))
+            derived = (DerivedMeasure("d", func, alias, frame=frame),)
+        else:
+            derived = (DerivedMeasure("d", func, alias, desc=draw(st.booleans())),)
+    columns, members = (), ()
+    if draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
+        columns = ("k",)
+        members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
-                      totals=draw(st.sampled_from(["visible", "all_data"])), expanded=expanded, window=window)
+                      totals=draw(st.sampled_from(["visible", "all_data"])), expanded=expanded, window=window,
+                      columns=columns, column_members=members, derived=derived)
 
 
 NEEDLE = st.sampled_from(["a", "A", "", "|", "x_", "b"])
@@ -182,6 +203,7 @@ def _table(records):
     return pa.table({
         "r": pa.array([x["r"] for x in records], pa.string()),
         "c": pa.array([x["c"] for x in records], pa.string()),
+        "k": pa.array([x.get("k") for x in records], pa.string()),
         "v": pa.array([x["v"] for x in records], pa.int64()),
         "w": pa.array([x.get("w") for x in records], pa.int64()),
     })
@@ -237,3 +259,21 @@ def test_parametric_aggregations_on_a_single_input(agg, q, w, expected):
     records = [{"r": "A", "c": "x", "v": 4, "w": 0}]
     query = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("m", agg, "v", w, q),))
     assert [v["m"] for _, v in _core(_con(_table(records)), query)] == [expected, expected]
+
+
+def test_window_measures_rank_by_measure_within_the_parent():  # REQ-AGG-005, REQ-AGG-007
+    records = [{"r": "A", "c": "x", "v": 1, "w": 1}, {"r": "A", "c": "y", "v": 9, "w": 1},
+               {"r": "A", "c": "z", "v": 9, "w": 1}, {"r": "B", "c": "x", "v": 20, "w": 1},
+               {"r": "B", "c": "y", "v": None, "w": 1}]
+    q = PivotQuery(dataset="t", rows=("r", "c"), measures=(MeasureRef("s", "sum", "v"), MeasureRef("n", "count", "v")),
+                   derived=(DerivedMeasure("rk", "rank", "s"), DerivedMeasure("dr", "dense_rank", "s"),
+                            DerivedMeasure("cum", "cumulative", "s"), DerivedMeasure("mv", "moving_avg", "s", frame=(-1, 0)),
+                            DerivedMeasure("pct", "percent_of_total", "s"),
+                            DerivedMeasure("avg", "ratio", "s", "n", null_value=-1.0)))
+    got = {p: (v["rk"], v["dr"], v["cum"], v["mv"], v["pct"], v["avg"]) for p, v in _core(_con(_table(records)), q)}
+    assert got[()] == (1, 1, 39, 39.0, 1.0, 9.75)
+    assert got[("A",)] == (2, 2, 19, 19.0, 19 / 39, 19 / 3)  # B=20 ranks first among the roots
+    assert got[("B",)] == (1, 1, 39, 19.5, 20 / 39, 20.0)
+    assert got[("A", "x")] == (3, 2, 1, 1.0, 1 / 39, 1.0)
+    assert got[("A", "y")][:2] == (1, 1) and got[("A", "z")][:2] == (1, 1)  # ties share the rank
+    assert got[("B", "y")] == (None, None, 20, 20.0, None, -1.0)  # NULL has no rank; zero count -> null_value

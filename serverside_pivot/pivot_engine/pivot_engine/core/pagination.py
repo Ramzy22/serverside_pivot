@@ -264,7 +264,7 @@ class Pager:
 
     def _slice(self, query: PivotQuery, handle: _Materialized, offset: int, limit: int) -> ResultFrame:
         t = handle.backend.table(handle.table)
-        columns = [*query.rows, *(m.alias for m in query.measures), DEPTH]
+        columns = [*query.rows, *query.value_columns(), DEPTH]
         page = t.filter((t[ROW] >= offset) & (t[ROW] < offset + limit)).order_by(ROW).select(*columns)
         return ResultFrame(
             table=page.to_pyarrow(),

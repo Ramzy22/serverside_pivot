@@ -173,6 +173,9 @@ class Query:
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
     sort_desc: Mapping[str, bool] = field(default_factory=dict)  # shorthand: dimension -> descending
     sort: Sequence[Tuple[str, bool]] = ()  # REQ-SORT-001: (dimension or measure alias, descending), in precedence
+    columns: Sequence[str] = ()  # REQ-PIV-001
+    column_members: Sequence[Tuple[Any, ...]] = ()
+    derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
 
 
 # ----------------------------------------------------------------- engine
@@ -198,7 +201,12 @@ def _key(record: Record, rows: Sequence[str], depth: int) -> Tuple[Any, ...]:
 
 
 def _measures(query: Query, records: Sequence[Record]) -> Dict[str, Any]:
-    return {m.alias: aggregate(m.agg, records, m.field, m.weight, m.q) for m in query.measures}
+    out = {m.alias: aggregate(m.agg, records, m.field, m.weight, m.q) for m in query.measures}
+    for j, member in enumerate(query.column_members):
+        matching = [r for r in records if tuple(r.get(c) for c in query.columns) == tuple(member)]
+        for m in query.measures:
+            out[f"__c{j}__{m.alias}"] = aggregate(m.agg, matching, m.field, m.weight, m.q)
+    return out
 
 
 def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], List[Record]]:
@@ -284,4 +292,43 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
                 visit(child)
 
     visit(())
+    if query.derived:
+        _derive(query, out)
     return out
+
+
+def _derive(query: Query, out: List[Row]) -> None:
+    """Derived measures, computed row by row from the finished visible tree."""
+    siblings: Dict[Tuple[Any, ...], List[Row]] = {}
+    for row in out:  # pre-order: siblings appear in display order
+        siblings.setdefault(("p", len(row.path)) + tuple(row.path[:-1]), []).append(row)
+    grand = out[0].values
+    for d in query.derived:
+        for group in siblings.values():
+            values = [r.values[d.of] for r in group]
+            for i, row in enumerate(group):
+                v = values[i]
+                if d.func == "ratio":
+                    den = row.values[d.of2]
+                    row.values[d.alias] = d.null_value if den is None or den == 0 else (
+                        None if v is None else float(v) / float(den))
+                elif d.func == "percent_of_total":
+                    total = grand[d.of]
+                    row.values[d.alias] = None if total is None or total == 0 or v is None else float(v) / float(total)
+                elif d.func in {"rank", "dense_rank"}:
+                    if v is None:
+                        row.values[d.alias] = None
+                        continue
+                    better = [x for x in values if x is not None and ((x > v) if d.desc else (x < v))]
+                    row.values[d.alias] = 1 + (len(better) if d.func == "rank" else len(set(better)))
+                else:
+                    start, end = d.frame if d.frame is not None else (None, 0)
+                    lo = 0 if start is None else max(0, i + start)
+                    hi = len(group) - 1 if end is None else min(len(group) - 1, i + end)
+                    window = [x for x in values[lo:hi + 1] if x is not None] if lo <= hi else []
+                    if not window:
+                        row.values[d.alias] = None
+                    elif d.func == "cumulative":
+                        row.values[d.alias] = sum(window)
+                    else:
+                        row.values[d.alias] = math.fsum(float(x) for x in window) / len(window)

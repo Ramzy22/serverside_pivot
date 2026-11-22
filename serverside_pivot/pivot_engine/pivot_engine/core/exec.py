@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
@@ -45,6 +45,10 @@ def canonical(query: PivotQuery) -> str:
         "expanded": None if query.expanded is None
         else sorted(CanonicalPathCodec.encode(list(p)) for p in query.expanded),
         "window": [query.window.offset, query.window.limit],
+        "columns": list(query.columns),
+        "derived": [[d.alias, d.func, d.of, d.of2, d.desc, None if d.frame is None else list(d.frame), d.null_value]
+                    for d in query.derived],
+        "columnMembers": [CanonicalPathCodec.encode(list(m)) for m in query.column_members],
     }
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
@@ -81,7 +85,7 @@ def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = N
     return ResultFrame(
         table=expr.to_pyarrow(),
         rows=tuple(query.rows),
-        measures=tuple(m.alias for m in query.measures),
+        measures=tuple(query.value_columns()),
         fingerprint=fingerprint(query),
         window=(query.window.offset, query.window.limit),
     )
@@ -93,7 +97,30 @@ async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optio
     return ResultFrame(
         table=table,
         rows=tuple(query.rows),
-        measures=tuple(m.alias for m in query.measures),
+        measures=tuple(query.value_columns()),
         fingerprint=fingerprint(query),
         window=(query.window.offset, query.window.limit),
     )
+
+
+def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int] = None,
+                   offset: int = 0) -> Tuple[Tuple[Any, ...], ...]:
+    """The ordered column catalog (REQ-PIV-001): distinct members over E0.
+
+    Members are ordered by value per column, NULLS LAST; ``offset``/``limit``
+    select a column window.  The result feeds ``PivotQuery.column_members``.
+    """
+    from .physical.union_all import filtered
+
+    relation = resolve(query.dataset)
+    schema = relation.schema()
+    query.validate({name: type_family(dtype) for name, dtype in schema.items()})
+    if not query.columns:
+        return ()
+    source = filtered(relation, query).select(*query.columns).distinct()
+    order = [k for c in query.columns for k in (source[c].isnull().cast("int8"), source[c].asc())]
+    expr = source.order_by(order)
+    if limit is not None or offset:
+        expr = expr.limit(limit, offset=offset)
+    verify_scoped(expr)
+    return tuple(tuple(r[c] for c in query.columns) for r in expr.to_pyarrow().to_pylist())

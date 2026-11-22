@@ -7,6 +7,7 @@ import re
 import pytest
 
 from pivot_engine.core.ir import (
+    DerivedMeasure,
     PREDICATE_OPS, STRING_OPS, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup,
     SortKey, Window, from_wire,
 )
@@ -178,3 +179,61 @@ def test_parametric_measures_valid_and_from_wire():
         {"alias": "p", "agg": "percentile", "field": "v", "q": 0.9},
         {"alias": "w", "agg": "weighted_avg", "field": "v", "weight": "w"}]})
     assert query.measures == (MeasureRef("p", "percentile", "v", None, 0.9), MeasureRef("w", "weighted_avg", "v", "w"))
+
+
+@pytest.mark.parametrize("kw, message", [
+    (dict(sort=(SortKey("r"), SortKey("r", True))), "each sort field may appear once."),
+    (dict(columns=("c", "c")), "column dimensions must be unique."),
+    (dict(columns=("zz",)), "column dimension references unknown column 'zz'."),
+    (dict(columns=("r",)), "a dimension cannot be both a row and a column: ['r']"),
+    (dict(column_members=(("x",),)), "column members require column dimensions."),
+    (dict(columns=("flag",), column_members=(("x", "y"),)),
+     "column member ('x', 'y') does not match the columns ['flag']."),
+    (dict(columns=("flag",), column_members=(["x"],)), "column member ['x'] does not match the columns ['flag']."),
+    (dict(columns=("flag",), column_members=((True,), (True,))), "column members must be unique."),
+])
+def test_column_pivot_rules(kw, message):  # REQ-PIV-001
+    bad(message, **kw)
+
+
+def test_column_pivot_cells_and_wire():
+    query = q(columns=("flag",), column_members=((True,), (None,)))
+    query.validate(SCHEMA)
+    assert query.value_columns() == ["s", "__c0__s", "__c1__s"]
+    assert [c[:2] for c in query.cells()] == [(0, (True,)), (1, (None,))]
+    wire = from_wire({"dataset": "d", "rows": ["r"], "measures": [{"alias": "s", "agg": "sum", "field": "v"}],
+                      "columns": ["flag"], "columnMembers": [[True], [None]]})
+    assert (wire.columns, wire.column_members) == (("flag",), ((True,), (None,)))
+
+
+D = DerivedMeasure
+
+
+@pytest.mark.parametrize("derived, message", [  # REQ-AGG-007
+    (D("s", "rank", "s"), "derived measure alias 's' collides with another name."),
+    (D("r", "rank", "s"), "derived measure alias 'r' collides with another name."),
+    (D("d", "median_rank", "s"), "unknown derived measure function 'median_rank'."),
+    (D("d", "rank", "zz"), "derived measure 'd' references unknown measure 'zz'."),
+    (D("d", "ratio", "s"), "ratio requires a denominator."),
+    (D("d", "rank", "s", of2="s"), "rank does not take a denominator."),
+    (D("d", "ratio", "s", of2="zz"), "derived measure 'd' references unknown measure 'zz'."),
+    (D("d", "rank", "s", null_value=0.0), "null_value applies to a ratio and must be a number."),
+    (D("d", "ratio", "s", of2="s", null_value="0"), "null_value applies to a ratio and must be a number."),
+    (D("d", "rank", "s", frame=(None, 0)), "rank does not take a frame."),
+    (D("d", "moving_avg", "s", frame=(1,)), "frame (1,) must be (start, end) row offsets."),
+    (D("d", "moving_avg", "s", frame=(0.5, 1)), "frame (0.5, 1) must be (start, end) row offsets."),
+    (D("d", "moving_avg", "s", frame=(2, 1)), "frame start 2 is after its end 1."),
+])
+def test_derived_measure_rules(derived, message):
+    bad(message, derived=(derived,))
+
+
+def test_derived_measures_valid_and_from_wire():
+    query = q(derived=(D("a", "ratio", "s", "s", null_value=0), D("b", "moving_avg", "s", frame=(-2, None)),
+                       D("cu", "cumulative", "s", frame=(None, None)), D("e", "dense_rank", "s", desc=False)))
+    query.validate(SCHEMA)
+    assert query.value_columns() == ["s", "a", "b", "cu", "e"] and query.aggregate_columns() == ["s"]
+    wire = from_wire({"dataset": "d", "rows": ["r"], "measures": [{"alias": "s", "agg": "sum", "field": "v"}],
+                      "derived": [{"alias": "m", "func": "moving_avg", "of": "s", "frame": [-1, 1]},
+                                  {"alias": "x", "func": "ratio", "of": "s", "of2": "s", "nullValue": 0}]})
+    assert wire.derived == (D("m", "moving_avg", "s", None, True, (-1, 1)), D("x", "ratio", "s", "s", True, None, 0))

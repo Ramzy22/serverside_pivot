@@ -51,12 +51,19 @@ Definitions, for a request over dataset `D`:
 | REQ-AGG-004 | Decimal inputs keep exact decimal arithmetic. Integer sums do not overflow silently. They widen, or they error. |
 | REQ-AGG-005 | Window measures: `rank` is 1-based, ordered by the measure with ties sharing a rank, and partitioned by the parent node. Moving averages use exactly the declared frame. |
 | REQ-AGG-006 | `stddev` and `variance` are the sample statistics and are NULL with fewer than two inputs. `percentile` takes `q` in [0, 1] and interpolates linearly (QUANTILE_CONT). `weighted_avg` uses only complete (value, weight) pairs and is NULL when their total weight is 0. |
+| REQ-AGG-007 | Derived measures are computed over the visible tree. A `ratio` is `num / den`, and a NULL or zero denominator gives the declared `null_value` (default NULL). `percent_of_total` divides by the grand total's value. `cumulative` and `moving_avg` run over siblings in display order within the declared rows frame (default: from the first sibling to the node), ignoring NULLs. |
 
 ## 3a. Order (REQ-SORT)
 
 | Id | Requirement |
 |---|---|
 | REQ-SORT-001 | Siblings are ordered by the sort entries in precedence order. A dimension entry orders only its own level by member value. A measure entry orders the siblings at every level by the node's own value. Ties, and levels without a dimension entry, fall back to the member value ascending. NULL sorts last in both directions, for members and for measure values. A parent always precedes its children. |
+
+## 3b. Column pivot (REQ-PIV)
+
+| Id | Requirement |
+|---|---|
+| REQ-PIV-001 | A column pivot has explicit, ordered column members (the column window). Each cell is the measure over the node's records whose column values equal the member, with null-safe typed equality, so a NULL member is the NULL group. Every registry aggregation is supported in cells, including holistic ones. The node's own measure is the row total. The column catalog is the distinct members over E0, ordered by value with NULLS LAST. Two members whose display keys collide are an error, never a merge. |
 
 ## 4. NULL and identity (REQ-NULL, REQ-ID)
 

@@ -8,7 +8,7 @@ fallback (REQ-AGG-001, F-SILENT).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, FrozenSet, Mapping, Optional, Tuple, Union
+from typing import Any, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 from .registry import REGISTRY, UnknownAggregationError
 
@@ -105,6 +105,32 @@ class Window:
     limit: Optional[int] = None
 
 
+DERIVED_FUNCS = frozenset({"ratio", "percent_of_total", "rank", "dense_rank", "cumulative", "moving_avg"})
+
+
+@dataclass(frozen=True)
+class DerivedMeasure:
+    """A measure computed from base measures over the visible tree (REQ-AGG-005, REQ-AGG-007).
+
+    * ``ratio``: ``of / of2``; a NULL or zero denominator gives ``null_value``.
+    * ``percent_of_total``: ``of`` divided by the grand total's ``of``.
+    * ``rank`` / ``dense_rank``: 1-based among siblings (same parent node) by
+      ``of`` (largest first unless ``desc=False``); ties share a rank; a NULL
+      ``of`` has no rank.
+    * ``cumulative`` / ``moving_avg``: sum / average of ``of`` over siblings in
+      display order, within the rows frame ``frame`` relative to the node
+      (``None`` = unbounded; default from the first sibling to the node).
+    """
+
+    alias: str
+    func: str
+    of: str
+    of2: Optional[str] = None
+    desc: bool = True
+    frame: Optional[Tuple[Optional[int], Optional[int]]] = None
+    null_value: Optional[float] = None
+
+
 @dataclass(frozen=True)
 class PivotQuery:
     dataset: str
@@ -116,6 +142,24 @@ class PivotQuery:
     totals: str = "visible"  # REQ-TOT-003 / REQ-TOT-004
     expanded: Optional[FrozenSet[Tuple[Any, ...]]] = None  # None = everything expanded
     window: Window = field(default_factory=Window)
+    # Column pivot (REQ-PIV-001): the column dimensions and the explicit,
+    # ordered column window of typed members (see exec.column_members).
+    columns: Tuple[str, ...] = ()
+    column_members: Tuple[Tuple[Any, ...], ...] = ()
+    derived: Tuple[DerivedMeasure, ...] = ()
+
+    def cells(self) -> List[Tuple[int, Tuple[Any, ...], MeasureRef, str]]:
+        """(member index, member, measure, output column) for every pivot cell."""
+        return [(j, member, m, cell_name(j, m.alias))
+                for j, member in enumerate(self.column_members) for m in self.measures]
+
+    def aggregate_columns(self) -> List[str]:
+        """Columns produced by aggregation: one per measure (the row total), then one per cell."""
+        return [*(m.alias for m in self.measures), *(c[3] for c in self.cells())]
+
+    def value_columns(self) -> List[str]:
+        """Output value columns: measures, derived measures, then cells."""
+        return [*(m.alias for m in self.measures), *(d.alias for d in self.derived), *(c[3] for c in self.cells())]
 
     def validate(self, schema: Mapping[str, str]) -> PivotQuery:
         """``schema`` maps column -> type family ("string", "integer", "floating", "decimal", ...)."""
@@ -195,6 +239,8 @@ class PivotQuery:
                 raise IRValidationError(f"measure filter level {mf.level} outside 1..{len(self.rows)}.")
             if mf.op not in _COMPARISON_OPS:
                 raise IRValidationError(f"unsupported measure filter operator {mf.op!r}.")
+        if len({s.field for s in self.sort}) != len(self.sort):
+            raise IRValidationError("each sort field may appear once.")
         for s in self.sort:
             if s.field not in self.rows and s.field not in aliases:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
@@ -206,7 +252,51 @@ class PivotQuery:
             for path in self.expanded:
                 if not isinstance(path, tuple) or not 1 <= len(path) < max(1, len(self.rows)):
                     raise IRValidationError(f"expanded path {path!r} is not a parent path.")
+        if len(set(self.columns)) != len(self.columns):
+            raise IRValidationError("column dimensions must be unique.")
+        for name in self.columns:
+            need(name, "column dimension")
+        both = set(self.columns) & set(self.rows)
+        if both:
+            raise IRValidationError(f"a dimension cannot be both a row and a column: {sorted(both)}")
+        if self.column_members and not self.columns:
+            raise IRValidationError("column members require column dimensions.")
+        for member in self.column_members:
+            if not isinstance(member, tuple) or len(member) != len(self.columns):
+                raise IRValidationError(f"column member {member!r} does not match the columns {list(self.columns)}.")
+        if len(set(self.column_members)) != len(self.column_members):
+            raise IRValidationError("column members must be unique.")
+        names = set(aliases) | set(self.rows) | set(self.columns)
+        for d in self.derived:
+            if d.alias in names:
+                raise IRValidationError(f"derived measure alias {d.alias!r} collides with another name.")
+            names.add(d.alias)
+            if d.func not in DERIVED_FUNCS:
+                raise IRValidationError(f"unknown derived measure function {d.func!r}.")
+            if d.of not in aliases:
+                raise IRValidationError(f"derived measure {d.alias!r} references unknown measure {d.of!r}.")
+            if (d.func == "ratio") != (d.of2 is not None):
+                verb = "requires" if d.func == "ratio" else "does not take"
+                raise IRValidationError(f"{d.func} {verb} a denominator.")
+            if d.of2 is not None and d.of2 not in aliases:
+                raise IRValidationError(f"derived measure {d.alias!r} references unknown measure {d.of2!r}.")
+            if d.null_value is not None and (d.func != "ratio" or not isinstance(d.null_value, (int, float))):
+                raise IRValidationError("null_value applies to a ratio and must be a number.")
+            if d.frame is not None:
+                if d.func not in {"cumulative", "moving_avg"}:
+                    raise IRValidationError(f"{d.func} does not take a frame.")
+                if not (isinstance(d.frame, tuple) and len(d.frame) == 2
+                        and all(b is None or isinstance(b, int) for b in d.frame)):
+                    raise IRValidationError(f"frame {d.frame!r} must be (start, end) row offsets.")
+                start, end = d.frame
+                if start is not None and end is not None and start > end:
+                    raise IRValidationError(f"frame start {start} is after its end {end}.")
         return self
+
+
+def cell_name(member_index: int, alias: str) -> str:
+    """Output column of one pivot cell; display names are an edge concern."""
+    return f"__c{member_index}__{alias}"
 
 
 def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> PivotQuery:
@@ -232,6 +322,14 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             totals=obj.get("totals", "visible"),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
+            columns=tuple(obj.get("columns", ())),
+            column_members=tuple(tuple(m) for m in obj.get("columnMembers", ())),
+            derived=tuple(
+                DerivedMeasure(d["alias"], d["func"], d["of"], d.get("of2"), bool(d.get("desc", True)),
+                               None if d.get("frame") is None else (d["frame"][0], d["frame"][1]),
+                               d.get("nullValue"))
+                for d in obj.get("derived", ())
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise IRValidationError(f"malformed query: {exc!r}") from None

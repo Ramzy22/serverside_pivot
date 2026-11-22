@@ -24,7 +24,7 @@ import os
 import pathlib
 import threading
 from collections import Counter
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 __all__ = ["STATS", "classify", "compare_views", "core_mode", "record_shadow", "record_unsupported"]
 
@@ -49,11 +49,25 @@ def _shadow_dir() -> pathlib.Path:
 # --------------------------------------------------------------------- normalisation
 
 
-def _path(row: Mapping[str, Any]) -> Optional[Tuple[Any, ...]]:
-    """Identity of a legacy or core row; ``None`` means the grand total."""
-    if row.get("_isTotal") and row.get("_path") == "__grand_total__":
-        return None
-    return tuple(row.get(f) for f in row.get("_pathFields") or [])
+GRAND_TOTAL = ("<grand total>",)
+
+
+def _is_grand_total(row: Mapping[str, Any]) -> bool:
+    return bool(row.get("_isTotal")) and (row.get("_path") == "__grand_total__" or row.get("_id") == "Grand Total")
+
+
+def _path(row: Mapping[str, Any], rows: Sequence[str]) -> Tuple[Any, ...]:
+    """Typed identity of a row; legacy fast paths omit ``_pathFields``, so fall back to depth."""
+    if _is_grand_total(row):
+        return GRAND_TOTAL
+    fields = row.get("_pathFields")
+    if not fields:
+        fields = list(rows[: int(row.get("depth") or 0) + 1])
+    return tuple(row.get(f) for f in fields)
+
+
+def _value_keys(a: Mapping[str, Any], b: Mapping[str, Any], rows: Sequence[str]) -> List[str]:
+    return sorted(k for k in set(a) | set(b) if not k.startswith("_") and k != "depth" and k not in rows)
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -64,38 +78,36 @@ def _same(a: Any, b: Any) -> bool:
     try:
         return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-9)
     except (TypeError, ValueError):
-        return a == b
+        return bool(a == b)
 
 
-def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], measures: Sequence[str]) -> List[Dict[str, Any]]:
+def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], rows: Sequence[str]) -> List[Dict[str, Any]]:
     """Differences between two ``run_hierarchy_view`` results (rows, order, values, totals)."""
     diffs: List[Dict[str, Any]] = []
-    legacy_rows = [r for r in legacy.get("rows") or [] if _path(r) is not None]
-    core_rows = [r for r in core.get("rows") or [] if _path(r) is not None]
-    legacy_gts = [r for r in legacy.get("rows") or [] if _path(r) is None]
-    lp, cp = [_path(r) for r in legacy_rows], [_path(r) for r in core_rows]
+    legacy_rows = list(legacy.get("rows") or [])
+    core_rows = list(core.get("rows") or [])
+    lp, cp = [_path(r, rows) for r in legacy_rows], [_path(r, rows) for r in core_rows]
     if lp != cp:
         diffs.append({"kind": "rows", "legacy_only": [list(p) for p in lp if p not in cp],
                       "core_only": [list(p) for p in cp if p not in lp],
                       "order_only": sorted(map(repr, lp)) == sorted(map(repr, cp))})
-    core_by_path = {_path(r): r for r in core_rows}
-    for row in legacy_rows:
-        other = core_by_path.get(_path(row))
+    core_by_path = {p: r for p, r in zip(cp, core_rows, strict=True)}
+    for path, row in zip(lp, legacy_rows, strict=True):
+        other = core_by_path.get(path)
         if other is None:
             continue
-        bad = {m: [row.get(m), other.get(m)] for m in measures if not _same(row.get(m), other.get(m))}
+        bad = {k: [row.get(k), other.get(k)] for k in _value_keys(row, other, rows)
+               if not _same(row.get(k), other.get(k))}
         if bad:
-            diffs.append({"kind": "values", "path": list(_path(row) or ()), "depth": len(_path(row) or ()),
+            diffs.append({"kind": "values", "path": list(path), "depth": 0 if path == GRAND_TOTAL else len(path),
                           "measures": bad})
     lgt, cgt = legacy.get("grand_total_row"), core.get("grand_total_row")
     if (lgt is None) != (cgt is None):
         diffs.append({"kind": "grand_total_presence", "legacy": lgt is not None, "core": cgt is not None})
-    elif lgt is not None:
-        bad = {m: [lgt.get(m), cgt.get(m)] for m in measures if not _same(lgt.get(m), cgt.get(m))}
+    elif lgt is not None and cgt is not None:
+        bad = {k: [lgt.get(k), cgt.get(k)] for k in _value_keys(lgt, cgt, rows) if not _same(lgt.get(k), cgt.get(k))}
         if bad:
             diffs.append({"kind": "grand_total_values", "measures": bad})
-    if legacy_gts:
-        diffs.append({"kind": "grand_total_in_rows", "count": len(legacy_gts)})
     if legacy.get("total_rows") is not None and legacy.get("total_rows") != core.get("total_rows"):
         diffs.append({"kind": "total_rows", "legacy": legacy.get("total_rows"), "core": core.get("total_rows")})
     return diffs
@@ -104,25 +116,32 @@ def compare_views(legacy: Mapping[str, Any], core: Mapping[str, Any], measures: 
 # --------------------------------------------------------------------- classification
 
 
-def _has_null_dimension(rows: Sequence[Mapping[str, Any]]) -> bool:
-    return any(v is None for r in rows for v in (_path(r) or ()))
+def _has_null_dimension(rows: Sequence[Mapping[str, Any]], dims: Sequence[str]) -> bool:
+    return any(v is None for r in rows if not _is_grand_total(r) for v in _path(r, dims))
 
 
 def classify(diff: Mapping[str, Any], *, spec_summary: Mapping[str, Any], core_rows: Sequence[Mapping[str, Any]],
              legacy: Mapping[str, Any]) -> str:
     """Attribute one diff to an audited legacy finding, or ``unclassified``."""
-    has_null = _has_null_dimension(core_rows) or bool(spec_summary.get("data_has_null_dimension"))
+    has_null = _has_null_dimension(core_rows, spec_summary.get("rows") or []) or bool(
+        spec_summary.get("data_has_null_dimension"))
     aggs = {str(a).lower() for a in spec_summary.get("aggs", ())}
     measure_filtered = bool(spec_summary.get("measure_filters"))
     kind = diff["kind"]
-    if has_null and kind in {"rows", "grand_total_in_rows", "grand_total_values", "grand_total_presence",
-                             "total_rows"}:
+    if has_null and kind in {"rows", "values", "grand_total_values", "grand_total_presence", "total_rows"}:
         legacy_only = diff.get("legacy_only") or []
         core_only = diff.get("core_only") or []
         if any(None in p for p in core_only) or kind != "rows" or not legacy_only:
             return "legacy:F-NULL-GT" if kind != "rows" or any(len(p) == 1 for p in core_only) else "legacy:F-NULL-LEAF"
     if measure_filtered and kind in {"values", "grand_total_values", "rows", "total_rows"}:
         return "legacy:F-TOT-MF-PARENT"
+    windows = spec_summary.get("windows") or {}
+    if kind in {"values", "grand_total_values"} and set(diff.get("measures") or ()) <= set(windows):
+        funcs = {windows[k] for k in diff.get("measures") or ()}
+        if funcs <= {"rank", "dense_rank"}:
+            return "legacy:F-RANK"
+        if funcs <= {"moving_avg", "running_avg"}:
+            return "legacy:F-MOVING-AVG"
     if kind == "values" and diff.get("depth", 0) < spec_summary.get("depth", 0) and aggs & _HOLISTIC_OR_EXTREMA:
         return "legacy:F-TOT-FALLBACK"
     if kind == "rows" and spec_summary.get("has_case_variants"):
@@ -132,9 +151,9 @@ def classify(diff: Mapping[str, Any], *, spec_summary: Mapping[str, Any], core_r
     return "unclassified"
 
 
-def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any], core: Mapping[str, Any],
-                  measures: Sequence[str]) -> List[Dict[str, Any]]:
-    diffs = compare_views(legacy, core, measures)
+def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any],
+                  core: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    diffs = compare_views(legacy, core, spec_summary.get("rows") or [])
     for d in diffs:
         d["class"] = classify(d, spec_summary=spec_summary, core_rows=core.get("rows") or [], legacy=legacy)
     with _LOCK:
@@ -184,5 +203,7 @@ def summarize_spec(spec: Any, query_filters_have_case_insensitive_in: bool = Fal
         "aggs": [m.agg for m in getattr(spec, "measures", []) or []],
         "measures": sorted(aliases),
         "measure_filters": len(measure_filters),
+        "windows": {m.alias: str(m.window_func).lower() for m in getattr(spec, "measures", []) or []
+                    if getattr(m, "window_func", None)},
         "has_case_insensitive_membership": any(ci_membership(f) for f in getattr(spec, "filters", []) or []),
     }

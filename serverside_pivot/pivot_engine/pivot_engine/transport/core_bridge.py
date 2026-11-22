@@ -20,16 +20,16 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
-from ..core.exec import execute
+from ..core.exec import column_members, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    DerivedMeasure, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
 from ..core.registry import type_family
 
-__all__ = ["CoreUnsupported", "core_hierarchy_view", "spec_to_query"]
+__all__ = ["CoreUnsupported", "core_hierarchy_view", "legacy_column_key", "spec_to_query"]
 
 GRAND_TOTAL_ID = "Grand Total"
 ALL_EXPANDED = "__ALL__"
@@ -144,14 +144,61 @@ def _filters(spec: Any, aliases: FrozenSet[str], families: Mapping[str, str], de
 # --------------------------------------------------------------------- spec -> IR
 
 
-def _measure(m: Any, reasons: List[str]) -> Optional[MeasureRef]:
+HIDDEN = "__base_"
+_WINDOWS = {"rank": "rank", "dense_rank": "dense_rank", "cumulative": "cumulative", "running_avg": "moving_avg",
+            "moving_avg": "moving_avg", "percent_of_total": "percent_of_total",
+            "percent_of_grand_total": "percent_of_total"}
+
+
+def _measures(spec: Any, reasons: List[str]) -> Tuple[List[MeasureRef], List[DerivedMeasure]]:
+    """Base measures plus derived ones (ratios, window measures over a hidden base measure)."""
+    base: List[MeasureRef] = []
+    derived: List[DerivedMeasure] = []
+    ratios = []
+    for m in spec.measures or []:
+        if getattr(m, "ratio_numerator", None):
+            ratios.append(m)
+            continue
+        func = getattr(m, "window_func", None)
+        if func:
+            name = _WINDOWS.get(str(func).strip().lower())
+            if name is None:
+                reasons.append(f"window function {func!r}")
+                continue
+            if getattr(m, "window_group_by", None) is not None or getattr(m, "window_order_by", None):
+                reasons.append("window partition or order override")
+                continue
+            ref = _measure(m, reasons, alias=HIDDEN + str(m.alias))
+            if ref is None:
+                continue
+            base.append(ref)
+            frame = None
+            if str(func).strip().lower() == "moving_avg" and (
+                    m.window_frame_start is not None or m.window_frame_end is not None):
+                frame = (m.window_frame_start, 0 if m.window_frame_end is None else m.window_frame_end)
+            derived.append(DerivedMeasure(str(m.alias), name, ref.alias, frame=frame))
+            continue
+        ref = _measure(m, reasons)
+        if ref is not None:
+            base.append(ref)
+    plain = {b.alias for b in base}
+    for m in ratios:
+        num, den = str(m.ratio_numerator), str(m.ratio_denominator or "")
+        if num not in plain or den not in plain:
+            reasons.append("ratio of a derived or unknown measure")
+            continue
+        derived.append(DerivedMeasure(str(m.alias), "ratio", num, den,
+                                      null_value=None if m.ratio_null_value is None else float(m.ratio_null_value)))
+    return base, derived
+
+
+def _measure(m: Any, reasons: List[str], *, alias: Optional[str] = None) -> Optional[MeasureRef]:
     agg = _AGG.get(str(m.agg or "sum").strip().lower())
     if agg is None:
         reasons.append(f"aggregation {m.agg!r}")
         return None
     for attr, label in (("expression", "measure expression"), ("separator", "string aggregation"),
-                        ("filter_condition", "conditional measure"), ("ratio_numerator", "ratio measure"),
-                        ("window_func", "window measure")):
+                        ("filter_condition", "conditional measure")):
         if getattr(m, attr, None):
             reasons.append(label)
             return None
@@ -161,7 +208,7 @@ def _measure(m: Any, reasons: List[str]) -> Optional[MeasureRef]:
     field = None if m.field in (None, "*") else str(m.field)
     weight = getattr(m, "weighted_field", None) if agg == "weighted_avg" else None
     q = getattr(m, "percentile", None) if agg == "percentile" else None
-    return MeasureRef(str(m.alias), agg, field, weight, None if q is None else float(q))
+    return MeasureRef(alias or str(m.alias), agg, field, weight, None if q is None else float(q))
 
 
 def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str]) -> Optional[FrozenSet[Tuple[Any, ...]]]:
@@ -180,10 +227,15 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
 
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
                   end_row: Optional[int] = None) -> PivotQuery:
-    """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason."""
+    """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
+
+    The query's window addresses the legacy flattened list (nodes in tree
+    order; the core orders the grand total first, hence the +1).  Column
+    members are left empty: :func:`core_hierarchy_view` resolves them.
+    """
     reasons: List[str] = []
     families = {name: type_family(dtype) for name, dtype in schema.items()}
-    for attr, label in (("columns", "column pivot"), ("custom_dimensions", "custom dimensions"),
+    for attr, label in (("custom_dimensions", "custom dimensions"),
                         ("having", "having"), ("subtotals", "explicit subtotals"),
                         ("drill_paths", "drill paths"), ("cursor", "keyset cursor"),
                         ("grouping_config", "grouping sets")):
@@ -194,15 +246,24 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     axis = getattr(spec, "measure_axis", None)
     if axis is not None and getattr(axis, "placement", "none") != "none":
         reasons.append("measure axis")
+    columns = [str(c) for c in getattr(spec, "columns", None) or []]
     cfg = getattr(spec, "pivot_config", None)
-    if cfg is not None and (cfg.top_n or cfg.order_by_measure or cfg.column_cursor or cfg.materialized_column_values):
-        reasons.append("column pivot options")
+    if columns:
+        if cfg is None or not cfg.enabled:
+            reasons.append("column pivot without pivot_config")
+        elif cfg.materialized_column_values is None and (cfg.top_n or cfg.order_by_measure or cfg.column_cursor):
+            reasons.append("column pivot options")
+        unknown_columns = [c for c in columns if c not in families]
+        if unknown_columns:
+            reasons.append(f"unknown column fields {unknown_columns}")
     if getattr(spec, "offset", 0):
         reasons.append("spec offset")
 
     rows = [str(r) for r in spec.rows or []]
-    measures = [m for m in (_measure(m, reasons) for m in spec.measures or []) if m is not None]
-    aliases = frozenset(m.alias for m in measures)
+    measures, derived = _measures(spec, reasons)
+    aliases = frozenset(m.alias for m in measures if not m.alias.startswith(HIDDEN))
+    if derived and columns:
+        reasons.append("derived measure with column pivot")
     unknown = [r for r in rows if r not in families]
     if unknown:
         reasons.append(f"unknown row fields {unknown}")
@@ -212,16 +273,20 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     for s in raw_sort:
         if s.get("sortKeyField"):
             reasons.append("custom member order")
-        elif s.get("field") in rows or s.get("field") in aliases:
+        elif s.get("field") in rows or (s.get("field") in aliases and not columns):
             sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc"))
+        elif s.get("field") in aliases:
+            reasons.append("sort by measure with column pivot")
         else:
             reasons.append(f"sort on {s.get('field')!r}")
 
     filters, measure_filters = _filters(spec, aliases, families, len(rows), reasons)
+    if measure_filters and columns:
+        reasons.append("measure filter with column pivot")
     if reasons:
         raise CoreUnsupported(reasons)
 
-    offset = max(0, int(start_row)) + 1  # the core orders the grand total first; legacy rows exclude it
+    offset = max(0, int(start_row)) + 1
     limit = None if end_row is None else max(0, int(end_row) - int(start_row) + 1)
     return PivotQuery(
         dataset=str(spec.table),
@@ -232,22 +297,65 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         sort=tuple(sort),
         expanded=_expanded(target_paths, rows, families) if rows else None,
         window=Window(offset, limit),
+        columns=tuple(columns),
+        derived=tuple(derived),
     )
+
+
+# --------------------------------------------------------------------- columns
+
+
+def legacy_column_key(member: Sequence[Any]) -> str:
+    """The legacy display key of a column member (``str`` of each value joined by ``|``)."""
+    return str(member[0]) if len(member) == 1 else "|".join(str(v) for v in member)
+
+
+def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any]) -> Tuple[PivotQuery, List[str]]:
+    """Bind the column window: every member, or the legacy-selected keys, in their order."""
+    if not query.columns:
+        return query, []
+    members = column_members(query, resolver)
+    by_key: Dict[str, Tuple[Any, ...]] = {}
+    for member in members:
+        key = legacy_column_key(member)
+        if key in by_key:
+            raise CoreUnsupported([f"ambiguous pivot column key {key!r}"])  # F-PIVOT-DELIM
+        by_key[key] = member
+    wanted = getattr(spec.pivot_config, "materialized_column_values", None)
+    keys = list(by_key) if wanted is None else [str(k) for k in wanted if str(k) in by_key]
+    return replace(query, column_members=tuple(by_key[k] for k in keys)), keys
 
 
 # --------------------------------------------------------------------- frame -> legacy rows
 
 
-def _legacy_row(record: Mapping[str, Any], rows: Sequence[str]) -> Dict[str, Any]:
+def _legacy_values(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str],
+                   totals_column: bool) -> Dict[str, Any]:
+    values = record["values"]
+    if not query.columns:
+        return {k: v for k, v in values.items() if not k.startswith(HIDDEN)}
+    out: Dict[str, Any] = {}
+    for j, _member, m, name in query.cells():
+        out[f"{keys[j]}_{m.alias}"] = values[name]
+    if totals_column:
+        for m in query.measures:
+            out[f"__RowTotal__{m.alias}"] = values[m.alias]
+    return out
+
+
+def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str] = (),
+                totals_column: bool = False) -> Dict[str, Any]:
+    rows = query.rows
     path = record["path"]
+    values = _legacy_values(record, query, keys, totals_column)
     if not path:
         out: Dict[str, Any] = {f: None for f in rows[:1]}
-        out.update(record["values"])
+        out.update(values)
         out.update({"_id": GRAND_TOTAL_ID, "_isTotal": True, "_path": GRAND_TOTAL_DISPLAY_PATH, "depth": 0,
                     "_key": record["key"]})
         return out
     out = dict(record["dims"])
-    out.update(record["values"])
+    out.update(values)
     last = path[-1]
     out.update({
         "_id": "" if last is None else str(last),
@@ -271,37 +379,48 @@ def core_hierarchy_view(
 ) -> Dict[str, Any]:
     """The ``run_hierarchy_view`` contract, answered by the core.
 
-    ``rows`` are the visible nodes in tree order, excluding the grand total,
-    windowed by the inclusive ``[start_row, end_row]``; ``total_rows`` counts
-    them plus the grand total; ``grand_total_row`` is returned separately.
+    The flattened list is the visible nodes in tree order followed, when
+    ``spec.totals``, by the grand total.  ``rows`` is its inclusive
+    ``[start_row, end_row]`` window and ``total_rows`` its length;
+    ``grand_total_row`` is returned only when requested and enabled.
     """
     relation = resolve(spec.table)
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
-    frame = execute(query, resolver)
-    rows = [_legacy_row(r, query.rows) for r in frame.records()]
+    query, keys = _resolve_members(query, spec, resolver)
+    totals = bool(getattr(spec, "totals", False))
+    totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
+
+    def legacy(record: Mapping[str, Any]) -> Dict[str, Any]:
+        return _legacy_row(record, query, keys, totals_column)
+
+    nodes = _visible_node_count(query, relation, total_cache) - 1
+    rows = [legacy(r) for r in execute(query, resolver).records()]
     grand_total = None
-    if include_grand_total_row:
+    if totals and (include_grand_total_row or int(start_row) <= nodes <= int(end_row)):
         gt = execute(replace(query, window=Window(0, 1)), resolver).records()
-        grand_total = _legacy_row(gt[0], query.rows) if gt else None
-    total = _visible_node_count(query, relation, total_cache)
+        grand_total = legacy(gt[0])
+        if int(start_row) <= nodes <= int(end_row):
+            rows.append(dict(grand_total))
+    formula_sources: List[Dict[str, Any]] = []
+    if totals and include_grand_total_row and query.rows:
+        top = execute(replace(query, expanded=frozenset(), window=Window(1, None)), resolver).records()
+        formula_sources = [legacy(r) for r in top]
     from ..hierarchy_rows import compute_hierarchy_color_scale_stats
 
     return {
         "rows": rows,
-        "total_rows": total,
-        "grand_total_row": grand_total,
-        "grand_total_formula_source_rows": [],
-        "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), []),
+        "total_rows": nodes + (1 if totals else 0),
+        "grand_total_row": grand_total if include_grand_total_row else None,
+        "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
+        "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
         "profile": {"engine": "core"},
     }
 
 
 def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[str, int]]) -> int:
-    """Visible nodes including the grand total (the legacy ``total_rows``)."""
-    from ..core.exec import fingerprint
-
-    unwindowed = replace(query, window=Window())
+    """Rows of the core tree including its grand total."""
+    unwindowed = replace(query, window=Window(), column_members=(), derived=())  # cells/derived never change it
     key = fingerprint(unwindowed)
     if cache is not None and key in cache:
         return cache[key]

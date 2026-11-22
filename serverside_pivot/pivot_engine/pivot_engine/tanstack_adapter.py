@@ -2412,7 +2412,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         try:
             summary = core_shadow.summarize_spec(pivot_spec)
             summary["has_case_variants"] = _has_case_variant_siblings(core_view.get("rows") or [])
-            core_shadow.record_shadow(summary, legacy_view, core_view, summary["measures"])
+            core_shadow.record_shadow(summary, legacy_view, core_view)
         except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
             _adapter_logger.warning("core shadow comparison failed", exc_info=True)
         return legacy_view

@@ -27,8 +27,8 @@ def _count(col: Any, t: Any, _m: Any) -> Any:
     return t.count() if col is None else col.count()
 
 
-def _weighted_avg(col: Any, t: Any, m: Any) -> Any:
-    weight = t[m.weight]
+def _weighted_avg(col: Any, t: Any, m: Any, weight: Any = None) -> Any:
+    weight = t[m.weight] if weight is None else weight
     valid = col.notnull() & weight.notnull()  # only complete (x, w) pairs count
     numerator = valid.ifelse(col.cast("float64") * weight.cast("float64"), ibis.null()).sum()
     denominator = valid.ifelse(weight.cast("float64"), ibis.null()).sum()
@@ -61,9 +61,17 @@ def check_drift(registry: Registry) -> None:
         )
 
 
-def lower(measure: Any, table: Any) -> Any:
+def lower(measure: Any, table: Any, condition: Any = None) -> Any:
+    """Aggregate ``measure``; with ``condition``, over the matching records only (a pivot cell)."""
     REGISTRY.get(measure.agg)  # unknown aggregation -> typed error
-    column = None if measure.field is None else table[measure.field]
+    if condition is None:
+        column = None if measure.field is None else table[measure.field]
+        return LOWERINGS[measure.agg](column, table, measure)
+    if measure.field is None:  # count(*) of the matching records
+        return ibis.ifelse(condition, 1, ibis.null()).count()
+    column = condition.ifelse(table[measure.field], ibis.null())
+    if measure.agg == "weighted_avg":
+        return _weighted_avg(column, table, measure, condition.ifelse(table[measure.weight], ibis.null()))
     return LOWERINGS[measure.agg](column, table, measure)
 
 

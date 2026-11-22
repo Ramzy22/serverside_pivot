@@ -88,15 +88,26 @@ def test_expansion_paths_are_coerced_and_filtered():
 
 
 @pytest.mark.parametrize("kw, reason", [
-    (dict(columns=["c"]), "column pivot"),
+    (dict(columns=["c"]), "column pivot without pivot_config"),
+    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True), sort=[{"field": "v_sum"}]),
+     "sort by measure with column pivot"),
+    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True),
+          filters=[{"field": "v_sum", "op": ">", "value": 1}]), "measure filter with column pivot"),
+    (dict(rows=["r"], columns=["zz"], pivot_config=PivotConfig(enabled=True)), "unknown column fields ['zz']"),
     (dict(custom_dimensions=[{"id": "x"}]), "custom dimensions"),
     (dict(having=[{"field": "v_sum"}]), "having"),
     (dict(group_allow_unbalanced=True), "unbalanced hierarchy"),
     (dict(measure_axis=MeasureAxisConfig(placement="rows")), "measure axis"),
-    (dict(pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
+    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
     (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "__sortkey__r"}]), "custom member order"),
     (dict(measures=[Measure(field="v", agg="mode", alias="m")]), "aggregation 'mode'"),
-    (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="rank")]), "window measure"),
+    (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="ntile")]), "window function 'ntile'"),
+    (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="rank", window_group_by=["r"])]),
+     "window partition or order override"),
+    (dict(measures=[Measure(field="v", agg="sum", alias="m", ratio_numerator="v_sum", ratio_denominator="zz")]),
+     "ratio of a derived or unknown measure"),
+    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True),
+          measures=[Measure(field="v", agg="sum", alias="m", window_func="rank")]), "derived measure with column pivot"),
     (dict(measures=[Measure(field="v", agg="sum", alias="m", null_handling="as_zero")]), "null handling 'as_zero'"),
     (dict(filters=[{"field": "zz", "op": "=", "value": 1}]), "filter on unknown field 'zz'"),
     (dict(filters=[{"field": "v", "op": "=", "value": "abc"}]), "value 'abc' is not a integer"),
@@ -113,34 +124,67 @@ def test_unsupported_features_are_named(kw, reason):
 def test_all_reasons_are_reported_together():
     with pytest.raises(CoreUnsupported) as info:
         spec_to_query(spec(columns=["c"], custom_dimensions=[{"id": "x"}]), True, SCHEMA)
-    assert info.value.reasons == ("column pivot", "custom dimensions")
+    assert info.value.reasons == ("column pivot without pivot_config", "custom dimensions")
 
 
 def test_hierarchy_view_contract():
     con = _con()
-    view = core_hierarchy_view(con.table, spec(), [["__ALL__"]], 0, 100, include_grand_total_row=True)
-    paths = [(r["_path"], r["v_sum"], r["depth"], r["_pathFields"]) for r in view["rows"]]
+    view = core_hierarchy_view(con.table, spec(totals=True), [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    paths = [(r["_path"], r["v_sum"], r["depth"], r.get("_pathFields")) for r in view["rows"]]
     assert paths == [
         ("A", 6, 0, ["r"]), ("A|||x", 1, 1, ["r", "c"]), ("A|||y", 5, 1, ["r", "c"]),
         ("B", 7, 0, ["r"]), ("B|||", 7, 1, ["r", "c"]),
         ("", 2, 0, ["r"]), ("|||y", 2, 1, ["r", "c"]),
+        ("__grand_total__", 15, 0, None),  # legacy places the grand total last in the flattened list
     ]
     assert view["rows"][5]["r"] is None and view["rows"][5]["_key"] != view["rows"][6]["_key"]
     gt = view["grand_total_row"]
     assert (gt["_id"], gt["_isTotal"], gt["_path"], gt["v_sum"], gt["r"]) == ("Grand Total", True, "__grand_total__", 15,
                                                                                None)
     assert view["total_rows"] == 8  # 7 nodes + the grand total
+    assert [r["_path"] for r in view["grand_total_formula_source_rows"]] == ["A", "B", ""]
     assert view["profile"] == {"engine": "core"}
+
+
+def test_without_totals_there_is_no_grand_total():
+    con = _con()
+    view = core_hierarchy_view(con.table, spec(), [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    assert [r["_path"] for r in view["rows"]][-1] == "|||y"
+    assert view["total_rows"] == 7 and view["grand_total_row"] is None
 
 
 def test_hierarchy_view_windows_and_collapsed_paths():
     con = _con()
-    window = core_hierarchy_view(con.table, spec(), [["__ALL__"]], 1, 2)
+    window = core_hierarchy_view(con.table, spec(totals=True), [["__ALL__"]], 1, 2)
     assert [r["_path"] for r in window["rows"]] == ["A|||x", "A|||y"]
-    assert window["grand_total_row"] is None
-    collapsed = core_hierarchy_view(con.table, spec(), [["A"]], 0, 100)
-    assert [r["_path"] for r in collapsed["rows"]] == ["A", "A|||x", "A|||y", "B", ""]
+    assert window["grand_total_row"] is None and window["grand_total_formula_source_rows"] is None
+    tail = core_hierarchy_view(con.table, spec(totals=True), [["__ALL__"]], 6, 9)
+    assert [r["_path"] for r in tail["rows"]] == ["|||y", "__grand_total__"]
+    collapsed = core_hierarchy_view(con.table, spec(totals=True), [["A"]], 0, 100)
+    assert [r["_path"] for r in collapsed["rows"]] == ["A", "A|||x", "A|||y", "B", "", "__grand_total__"]
     assert collapsed["total_rows"] == 6
+
+
+def test_column_pivot_cells_use_legacy_keys():  # REQ-PIV-001
+    con = _con()
+    s = spec(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True), totals=True)
+    view = core_hierarchy_view(con.table, s, [], 0, 100, include_grand_total_row=True)
+    a = view["rows"][0]
+    assert {k: v for k, v in a.items() if not k.startswith("_") and k not in {"depth", "r"}} == {
+        "x_v_sum": 1, "y_v_sum": 5, "None_v_sum": None}
+    assert view["grand_total_row"]["None_v_sum"] == 7 and "v_sum" not in view["grand_total_row"]
+    windowed = replace(s, pivot_config=PivotConfig(enabled=True, materialized_column_values=["y", "zz"],
+                                                   include_totals_column=True))
+    row = core_hierarchy_view(con.table, windowed, [], 0, 0)["rows"][0]
+    assert {k: v for k, v in row.items() if k.endswith("v_sum")} == {"y_v_sum": 5, "__RowTotal__v_sum": 6}
+
+
+def test_ambiguous_column_keys_are_unsupported():
+    con = ibis.duckdb.connect()
+    con.create_table("t", pa.table({"r": ["A", "A"], "c": ["None", None], "v": [1, 2]}))
+    s = spec(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True))
+    with pytest.raises(CoreUnsupported, match="ambiguous pivot column key 'None'"):
+        core_hierarchy_view(con.table, s, [], 0, 10)
 
 
 def test_total_rows_cache_is_keyed_by_query_meaning():
@@ -155,11 +199,31 @@ def test_total_rows_cache_is_keyed_by_query_meaning():
 def test_measure_filter_view_has_visible_totals():
     con = _con()
     s = spec(filters=[{"field": "v_sum", "op": ">", "value": 3}])
-    view = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, 100, include_grand_total_row=True)
-    assert [(r["_path"], r["v_sum"]) for r in view["rows"]] == [("A", 5), ("A|||y", 5), ("B", 7), ("B|||", 7)]
+    view = core_hierarchy_view(con.table, replace(s, totals=True), [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    assert [(r["_path"], r["v_sum"]) for r in view["rows"]] == [("A", 5), ("A|||y", 5), ("B", 7), ("B|||", 7),
+                                                                ("__grand_total__", 12)]
     assert view["grand_total_row"]["v_sum"] == 12
 
 
 def test_spec_offset_is_rejected_not_reinterpreted():
     with pytest.raises(CoreUnsupported, match="spec offset"):
         spec_to_query(replace(spec(), offset=10), True, SCHEMA)
+
+
+def test_window_and_ratio_measures_map_to_derived():  # REQ-AGG-005, REQ-AGG-007
+    con = _con()
+    s = spec(rows=["r"], totals=True, measures=[
+        Measure(field="v", agg="sum", alias="v_sum"), Measure(field="v", agg="count", alias="n"),
+        Measure(field="v", agg="sum", alias="rk", window_func="rank"),
+        Measure(field="v", agg="sum", alias="mv", window_func="moving_avg", window_frame_start=-1),
+        Measure(field="v", agg="sum", alias="avg", ratio_numerator="v_sum", ratio_denominator="n"),
+    ])
+    q = spec_to_query(s, True, SCHEMA)
+    assert [m.alias for m in q.measures] == ["v_sum", "n", "__base_rk", "__base_mv"]
+    assert [(d.alias, d.func, d.of, d.of2, d.frame) for d in q.derived] == [
+        ("rk", "rank", "__base_rk", None, None), ("mv", "moving_avg", "__base_mv", None, (-1, 0)),
+        ("avg", "ratio", "v_sum", "n", None)]
+    rows = core_hierarchy_view(con.table, s, [], 0, 10)["rows"]
+    assert [(r["_path"], r["rk"], r["mv"], r["avg"]) for r in rows] == [
+        ("A", 2, 6.0, 3.0), ("B", 1, 6.5, 7.0), ("", 3, 4.5, 2.0), ("__grand_total__", 1, 15.0, 3.75)]
+    assert not any(k.startswith("__base_") for r in rows for k in r)
