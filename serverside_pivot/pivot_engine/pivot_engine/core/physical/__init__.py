@@ -6,16 +6,22 @@ to it (tests/core/test_strategy_equivalence.py).
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List, Tuple
 
 from ..logical import LogicalPlan
 from . import leaf_partials, union_all
 
-__all__ = ["STRATEGIES", "choose", "leaf_partials", "union_all"]
+__all__ = ["STRATEGIES", "TREES", "choose", "leaf_partials", "union_all"]
 
 STRATEGIES: Dict[str, Callable[[LogicalPlan, Any], Any]] = {
     "union_all": union_all.lower,
     "leaf_partials": leaf_partials.lower,
+}
+
+# Unordered tree + order key, for materialized pagination (core/pagination.py).
+TREES: Dict[str, Callable[[LogicalPlan, Any], Tuple[Any, List[Any]]]] = {
+    "union_all": union_all.tree_of,
+    "leaf_partials": leaf_partials.tree_of,
 }
 
 

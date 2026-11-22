@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .authority.scope import current_scope
 
@@ -52,7 +52,13 @@ def _default_size(value: Any) -> int:
 
 
 class CacheManager:
-    def __init__(self, budgets: Optional[Dict[str, int]] = None, sizeof: Callable[[Any], int] = _default_size):
+    def __init__(
+        self,
+        budgets: Optional[Dict[str, int]] = None,
+        sizeof: Callable[[Any], int] = _default_size,
+        on_evict: Optional[Callable[[CacheKey, Any], None]] = None,
+    ):
+        self._on_evict = on_evict
         self._budgets = {t: (budgets or {}).get(t, 256 * 1024 * 1024) for t in TIERS}
         self._sizeof = sizeof
         self._lock = threading.Lock()
@@ -76,15 +82,22 @@ class CacheManager:
         size = max(0, int(self._sizeof(value)))
         with self._lock:
             entries = self._entries[key.tier]
+            dropped: List[Tuple[CacheKey, Any]] = []
             if key in entries:
-                self._used[key.tier] -= entries.pop(key)[1]
+                old_value, old_size = entries.pop(key)
+                self._used[key.tier] -= old_size
+                if old_value is not value:
+                    dropped.append((key, old_value))
             if size > self._budgets[key.tier]:
-                return  # larger than the whole tier: never cached
-            entries[key] = (value, size)
-            self._used[key.tier] += size
-            while self._used[key.tier] > self._budgets[key.tier]:
-                _, (_, evicted) = entries.popitem(last=False)
-                self._used[key.tier] -= evicted
+                dropped.append((key, value))  # larger than the whole tier: never cached
+            else:
+                entries[key] = (value, size)
+                self._used[key.tier] += size
+                while self._used[key.tier] > self._budgets[key.tier]:
+                    evicted_key, (evicted_value, evicted_size) = entries.popitem(last=False)
+                    self._used[key.tier] -= evicted_size
+                    dropped.append((evicted_key, evicted_value))
+        self._release(dropped)
 
     def get_or_compute(self, key: CacheKey, compute: Callable[[], Any]) -> Any:
         cached = self.get(key)
@@ -97,15 +110,31 @@ class CacheManager:
     def invalidate(self, *, dataset: Optional[str] = None, tiers: Iterable[str] = TIERS,
                    keep_revision: Optional[str] = None) -> int:
         """Drop entries of ``dataset`` (all if None), except those at ``keep_revision``."""
-        removed = 0
+        dropped: List[Tuple[CacheKey, Any]] = []
         with self._lock:
             for tier in tiers:
                 entries = self._entries[tier]
                 for key in [k for k in entries if (dataset is None or k.dataset == dataset)
                             and (keep_revision is None or k.revision != keep_revision)]:
-                    self._used[tier] -= entries.pop(key)[1]
-                    removed += 1
-        return removed
+                    value, size = entries.pop(key)
+                    self._used[tier] -= size
+                    dropped.append((key, value))
+        self._release(dropped)
+        return len(dropped)
+
+    def discard(self, key: CacheKey) -> None:
+        with self._lock:
+            item = self._entries[key.tier].pop(key, None)
+            if item is not None:
+                self._used[key.tier] -= item[1]
+        if item is not None:
+            self._release([(key, item[0])])
+
+    def _release(self, dropped: List[Tuple[CacheKey, Any]]) -> None:
+        if self._on_evict is None:
+            return
+        for key, value in dropped:
+            self._on_evict(key, value)
 
     def used_bytes(self, tier: str) -> int:
         return self._used[tier]

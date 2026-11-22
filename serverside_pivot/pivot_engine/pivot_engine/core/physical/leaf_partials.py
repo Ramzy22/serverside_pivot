@@ -10,14 +10,14 @@ enforced by tests/core/test_strategy_equivalence.py.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import ibis
 
 from ..logical import LogicalPlan
-from .union_all import LevelAggregate, build
+from .union_all import LevelAggregate, build, tree
 
-__all__ = ["lower", "supports"]
+__all__ = ["lower", "supports", "tree_of"]
 
 _MERGEABLE = {"sum", "count", "min", "max", "avg"}
 
@@ -91,3 +91,9 @@ def lower(plan: LogicalPlan, relation: Any) -> Any:
     if not supports(plan, relation.schema()):
         raise ValueError("leaf_partials does not support this query; use union_all")
     return build(plan, relation, _from_leaf_partials)
+
+
+def tree_of(plan: LogicalPlan, relation: Any) -> Tuple[Any, List[Any]]:
+    if not supports(plan, relation.schema()):
+        raise ValueError("leaf_partials does not support this query; use union_all")
+    return tree(plan, relation, _from_leaf_partials)

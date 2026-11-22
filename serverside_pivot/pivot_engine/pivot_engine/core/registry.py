@@ -31,13 +31,20 @@ _FAMILIES = {
 
 def type_family(dtype: Any) -> str:
     """Map an Ibis dtype to the registry's type family."""
-    for family, predicate in (
-        ("integer", "is_integer"), ("floating", "is_floating"), ("decimal", "is_decimal"),
-        ("string", "is_string"), ("boolean", "is_boolean"), ("timestamp", "is_timestamp"),
-        ("date", "is_date"),
-    ):
-        if getattr(dtype, predicate, lambda: False)():
-            return family
+    if dtype.is_integer():
+        return "integer"
+    if dtype.is_floating():
+        return "floating"
+    if dtype.is_decimal():
+        return "decimal"
+    if dtype.is_string():
+        return "string"
+    if dtype.is_boolean():
+        return "boolean"
+    if dtype.is_timestamp():
+        return "timestamp"
+    if dtype.is_date():
+        return "date"
     return "other"
 
 

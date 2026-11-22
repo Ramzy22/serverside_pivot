@@ -20,7 +20,7 @@ from ..ir import Predicate
 from ..logical import Level, LogicalPlan
 from ..registry import REGISTRY
 
-__all__ = ["DEPTH", "LevelAggregate", "build", "lower"]
+__all__ = ["DEPTH", "LevelAggregate", "build", "lower", "tree", "tree_of"]
 
 # (keys) -> relation with ``keys`` + one column per measure alias.
 LevelAggregate = Callable[[Sequence[str]], Any]
@@ -130,8 +130,15 @@ def lower(plan: LogicalPlan, relation: Any) -> Any:
     return build(plan, relation, _direct)
 
 
-def build(plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]) -> Any:
-    """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, order, window."""
+def tree_of(plan: LogicalPlan, relation: Any) -> Tuple[Any, List[Any]]:
+    """The unordered flattened tree and its total order key (for materialized paging)."""
+    return tree(plan, relation, _direct)
+
+
+def tree(
+    plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]
+) -> Tuple[Any, List[Any]]:
+    """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, and the order key."""
     schema = relation.schema()
     q = plan.query
     e0 = relation.filter([_predicate(relation, p) for p in q.filters]) if q.filters else relation
@@ -146,11 +153,18 @@ def build(plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, Logi
     union = parts[0]
     for part in parts[1:]:
         union = union.union(part, distinct=False)
-    order = []
+    order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
         present = (union[DEPTH] >= i).cast("int8")
         is_null = union[k].isnull().cast("int8")
         order += [present, is_null, union[k].desc() if plan.descending.get(k) else union[k].asc()]
+    return union, order
+
+
+def build(plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]) -> Any:
+    """Ordered and windowed tree."""
+    union, order = tree(plan, relation, level_aggregate)
+    q = plan.query
     ordered = union.order_by(order) if order else union
     if q.window.limit is not None or q.window.offset:
         ordered = ordered.limit(q.window.limit, offset=q.window.offset)

@@ -8,26 +8,55 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from typing import Any, Callable, Optional
 
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
+from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import PivotQuery
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
 
-__all__ = ["compile_query", "execute", "execute_async", "fingerprint"]
+__all__ = ["canonical", "compile_query", "execute", "execute_async", "fingerprint", "scope_fingerprint"]
 
 Resolver = Callable[[str], Any]
 
 
+def canonical(query: PivotQuery) -> str:
+    """Deterministic encoding of a query's meaning (stable across processes)."""
+
+    def scalar(value: Any) -> Any:
+        if isinstance(value, (list, tuple, set, frozenset)):
+            items = [CanonicalScalarCodec.encode(v) for v in value]
+            return sorted(items) if isinstance(value, (set, frozenset)) else items
+        return CanonicalScalarCodec.encode(value)
+
+    body = {
+        "dataset": query.dataset,
+        "rows": list(query.rows),
+        "measures": [[m.alias, m.agg, m.field] for m in query.measures],
+        "filters": [[p.field, p.op, scalar(p.value)] for p in query.filters],
+        "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],
+        "sort": [[k.field, k.desc] for k in query.sort],
+        "totals": query.totals,
+        "expanded": None if query.expanded is None
+        else sorted(CanonicalPathCodec.encode(list(p)) for p in query.expanded),
+        "window": [query.window.offset, query.window.limit],
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def scope_fingerprint(dataset: str) -> str:
+    grant = current_scope().grant_for(dataset)
+    return str(getattr(grant, "scope_fingerprint", None) or "global")
+
+
 def fingerprint(query: PivotQuery) -> str:
     """Plan identity: query meaning + the grant it runs under (REQ-SEC-004)."""
-    grant = current_scope().grant_for(query.dataset)
-    scope_fp = getattr(grant, "scope_fingerprint", None) or "global"
-    return hashlib.sha256(f"{query!r}|{scope_fp}".encode()).hexdigest()[:32]
+    return hashlib.sha256(f"{canonical(query)}|{scope_fingerprint(query.dataset)}".encode()).hexdigest()[:32]
 
 
 def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> Any:
