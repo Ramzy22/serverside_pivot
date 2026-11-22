@@ -377,3 +377,24 @@ def test_core_serves_scoped_filter_options(column, monkeypatch):
     assert values, "the core returned no options"
     found = leaks(response, tenant_values=values if column == "tenant" else ())
     assert not found, f"core:filter_options:{column}: {found}"
+
+
+def test_core_serves_scoped_full_export(monkeypatch):
+    """A full (all rows) export is produced by the core under PIVOT_CORE=on and stays scoped."""
+    from pivot_engine.runtime import core_shadow
+
+    monkeypatch.setenv("PIVOT_CORE", "on")
+    before = core_shadow.STATS["core_served_hierarchy"]
+    adapter = _adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter)
+    principal = Principal()
+    grant = claims_authorizer().authorize(principal=principal, table=TABLE, operation="export")
+    state = _snake_state(dict(BASE_STATE))
+    state.export_request = {"format": "csv", "allRows": True}
+    context = PivotRequestContext(
+        table=TABLE, trigger_prop="pivot.exportRequest", start_row=0, end_row=100, viewport_active=True,
+        needs_col_schema=True, include_grand_total=True, principal=principal, row_scope=grant,
+    )
+    outcome = asyncio.run(service.process_async(state, context))
+    assert core_shadow.STATS["core_served_hierarchy"] > before, "the export was not served by the core"
+    _assert_scoped_or_denied("core:export", outcome)
