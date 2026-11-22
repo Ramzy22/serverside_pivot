@@ -1,0 +1,396 @@
+/**
+ * DuckDB SQL emitter for the semantic IR (client mode, M3).
+ *
+ * Emits, for one `PivotQuery` (the wire form in `semanticIr.generated.ts`,
+ * generated from `core/spec/semantic-ir.schema.json`), the same flattened,
+ * ordered, windowed tree as the Python core's reference strategy
+ * (`pivot_engine/core/logical.py` + `core/physical/union_all.py`):
+ *
+ *   rows dims (NULL where rolled up), measures, derived measures, pivot cells, __depth
+ *
+ * Semantics are those of docs/semantics/SEMANTICS.md; the conformance test
+ * `tests/core/test_ts_emitter_conformance.py` executes this SQL on DuckDB
+ * (the engine DuckDB-Wasm runs) and requires it to equal the oracle.
+ *
+ * Everything the emitter cannot express throws `EmitterUnsupported`; it never
+ * approximates.
+ */
+
+import type { Filter, PivotQuery } from './semanticIr.generated';
+
+export type TypeFamily = 'string' | 'integer' | 'floating' | 'decimal' | 'boolean' | 'date' | 'timestamp' | 'other';
+
+export interface ColumnInfo {
+    family: TypeFamily;
+    sqlType: string; // DuckDB type name, used to type rolled-up NULLs
+}
+
+export interface EmitOptions {
+    table: string; // DuckDB relation holding the (already scoped) dataset
+    columns: Record<string, ColumnInfo>;
+}
+
+export class EmitterUnsupported extends Error {
+    public constructor(message: string) {
+        super(`emitter does not support: ${message}`);
+        this.name = 'EmitterUnsupported';
+    }
+}
+
+export const DEPTH = '__depth';
+const STRING_OPS = new Set(['contains', 'not_contains', 'starts_with', 'ends_with']);
+const CASE_FOLDING_OPS = new Set(['=', '!=', ...STRING_OPS]);
+const COMPARISONS = new Set(['=', '!=', '>', '>=', '<', '<=']);
+const NUMERIC = new Set<TypeFamily>(['integer', 'floating', 'decimal']);
+
+type Measure = PivotQuery['measures'][number];
+type Derived = NonNullable<PivotQuery['derived']>[number];
+type SortEntry = NonNullable<PivotQuery['sort']>[number];
+
+export function quoteIdent(name: string): string {
+    return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+export function cellName(memberIndex: number, alias: string): string {
+    return `__c${memberIndex}__${alias}`;
+}
+
+/** Output value columns: measures, derived measures, then cells (as `PivotQuery.value_columns`). */
+export function valueColumns(query: PivotQuery): string[] {
+    const measures = query.measures.map((m) => m.alias);
+    const derived = (query.derived || []).map((d) => d.alias);
+    const cells: string[] = [];
+    (query.columnMembers || []).forEach((_member, j) => query.measures.forEach((m) => cells.push(cellName(j, m.alias))));
+    return [...measures, ...derived, ...cells];
+}
+
+function aggregateColumns(query: PivotQuery): string[] {
+    const cells: string[] = [];
+    (query.columnMembers || []).forEach((_member, j) => query.measures.forEach((m) => cells.push(cellName(j, m.alias))));
+    return [...query.measures.map((m) => m.alias), ...cells];
+}
+
+// ------------------------------------------------------------------ literals
+
+function literal(value: unknown, column: ColumnInfo | undefined): string {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) throw new EmitterUnsupported(`non-finite number ${value}`);
+        return column && column.family === 'decimal' ? `CAST('${value}' AS ${column.sqlType})` : String(value);
+    }
+    if (typeof value === 'bigint') return value.toString();
+    if (typeof value === 'string') {
+        const text = `'${value.replace(/'/g, "''")}'`;
+        if (column && NUMERIC.has(column.family)) return `CAST(${text} AS ${column.sqlType})`;
+        return text;
+    }
+    throw new EmitterUnsupported(`literal ${JSON.stringify(value)}`);
+}
+
+function typedLiteral(value: unknown, column: ColumnInfo): string {
+    return value === null || value === undefined ? `CAST(NULL AS ${column.sqlType})` : `CAST(${literal(value, column)} AS ${column.sqlType})`;
+}
+
+// ------------------------------------------------------------------ predicates (REQ-NULL-003)
+
+function predicate(f: Filter, columns: Record<string, ColumnInfo>): string {
+    if ('conditions' in f) {
+        const op = String(f.op).toLowerCase();
+        if (op !== 'and' && op !== 'or') throw new EmitterUnsupported(`filter group operator ${f.op}`);
+        const terms = (f.conditions || []).map((c) => predicate(c as Filter, columns));
+        if (terms.length === 0) throw new EmitterUnsupported('empty filter group');
+        return `(${terms.join(op === 'and' ? ' AND ' : ' OR ')})`;
+    }
+    const field = String(f.field);
+    const column = columns[field];
+    if (!column) throw new EmitterUnsupported(`unknown column ${field}`);
+    const col = quoteIdent(field);
+    const op = String(f.op);
+    const caseSensitive = f.caseSensitive !== false;
+    const value = f.value;
+    if (STRING_OPS.has(op)) {
+        if (typeof value !== 'string') throw new EmitterUnsupported(`${op} needs a string`);
+        const text = caseSensitive ? col : `lower(${col})`;
+        const needle = literal(caseSensitive ? value : value.toLowerCase(), undefined);
+        const hit = {
+            contains: `contains(${text}, ${needle})`,
+            not_contains: `NOT contains(${text}, ${needle})`,
+            starts_with: `starts_with(${text}, ${needle})`,
+            ends_with: `ends_with(${text}, ${needle})`,
+        }[op as 'contains'];
+        return `(${col} IS NOT NULL AND COALESCE(${hit}, FALSE))`;
+    }
+    if (op === 'between') {
+        const [low, high] = Array.isArray(value) ? value : [];
+        if (low === null || low === undefined || high === null || high === undefined) return 'FALSE';
+        return `(${col} IS NOT NULL AND ${col} >= ${literal(low, column)} AND ${col} <= ${literal(high, column)})`;
+    }
+    if (COMPARISONS.has(op)) {
+        if (value === null || value === undefined) return 'FALSE';
+        if (!caseSensitive && CASE_FOLDING_OPS.has(op) && typeof value === 'string' && column.family === 'string') {
+            return `(${col} IS NOT NULL AND lower(${col}) ${op} ${literal(value.toLowerCase(), undefined)})`;
+        }
+        return `(${col} IS NOT NULL AND ${col} ${op} ${literal(value, column)})`;
+    }
+    if (op === 'in' || op === 'not_in') {
+        const list = Array.isArray(value) ? value : [value];
+        const values = list.filter((v) => v !== null && v !== undefined);
+        const nullListed = values.length !== list.length;
+        const sqlList = values.map((v) => literal(v, column)).join(', ');
+        if (op === 'in') {
+            const term = values.length ? `${col} IN (${sqlList})` : 'FALSE';
+            return nullListed ? `(${term} OR ${col} IS NULL)` : `(${term})`;
+        }
+        if (!values.length) return nullListed ? `(${col} IS NOT NULL)` : 'TRUE';
+        const outside = `COALESCE(${col} NOT IN (${sqlList}), FALSE)`;
+        return nullListed ? `(${outside} AND ${col} IS NOT NULL)` : `(${outside} OR ${col} IS NULL)`;
+    }
+    if (op === 'is_null') return `(${col} IS NULL)`;
+    if (op === 'is_not_null') return `(${col} IS NOT NULL)`;
+    throw new EmitterUnsupported(`operator ${op}`);
+}
+
+// ------------------------------------------------------------------ aggregation (registry lowerings)
+
+function aggregate(m: Measure, condition: string | null): string {
+    const masked = (name: string) => (condition ? `CASE WHEN ${condition} THEN ${quoteIdent(name)} END` : quoteIdent(name));
+    if (!m.field) {
+        if (m.agg !== 'count') throw new EmitterUnsupported(`${m.agg} without a field`);
+        return condition ? `COUNT(CASE WHEN ${condition} THEN 1 END)` : 'COUNT(*)';
+    }
+    const x = masked(m.field);
+    const dbl = `CAST(${x} AS DOUBLE)`;
+    switch (m.agg) {
+        case 'sum': return `SUM(${x})`;
+        case 'count': return `COUNT(${x})`;
+        case 'avg': return `AVG(${x})`;
+        case 'min': return `MIN(${x})`;
+        case 'max': return `MAX(${x})`;
+        case 'count_distinct': return `COUNT(DISTINCT ${x})`;
+        case 'median': return `QUANTILE_CONT(${dbl}, 0.5)`;
+        case 'stddev': return `STDDEV_SAMP(${dbl})`;
+        case 'variance': return `VAR_SAMP(${dbl})`;
+        case 'percentile':
+            if (typeof m.q !== 'number') throw new EmitterUnsupported('percentile without q');
+            return `QUANTILE_CONT(${dbl}, ${m.q})`;
+        case 'weighted_avg': {
+            if (!m.weight) throw new EmitterUnsupported('weighted_avg without a weight');
+            const w = masked(m.weight);
+            const valid = `(${x}) IS NOT NULL AND (${w}) IS NOT NULL`;
+            const num = `SUM(CASE WHEN ${valid} THEN CAST(${x} AS DOUBLE) * CAST(${w} AS DOUBLE) END)`;
+            const den = `SUM(CASE WHEN ${valid} THEN CAST(${w} AS DOUBLE) END)`;
+            return `CASE WHEN COALESCE(${den}, 0) = 0 THEN NULL ELSE ${num} / ${den} END`;
+        }
+        default:
+            throw new EmitterUnsupported(`aggregation ${m.agg}`);
+    }
+}
+
+function memberCondition(columnsDims: string[], member: unknown[], columns: Record<string, ColumnInfo>): string {
+    return columnsDims
+        .map((k, i) => (member[i] === null || member[i] === undefined
+            ? `${quoteIdent(k)} IS NULL`
+            : `${quoteIdent(k)} IS NOT DISTINCT FROM ${typedLiteral(member[i], columns[k])}`))
+        .join(' AND ');
+}
+
+function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, aliases?: Set<string>): string[] {
+    const out = query.measures
+        .filter((m) => !aliases || aliases.has(m.alias))
+        .map((m) => `${aggregate(m, null)} AS ${quoteIdent(m.alias)}`);
+    if (!aliases) {
+        (query.columnMembers || []).forEach((member, j) => {
+            const cond = memberCondition(query.columns || [], member, columns);
+            query.measures.forEach((m) => out.push(`${aggregate(m, cond)} AS ${quoteIdent(cellName(j, m.alias))}`));
+        });
+    }
+    return out;
+}
+
+// ------------------------------------------------------------------ logical plan (as core/logical.py)
+
+interface Level { depth: number; keys: string[]; visibleParents: unknown[][] | null }
+
+function pathKey(path: unknown[]): string {
+    return JSON.stringify(path);
+}
+
+function levels(query: PivotQuery): Level[] {
+    const expanded = query.expanded === undefined || query.expanded === null ? null : query.expanded.map((p) => [...p]);
+    const expandedKeys = expanded ? new Set(expanded.map(pathKey)) : null;
+    const out: Level[] = [];
+    for (let d = 0; d <= query.rows.length; d++) {
+        let visible: unknown[][] | null = null;
+        if (expanded && d > 1) {
+            visible = expanded.filter((p) => p.length === d - 1
+                && Array.from({ length: d - 2 }, (_v, i) => i + 1).every((k) => expandedKeys!.has(pathKey(p.slice(0, k)))));
+            if (visible.length === 0) continue; // a level with no expanded parent shows no node
+        }
+        out.push({ depth: d, keys: query.rows.slice(0, d), visibleParents: visible });
+    }
+    return out;
+}
+
+function nullSafeJoin(left: string, right: string, keys: string[], rightKeys?: string[]): string {
+    return keys.map((k, i) => `${left}.${quoteIdent(k)} IS NOT DISTINCT FROM ${right}.${quoteIdent((rightKeys || keys)[i])}`).join(' AND ');
+}
+
+function frameBound(offset: number | null | undefined, isStart: boolean): string {
+    if (offset === null || offset === undefined) return isStart ? 'UNBOUNDED PRECEDING' : 'UNBOUNDED FOLLOWING';
+    if (offset === 0) return 'CURRENT ROW';
+    return offset < 0 ? `${-offset} PRECEDING` : `${offset} FOLLOWING`;
+}
+
+// ------------------------------------------------------------------ the emitter
+
+export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
+    const { columns } = options;
+    const rows = query.rows;
+    const need = (name: string) => {
+        if (!columns[name]) throw new EmitterUnsupported(`unknown column ${name}`);
+    };
+    rows.forEach(need);
+    (query.columns || []).forEach(need);
+    const ctes: string[] = [];
+    const where = (query.filters || []).map((f) => predicate(f as Filter, columns));
+    ctes.push(`__e0 AS (SELECT * FROM ${quoteIdent(options.table)}${where.length ? ` WHERE ${where.join(' AND ')}` : ''})`);
+
+    // E: records whose group passes at every filtered level (REQ-TOT-001), groups evaluated on E0.
+    const byLevel = new Map<number, NonNullable<PivotQuery['measureFilters']>>();
+    for (const mf of query.measureFilters || []) {
+        byLevel.set(mf.level, [...(byLevel.get(mf.level) || []), mf]);
+    }
+    const semi: string[] = [];
+    [...byLevel.keys()].sort((a, b) => a - b).forEach((level) => {
+        const filters = byLevel.get(level)!;
+        const keys = rows.slice(0, level);
+        const aliases = new Set(filters.map((f) => f.measure));
+        const conds = filters.map((f) => {
+            if (!COMPARISONS.has(f.op)) throw new EmitterUnsupported(`measure filter ${f.op}`);
+            if (f.value === null || f.value === undefined) return 'FALSE';
+            return `${quoteIdent(f.measure)} ${f.op} ${literal(f.value, undefined)}`;
+        });
+        const name = `__mf${level}`;
+        ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases).join(', ')} FROM __e0 GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
+        semi.push(`EXISTS (SELECT 1 FROM ${name} g WHERE ${nullSafeJoin('e', 'g', keys)})`);
+    });
+    ctes.push(`__e AS (SELECT * FROM __e0 e${semi.length ? ` WHERE ${semi.join(' AND ')}` : ''})`);
+    const source = query.totals === 'all_data' ? '__e0' : '__e';
+
+    // One aggregate per visible level, typed UNION ALL.
+    const value = aggregateColumns(query);
+    const levelList = levels(query);
+    const partNames: Record<number, string> = {};
+    levelList.forEach((level) => {
+        const keys = level.keys;
+        const restrictions: string[] = [];
+        if (query.totals === 'all_data' && keys.length) {
+            restrictions.push(`EXISTS (SELECT 1 FROM __e v WHERE ${nullSafeJoin('a', 'v', keys)})`);
+        }
+        if (level.visibleParents) {
+            const parentKeys = keys.slice(0, -1);
+            const tuples = level.visibleParents.map((p) => `(${p.map((v, i) => typedLiteral(v, columns[parentKeys[i]])).join(', ')})`);
+            ctes.push(`__vp${level.depth} (${parentKeys.map((_k, i) => quoteIdent(`k${i}`)).join(', ')}) AS (VALUES ${tuples.join(', ')})`);
+            restrictions.push(`EXISTS (SELECT 1 FROM __vp${level.depth} p WHERE ${parentKeys.map((k, i) => `a.${quoteIdent(k)} IS NOT DISTINCT FROM p.${quoteIdent(`k${i}`)}`).join(' AND ')})`);
+        }
+        const grouped = `SELECT ${[...keys.map(quoteIdent), ...measureSelects(query, columns)].join(', ')} FROM ${source}${keys.length ? ` GROUP BY ${keys.map(quoteIdent).join(', ')}` : ''}`;
+        const select = [
+            ...rows.map((k) => (keys.includes(k) ? `a.${quoteIdent(k)}` : `CAST(NULL AS ${columns[k].sqlType}) AS ${quoteIdent(k)}`)),
+            ...value.map((v) => `a.${quoteIdent(v)}`),
+            `CAST(${level.depth} AS SMALLINT) AS ${DEPTH}`,
+        ];
+        const name = `__lvl${level.depth}`;
+        partNames[level.depth] = name;
+        ctes.push(`${name} AS (SELECT ${select.join(', ')} FROM (${grouped}) a${restrictions.length ? ` WHERE ${restrictions.join(' AND ')}` : ''})`);
+    });
+    const outCols = [...rows, ...value, DEPTH].map(quoteIdent).join(', ');
+    ctes.push(`__tree AS (${levelList.map((l) => `SELECT ${outCols} FROM ${partNames[l.depth]}`).join(' UNION ALL ')})`);
+
+    // Measures sorted on: attach each level-i ancestor's value (REQ-SORT-001).
+    const sort: SortEntry[] = query.sort || [];
+    const aliases = new Set(query.measures.map((m) => m.alias));
+    const sortedMeasures = [...new Set(sort.filter((s) => !rows.includes(s.field) && aliases.has(s.field)).map((s) => s.field))];
+    let tree = '__tree';
+    if (sortedMeasures.length) {
+        const joins: string[] = [];
+        const extra: string[] = [];
+        for (let i = 1; i <= rows.length; i++) {
+            const part = partNames[i];
+            sortedMeasures.forEach((alias) => {
+                const name = quoteIdent(`__sort${i}_${alias}`);
+                extra.push(part ? `s${i}.${quoteIdent(alias)} AS ${name}` : `NULL AS ${name}`);
+            });
+            if (part) joins.push(`LEFT JOIN ${part} s${i} ON ${nullSafeJoin('u', `s${i}`, rows.slice(0, i))}`);
+        }
+        ctes.push(`__sorted AS (SELECT u.*, ${extra.join(', ')} FROM __tree u ${joins.join(' ')})`);
+        tree = '__sorted';
+    }
+    const order: string[] = [];
+    rows.forEach((k, idx) => {
+        const i = idx + 1;
+        order.push(`(CASE WHEN ${DEPTH} >= ${i} THEN 1 ELSE 0 END) ASC`);
+        let dimensionSorted = false;
+        sort.forEach((s) => {
+            let expr: string;
+            if (!rows.includes(s.field)) expr = quoteIdent(`__sort${i}_${s.field}`);
+            else if (s.field === k) { expr = quoteIdent(k); dimensionSorted = true; } else return;
+            if (s.absolute) expr = `abs(${expr})`;
+            order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
+        });
+        if (!dimensionSorted) order.push(`(${quoteIdent(k)} IS NULL) ASC`, `${quoteIdent(k)} ASC`);
+    });
+
+    const derived: Derived[] = query.derived || [];
+    const finalCols = [...rows, ...valueColumns(query), DEPTH].map(quoteIdent).join(', ');
+    const window = query.window || {};
+    const offset = Number(window.offset || 0);
+    const limit = window.limit === null || window.limit === undefined ? null : Number(window.limit);
+    const page = `${limit !== null ? ` LIMIT ${limit}` : ''}${offset || limit !== null ? ` OFFSET ${offset}` : ''}`;
+    const orderSql = order.length ? order.join(', ') : '1';
+    if (!derived.length) {
+        return `WITH ${ctes.join(',\n')}\nSELECT ${finalCols} FROM ${tree} ORDER BY ${orderSql}${page}`;
+    }
+
+    // Derived measures over the visible tree (REQ-AGG-005/007).
+    const parents = rows.map((k, j) => `CASE WHEN ${DEPTH} > ${j + 1} THEN ${quoteIdent(k)} ELSE NULL END AS ${quoteIdent(`__p${j}`)}`);
+    ctes.push(`__ordered AS (SELECT *, ROW_NUMBER() OVER (ORDER BY ${orderSql}) AS __ord, ${[...parents, '0 AS __one'].join(', ')} FROM ${tree})`);
+    const grand = [...new Set(derived.filter((d) => d.func === 'percent_of_total').map((d) => d.of))];
+    let base = '__ordered o';
+    if (grand.length) {
+        ctes.push(`__gt AS (SELECT ${grand.map((a) => `${quoteIdent(a)} AS ${quoteIdent(`__gt_${a}`)}`).join(', ')} FROM __ordered WHERE ${DEPTH} = 0)`);
+        base = '__ordered o CROSS JOIN __gt';
+    }
+    const partition = [DEPTH, ...rows.map((_k, j) => quoteIdent(`__p${j}`))].join(', ');
+    const exprs = derived.map((d) => {
+        const v = quoteIdent(d.of);
+        switch (d.func) {
+            case 'ratio': {
+                const den = quoteIdent(String(d.of2));
+                const fallback = d.nullValue === null || d.nullValue === undefined ? 'CAST(NULL AS DOUBLE)' : `CAST(${d.nullValue} AS DOUBLE)`;
+                return `CASE WHEN ${den} IS NULL OR ${den} = 0 THEN ${fallback} ELSE CAST(${v} AS DOUBLE) / CAST(${den} AS DOUBLE) END`;
+            }
+            case 'percent_of_total': {
+                const total = quoteIdent(`__gt_${d.of}`);
+                return `CASE WHEN ${total} IS NULL OR ${total} = 0 THEN CAST(NULL AS DOUBLE) ELSE CAST(${v} AS DOUBLE) / CAST(${total} AS DOUBLE) END`;
+            }
+            case 'rank':
+            case 'dense_rank': {
+                const fn = d.func === 'rank' ? 'RANK' : 'DENSE_RANK';
+                const dir = d.desc === false ? 'ASC' : 'DESC';
+                return `CASE WHEN ${v} IS NULL THEN NULL ELSE CAST(${fn}() OVER (PARTITION BY ${partition} ORDER BY (${v} IS NULL) ASC, ${v} ${dir}) AS BIGINT) END`;
+            }
+            case 'cumulative':
+            case 'moving_avg': {
+                const [start, end] = d.frame ? [d.frame[0], d.frame[1]] : [null, 0];
+                const frame = `ROWS BETWEEN ${frameBound(start as number | null, true)} AND ${frameBound(end as number | null, false)}`;
+                const agg = d.func === 'cumulative' ? `SUM(${v})` : `AVG(CAST(${v} AS DOUBLE))`;
+                return `${agg} OVER (PARTITION BY ${partition} ORDER BY __ord ${frame})`;
+            }
+            default:
+                throw new EmitterUnsupported(`derived measure ${d.func}`);
+        }
+    });
+    ctes.push(`__derived AS (SELECT o.*, ${derived.map((d, i) => `${exprs[i]} AS ${quoteIdent(d.alias)}`).join(', ')} FROM ${base})`);
+    return `WITH ${ctes.join(',\n')}\nSELECT ${finalCols} FROM __derived ORDER BY __ord${page}`;
+}
