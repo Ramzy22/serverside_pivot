@@ -188,6 +188,12 @@ function aggregate(m: Measure, condition: string | null, columns: Record<string,
             const den = `SUM(CASE WHEN ${valid} THEN CAST(${w} AS DOUBLE) END)`;
             return `CASE WHEN COALESCE(${den}, 0) = 0 THEN NULL ELSE ${num} / ${den} END`;
         }
+        case 'first':
+        case 'last': { // REQ-AGG-008: the value at the extreme order; ties resolve to the extreme value
+            if (!m.orderBy) throw new EmitterUnsupported(`${m.agg} without an order field`);
+            const o = masked(m.orderBy);
+            return `${m.agg.toUpperCase()}(${x} ORDER BY ${o} ASC, ${x} ASC) FILTER (WHERE (${x}) IS NOT NULL AND (${o}) IS NOT NULL)`;
+        }
         default:
             throw new EmitterUnsupported(`aggregation ${m.agg}`);
     }

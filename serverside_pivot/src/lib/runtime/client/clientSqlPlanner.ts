@@ -80,6 +80,7 @@ function normalizeValConfigs(value: unknown): NormalizedValConfig[] {
             label,
             shortLabel: typeof item.shortLabel === 'string' && item.shortLabel.trim() ? item.shortLabel.trim() : undefined,
             weightField: typeof item.weightField === 'string' ? item.weightField : undefined,
+            orderBy: typeof item.orderBy === 'string' ? item.orderBy : undefined,
             windowFn: windowFnRaw,
             formula: typeof item.formula === 'string' ? item.formula : undefined,
             formulaScope: item.formulaScope === 'columns' ? 'columns' : 'measures',

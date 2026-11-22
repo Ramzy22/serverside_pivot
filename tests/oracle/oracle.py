@@ -83,8 +83,22 @@ AGGREGATIONS: Dict[str, Callable[[Sequence[Record], Optional[str]], Any]] = {
 }
 
 
+def _first_last(records: Sequence[Record], field_name: Optional[str], order_by: Optional[str], last: bool) -> Any:
+    """REQ-AGG-008: among records with both values present, the value at the smallest (first) or largest
+    (last) order; ties resolve to the smallest (first) or largest (last) value."""
+    if order_by is None:
+        raise ValueError("first/last needs an order field")
+    pairs = [(r[order_by], r[field_name]) for r in records
+             if r.get(field_name) is not None and r.get(order_by) is not None]
+    if not pairs:
+        return None
+    return (max(pairs) if last else min(pairs))[1]
+
+
 def aggregate(agg: str, records: Sequence[Record], field_name: Optional[str],
-              weight: Optional[str] = None, q: Optional[float] = None) -> Any:
+              weight: Optional[str] = None, q: Optional[float] = None, order_by: Optional[str] = None) -> Any:
+    if agg in {"first", "last"}:
+        return _first_last(records, field_name, order_by, agg == "last")
     if agg == "percentile":
         return _percentile(_vals(records, field_name), float(q))
     if agg == "weighted_avg":
@@ -163,6 +177,7 @@ class Measure:
     field: Optional[str]
     weight: Optional[str] = None
     q: Optional[float] = None
+    order_by: Optional[str] = None  # first / last (REQ-AGG-008)
 
 
 @dataclass
@@ -210,11 +225,11 @@ def _key(record: Record, rows: Sequence[str], depth: int) -> Tuple[Any, ...]:
 
 
 def _measures(query: Query, records: Sequence[Record]) -> Dict[str, Any]:
-    out = {m.alias: aggregate(m.agg, records, m.field, m.weight, m.q) for m in query.measures}
+    out = {m.alias: aggregate(m.agg, records, m.field, m.weight, m.q, m.order_by) for m in query.measures}
     for j, member in enumerate(query.column_members):
         matching = [r for r in records if tuple(r.get(c) for c in query.columns) == tuple(member)]
         for m in query.measures:
-            out[f"__c{j}__{m.alias}"] = aggregate(m.agg, matching, m.field, m.weight, m.q)
+            out[f"__c{j}__{m.alias}"] = aggregate(m.agg, matching, m.field, m.weight, m.q, m.order_by)
     return out
 
 
@@ -336,7 +351,7 @@ def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[R
         if f in aliases and member is not None:
             m = next(m for m in query.measures if m.alias == f)
             v = aggregate(m.agg, [r for r in source if _key(r, query.rows, depth) == c
-                                  and tuple(r.get(k) for k in query.columns) == tuple(member)], m.field, m.weight, m.q)
+                                  and tuple(r.get(k) for k in query.columns) == tuple(member)], m.field, m.weight, m.q, m.order_by)
         elif f in aliases:
             v = values[c][f]
         elif by is not None:
@@ -397,7 +412,7 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
                 member_keys[("cell", entry[0], tuple(member))] = {
                     c: aggregate(m.agg, [r for r in totals_source if _key(r, query.rows, depth) == c
                                          and tuple(r.get(k) for k in query.columns) == tuple(member)],
-                                 m.field, m.weight, m.q)
+                                 m.field, m.weight, m.q, m.order_by)
                     for c in candidates}
         children = _order_siblings(query, depth, candidates, values, member_keys)
         for child in children:

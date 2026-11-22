@@ -73,7 +73,7 @@ def _oracle(records, query: PivotQuery):
     oq = OQuery(
         filters=[_to_oracle_filter(f) for f in query.filters],
         rows=list(query.rows),
-        measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q) for m in query.measures],
+        measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q, m.order_by) for m in query.measures],
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
         subtotals=query.subtotals,
@@ -128,7 +128,7 @@ RECORDS = st.lists(
     min_size=0, max_size=16,
 )
 AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "median",
-                       "stddev", "variance", "percentile", "weighted_avg"])
+                       "stddev", "variance", "percentile", "weighted_avg", "first", "last"])
 
 
 @st.composite
@@ -146,7 +146,9 @@ def queries(draw):
     alias = f"m_{agg}"
     measures = (MeasureRef(alias, agg, "v",
                            weight="w" if agg == "weighted_avg" else None,
-                           q=draw(st.sampled_from([0.0, 0.25, 0.5, 0.9, 1.0])) if agg == "percentile" else None),)
+                           q=draw(st.sampled_from([0.0, 0.25, 0.5, 0.9, 1.0])) if agg == "percentile" else None,
+                           # REQ-AGG-008: an integer order with NULLs and ties, or a text order
+                           order_by=draw(st.sampled_from(["w", "k"])) if agg in {"first", "last"} else None),)
     unpivot = None
     key_fields = ["w", "k", "n"] if categories else ["w", "k"]
     if draw(st.booleans()):  # REQ-DIM-002: the measure axis as a row level (members over v and w)
@@ -158,7 +160,8 @@ def queries(draw):
                           drop_nulls=draw(st.booleans()))
         position = draw(st.integers(0, len(rows)))
         rows = rows[:position] + ("mn",) + rows[position:]
-        measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q),)
+        measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q,
+                               order_by=measures[0].order_by),)
         key_fields = key_fields + ["mk"]
     mfs = ()
     if draw(st.booleans()):

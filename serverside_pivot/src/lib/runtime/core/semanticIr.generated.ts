@@ -23,6 +23,10 @@ export interface PivotQuery {
       field?: string | null;
       weight?: string | null;
       q?: number | null;
+      /**
+       * first / last (REQ-AGG-008): the field whose smallest / largest value picks the record.
+       */
+      orderBy?: string;
     },
     ...{
       alias: string;
@@ -30,6 +34,10 @@ export interface PivotQuery {
       field?: string | null;
       weight?: string | null;
       q?: number | null;
+      /**
+       * first / last (REQ-AGG-008): the field whose smallest / largest value picks the record.
+       */
+      orderBy?: string;
     }[]
   ];
   filters?: Filter[];

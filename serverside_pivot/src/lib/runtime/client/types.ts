@@ -43,6 +43,7 @@ export interface NormalizedValConfig {
     label: string;
     shortLabel?: string;
     weightField?: string;
+    orderBy?: string; // first / last (REQ-AGG-008)
     windowFn?: string;
     formula?: string;
     formulaScope?: 'measures' | 'columns';

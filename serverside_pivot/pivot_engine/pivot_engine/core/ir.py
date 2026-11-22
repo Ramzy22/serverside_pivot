@@ -54,6 +54,7 @@ class MeasureRef:
     field: Optional[str]  # None only for count(*)
     weight: Optional[str] = None  # weighted_avg
     q: Optional[float] = None  # percentile, in [0, 1]
+    order_by: Optional[str] = None  # first / last (REQ-AGG-008)
 
 
 @dataclass(frozen=True)
@@ -354,6 +355,13 @@ class PivotQuery:
                 need(m.weight, f"weight of measure {m.alias!r}")
                 if schema[m.weight] not in {"integer", "floating", "decimal"}:
                     raise IRValidationError(f"weight column {m.weight!r} must be numeric.")
+            if ("orderBy" in entry.params) != (m.order_by is not None):  # REQ-AGG-008: never an arbitrary record
+                need_order = "needs an order field" if "orderBy" in entry.params else "does not take an order field"
+                raise IRValidationError(f"{m.agg} {need_order}.")
+            if m.order_by is not None:
+                need(m.order_by, f"order field of measure {m.alias!r}")
+                if schema[m.order_by] == "other":
+                    raise IRValidationError(f"order field {m.order_by!r} is not orderable.")
         for flt in self.filters:
             check_filter(flt, schema)
         for mf in self.measure_filters:
@@ -463,7 +471,8 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             dataset=str(dataset or obj["dataset"]),
             rows=tuple(obj["rows"]),
             measures=tuple(
-                MeasureRef(m["alias"], m["agg"], m.get("field"), m.get("weight"), m.get("q")) for m in obj["measures"]
+                MeasureRef(m["alias"], m["agg"], m.get("field"), m.get("weight"), m.get("q"), m.get("orderBy"))
+                for m in obj["measures"]
             ),
             filters=tuple(_filter_from_wire(f) for f in obj.get("filters", ())),
             measure_filters=tuple(
@@ -505,8 +514,7 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "dataset": query.dataset,
         "rows": list(query.rows),
-        "measures": [{"alias": m.alias, "agg": m.agg, "field": m.field, "weight": m.weight, "q": m.q}
-                     for m in query.measures],
+        "measures": [measure_to_wire(m) for m in query.measures],
         "filters": [filt(f) for f in query.filters],
         "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
                            for f in query.measure_filters],
@@ -529,6 +537,13 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         out["categories"] = categories_to_wire(query.categories)
     if query.unpivot is not None:
         out["unpivot"] = unpivot_to_wire(query.unpivot)
+    return out
+
+
+def measure_to_wire(m: MeasureRef) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"alias": m.alias, "agg": m.agg, "field": m.field, "weight": m.weight, "q": m.q}
+    if m.order_by is not None:  # omitted when absent: existing wire forms and vectors are unchanged
+        out["orderBy"] = m.order_by
     return out
 
 

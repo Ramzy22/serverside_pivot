@@ -143,6 +143,7 @@ class RuntimeRequestFactory:
                     "format": measure.get("format"),
                     "windowFn": measure.get("windowFn"),
                     "weightField": measure.get("weightField"),
+                    "orderBy": measure.get("orderBy"),
                 }
             )
 

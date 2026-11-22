@@ -110,7 +110,8 @@ def qualify_clipboard_values(host):
         # Configure a real persisted view, never rows, cells, responses or clipboard.
         layout = {"version": 1, "table": "revenue_operations", "state": {
             "rowFields": ["rowId"], "colFields": [],
-            "valConfigs": [{"field": field, "agg": "first"} for field in FIELDS],
+            # One record per rowId: the order field only has to exist (REQ-AGG-008 needs one).
+            "valConfigs": [{"field": field, "agg": "first", "orderBy": "rowId"} for field in FIELDS],
             "filters": {"scope": {"operator": "AND", "conditions": [{"type": "eq", "value": "Included", "caseSensitive": False}]}},
             "sorting": [], "expanded": {}, "showRowTotals": False, "showColTotals": False,
             "showSubtotals": False, "sidebarOpen": False,

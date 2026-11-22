@@ -1819,6 +1819,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             "aggregationFn": None,
             "windowFn": None,
             "weightField": None,
+            "orderBy": None,
             "isFormula": False,
             "isRowTotal": normalized_column_id.startswith("__RowTotal__"),
             "pivotFilters": {},
@@ -1843,6 +1844,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     ),
                     "windowFn": matched_column.get("windowFn"),
                     "weightField": matched_column.get("weightField"),
+                    "orderBy": matched_column.get("orderBy"),
                     "isFormula": bool(matched_column.get("isFormula")),
                 }
             )

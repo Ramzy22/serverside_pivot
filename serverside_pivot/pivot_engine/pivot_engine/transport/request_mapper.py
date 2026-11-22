@@ -308,6 +308,7 @@ class TanStackRequestMapper(FormulaEngineMixin):
                         agg=col.get("aggregationFn", "sum"),
                         alias=col["id"],
                         weighted_field=col.get("weightField"),
+                        order_by=col.get("orderBy"),
                         window_func=planner_window_fn,
                     )
                 )

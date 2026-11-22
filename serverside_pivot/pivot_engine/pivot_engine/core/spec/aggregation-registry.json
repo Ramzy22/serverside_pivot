@@ -178,6 +178,42 @@
       ],
       "zeroWeight": null,
       "sql": "SUM({x} * {w}) / NULLIF(SUM({w}), 0) over rows where {x} and {w} are not NULL"
+    },
+    "first": {
+      "inputs": [
+        "any"
+      ],
+      "result": "input",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "holistic",
+      "state": [
+        "order",
+        "value"
+      ],
+      "costClass": "heavy-mergeable",
+      "params": [
+        "orderBy"
+      ],
+      "sql": "FIRST({x} ORDER BY {o}, {x}) FILTER (WHERE {x} IS NOT NULL AND {o} IS NOT NULL): the value at the smallest order; ties: the smallest value"
+    },
+    "last": {
+      "inputs": [
+        "any"
+      ],
+      "result": "input",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "holistic",
+      "state": [
+        "order",
+        "value"
+      ],
+      "costClass": "heavy-mergeable",
+      "params": [
+        "orderBy"
+      ],
+      "sql": "LAST({x} ORDER BY {o}, {x}) FILTER (WHERE {x} IS NOT NULL AND {o} IS NOT NULL): the value at the largest order; ties: the largest value"
     }
   }
 }

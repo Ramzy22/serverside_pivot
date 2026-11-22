@@ -50,6 +50,7 @@ def _coerce_measures(val_configs: Sequence[Mapping[str, Any]]) -> List[Measure]:
                 agg=agg,
                 alias=alias,
                 weighted_field=cfg.get("weightField") or cfg.get("weighted_field"),
+                order_by=cfg.get("orderBy") or cfg.get("order_by"),
                 window_func=cfg.get("windowFn") or cfg.get("window_func"),
                 expression=cfg.get("formula") or cfg.get("expression"),
                 ratio_format="percentage" if str(cfg.get("format") or "").strip().lower() == "percent" else "decimal",

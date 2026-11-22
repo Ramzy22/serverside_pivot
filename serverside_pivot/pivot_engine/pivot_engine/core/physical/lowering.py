@@ -35,6 +35,13 @@ def _weighted_avg(col: Any, t: Any, m: Any, weight: Any = None) -> Any:
     return ibis.ifelse(denominator.coalesce(0) == 0, ibis.null(), numerator / denominator)
 
 
+def _ordered(col: Any, t: Any, m: Any, last: bool) -> Any:
+    """REQ-AGG-008: the value at the extreme order; ties resolve to the extreme value, so it is deterministic."""
+    order = t[m.order_by]
+    valid = col.notnull() & order.notnull()
+    return (col.last if last else col.first)(where=valid, order_by=[order, col])
+
+
 # Every lowering ignores NULL inputs (SQL semantics) except count(*), matching
 # the registry's "nulls" rules.
 LOWERINGS: Dict[str, Lowering] = {
@@ -49,6 +56,8 @@ LOWERINGS: Dict[str, Lowering] = {
     "variance": lambda col, _t, _m: col.cast("float64").var(how="sample"),
     "percentile": lambda col, _t, m: col.cast("float64").quantile(float(m.q)),
     "weighted_avg": _weighted_avg,
+    "first": lambda col, t, m: _ordered(col, t, m, last=False),
+    "last": lambda col, t, m: _ordered(col, t, m, last=True),
 }
 
 

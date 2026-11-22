@@ -31,6 +31,7 @@ const AGG: Record<string, string> = {
     count_distinct: 'count_distinct', distinct_count: 'count_distinct', median: 'median',
     stddev: 'stddev', variance: 'variance', percentile: 'percentile',
     weighted_avg: 'weighted_avg', wavg: 'weighted_avg', weighted_mean: 'weighted_avg',
+    first: 'first', last: 'last', // REQ-AGG-008: need an order field
 };
 const WINDOWS: Record<string, string> = {
     rank: 'rank', dense_rank: 'dense_rank', cumulative: 'cumulative', running_avg: 'moving_avg',
@@ -164,6 +165,10 @@ function measureRef(vc: NormalizedValConfig, alias: string, columns: Record<stri
     if (agg === 'weighted_avg') {
         if (!vc.weightField || !columns[vc.weightField]) throw new EmitterUnsupported('weighted_avg without a known weight');
         ref.weight = vc.weightField;
+    }
+    if (agg === 'first' || agg === 'last') {
+        if (!vc.orderBy || !columns[vc.orderBy]) throw new EmitterUnsupported(`${agg} without a known order field`);
+        ref.orderBy = vc.orderBy;
     }
     if (agg === 'percentile') {
         const q = vc.percentile === undefined ? 0.5 : Number(vc.percentile);

@@ -42,6 +42,7 @@ _AGG = {
     "count_distinct": "count_distinct", "distinct_count": "count_distinct", "median": "median",
     "stddev": "stddev", "variance": "variance", "percentile": "percentile",
     "weighted_avg": "weighted_avg", "wavg": "weighted_avg", "weighted_mean": "weighted_avg",
+    "first": "first", "last": "last",  # REQ-AGG-008: need an order field (the IR rejects one without)
 }
 _OPS = {
     "=": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">=", "in": "in", "not in": "not_in",
@@ -435,7 +436,9 @@ def _measure(m: Any, reasons: List[str], *, alias: Optional[str] = None) -> Opti
     field = None if m.field in (None, "*") else str(m.field)
     weight = getattr(m, "weighted_field", None) if agg == "weighted_avg" else None
     q = getattr(m, "percentile", None) if agg == "percentile" else None
-    return MeasureRef(alias or str(m.alias), agg, field, weight, None if q is None else float(q))
+    order_by = getattr(m, "order_by", None) if agg in {"first", "last"} else None
+    return MeasureRef(alias or str(m.alias), agg, field, weight, None if q is None else float(q),
+                      None if order_by is None else str(order_by))
 
 
 def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str]) -> Optional[FrozenSet[Tuple[Any, ...]]]:
@@ -467,7 +470,8 @@ _SPEC_FIELDS = {"table", "rows", "columns", "measures", "filters", "custom_dimen
 _MEASURE_FIELDS = {"field", "agg", "alias", "weighted_field", "expression", "percentile", "separator",
                    "null_handling", "filter_condition", "ratio_numerator", "ratio_denominator", "ratio_null_value",
                    "window_func", "window_group_by", "window_order_by", "window_frame_start", "window_frame_end",
-                   "ratio_format"}  # display formatting only
+                   "ratio_format",  # display formatting only
+                   "order_by"}
 _PIVOT_CONFIG_FIELDS = {"enabled", "top_n", "order_by_measure", "include_totals_column", "column_cursor",
                         "materialized_column_values",
                         "null_column_label"}  # display only; cell keys use the legacy key
@@ -612,7 +616,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     # Pre-order puts the grand total first (+1 skips it); post-order puts it last (REQ-LAYOUT-001).
     offset = max(0, int(start_row)) + (1 if subtotals == "before" else 0)
     limit = None if end_row is None else max(0, int(end_row) - int(start_row) + 1)
-    return PivotQuery(
+    query = PivotQuery(
         dataset=str(spec.table),
         rows=tuple(rows),
         measures=tuple(measures),
@@ -627,6 +631,8 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         categories=categories,
         unpivot=axis["unpivot"] if axis else None,
     )
+    # Typed errors before any core expression is built (REQ-AGG-001, REQ-AGG-008).
+    return query.validate({name: type_family(dtype) for name, dtype in schema.items()})
 
 
 # --------------------------------------------------------------------- columns
@@ -791,6 +797,53 @@ def core_hierarchy_view(
         "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
                                    "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
     }
+
+
+def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
+    """The ``run_pivot`` contract (one row per leaf group), answered by the core as an Arrow table.
+
+    Columns: the row fields, then the measures, or with a column pivot the
+    cells ``<column key>_<alias>`` (and ``__RowTotal__<alias>`` with the totals
+    column).  Rows are the leaves of the flat layout (REQ-LAYOUT-002) in its
+    order, windowed by ``spec.offset``/``spec.limit``; with no row fields the
+    single row is the grand total.  ``spec.totals`` adds no row, as in legacy.
+    """
+    import copy
+
+    import pyarrow.compute as pc
+
+    from ..core.frame import DEPTH
+
+    relation = resolve(spec.table)
+    offset = max(0, int(getattr(spec, "offset", 0) or 0))
+    limit = getattr(spec, "limit", None)
+    plain = copy.copy(spec)
+    plain.offset = 0
+    cell_sorts: List[Tuple[int, str, str, bool]] = []
+    query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=cell_sorts)
+    resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
+    query, keys = _resolve_members(query, spec, resolver, cell_sorts)
+    totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
+    end = None if limit is None else offset + max(0, int(limit))
+    if query.rows:  # leaves first, the grand total last: a window over the leaves never needs it
+        frame = execute(replace(query, window=Window(offset, None if end is None else end - offset)), resolver)
+        table = frame.table.filter(pc.greater(frame.table[DEPTH], 0))
+    else:
+        frame = execute(replace(query, window=Window()), resolver)
+        table = frame.table.slice(offset, None if end is None else max(0, end - offset))
+    columns, names = list(query.rows), list(query.rows)
+    if not query.columns:
+        values = [m.alias for m in query.measures if not m.alias.startswith(HIDDEN)] + [d.alias for d in query.derived]
+        columns += values
+        names += values
+    else:
+        for j, _member, m, name in query.cells():
+            columns.append(name)
+            names.append(f"{keys[j]}_{m.alias}")
+        if totals_column:
+            columns += [m.alias for m in query.measures]
+            names += [f"__RowTotal__{m.alias}" for m in query.measures]
+    return table.select(columns).rename_columns(names)
 
 
 def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: Callable[[Mapping[str, Any]], Dict[str, Any]],

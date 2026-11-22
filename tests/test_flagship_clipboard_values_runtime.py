@@ -17,7 +17,8 @@ def test_shared_clipboard_source_values(aggregation):
     adapter.controller.load_data_from_arrow("flagship_shared", pa.Table.from_pylist(rows))
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
     response = _response(service, {}, 1, row_fields=["rowId"], col_fields=[],
-                         val_configs=[{"field": field, "agg": aggregation} for field in FIELDS],
+                         # One record per rowId: the order field only has to exist (REQ-AGG-008 needs one).
+                         val_configs=[{"field": field, "agg": aggregation, "orderBy": "rowId"} for field in FIELDS],
                          show_row_totals=False, show_col_totals=False, needs_col_schema=True)
     assert response.status == "data", response.message
     assert_source_rows(response.data, aggregation)

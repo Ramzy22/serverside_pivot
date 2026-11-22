@@ -23,6 +23,7 @@ class Measure:
     separator: Optional[str] = None
     null_handling: Optional[str] = None  # "ignore", "as_zero", "as_empty", "exclude_rows"
     filter_condition: Optional[str] = None
+    order_by: Optional[str] = None  # first / last: the field that picks the record (REQ-AGG-008)
     
     # NEW: Ratio metrics support
     ratio_numerator: Optional[str] = None  # Reference to another measure alias

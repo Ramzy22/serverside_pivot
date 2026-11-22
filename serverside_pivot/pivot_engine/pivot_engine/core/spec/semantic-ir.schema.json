@@ -59,6 +59,10 @@
             ],
             "minimum": 0,
             "maximum": 1
+          },
+          "orderBy": {
+            "type": "string",
+            "description": "first / last (REQ-AGG-008): the field whose smallest / largest value picks the record."
           }
         }
       }

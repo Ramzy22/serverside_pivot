@@ -573,3 +573,26 @@ def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subt
         assert core[2] == legacy[2]
     else:  # F-AXIS-FLAT-GT: the core's flat grand total is the hierarchy's
         assert core[2] == split(run("off", True))[2], (core[2], legacy[2])
+
+
+def test_first_last_without_an_order_field_is_a_typed_error():
+    """REQ-AGG-008: the core never returns an arbitrary record; with an order field it is served."""
+    import pyarrow as pa
+
+    from pivot_engine.core.ir import IRValidationError
+    from pivot_engine.transport.core_bridge import core_hierarchy_view
+    from pivot_engine.types.pivot_spec import Measure, PivotSpec
+
+    con = ibis.duckdb.connect()
+    con.create_table("t", pa.table({"g": ["a", "a", "b"], "v": [1, 2, 3], "ts": [2, 1, 5]}))
+
+    def view(order_by):
+        spec = PivotSpec(table="t", rows=["g"], measures=[Measure(field="v", agg="last", alias="v_last", order_by=order_by)],
+                         filters=[], totals=True)
+        return core_hierarchy_view(con.table, spec, [["__ALL__"]], 0, 10)
+
+    with pytest.raises(IRValidationError, match="needs an order field"):
+        view(None)
+    rows = view("ts")["rows"]  # a: ts 2 -> 1; b: 3; the grand total: ts 5 -> 3
+    assert [(r.get("g"), bool(r.get("_isTotal")), r["v_last"]) for r in rows] == [
+        ("a", False, 1), ("b", False, 3), (None, True, 3)]

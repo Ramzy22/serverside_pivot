@@ -19,7 +19,7 @@ def _filter(f: Any) -> Any:
 def to_oracle(query: Any) -> Query:
     return Query(
         rows=list(query.rows),
-        measures=[Measure(m.alias, m.agg, m.field, m.weight, m.q) for m in query.measures],
+        measures=[Measure(m.alias, m.agg, m.field, m.weight, m.q, getattr(m, "order_by", None)) for m in query.measures],
         filters=[_filter(f) for f in query.filters],
         measure_filters=[MeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
