@@ -8,7 +8,7 @@ import ibis
 import pyarrow as pa
 import pytest
 
-from pivot_engine.core.ir import MeasureFilter, MeasureRef, Predicate, PredicateGroup, SortKey, Window
+from pivot_engine.core.ir import Expr, MeasureFilter, MeasureRef, Predicate, PredicateGroup, SortKey, Window
 from pivot_engine.transport.core_bridge import CoreUnsupported, core_hierarchy_view, spec_to_query
 from pivot_engine.types.pivot_spec import Measure, MeasureAxisConfig, PivotConfig, PivotSpec
 
@@ -726,3 +726,46 @@ def test_ragged_hierarchy_view_maps_each_member_to_its_own_field():  # REQ-DIM-0
     assert (row["l1"], row["h"], "l2" in row) == ("Root", "B", False)
     with pytest.raises(CoreUnsupported, match="flat layout"):
         spec_to_query(s, True, con.table("g").schema(), subtotals="none")
+
+
+def test_formulas_map_to_core_measures_over_the_node_measures():  # REQ-AGG-010
+    schema = ibis.schema({"r": "string", "c": "string", "s": "float64", "k": "float64"})
+
+    def formulas(*exprs, sort=None):
+        spec = PivotSpec(table="t", rows=["r"], measures=[Measure(field="s", agg="sum", alias="s_sum"),
+                                                          Measure(field="k", agg="sum", alias="k_sum")],
+                         formulas=[{"id": f"f{i}", "expr": e} for i, e in enumerate(exprs)], sort=sort or [])
+        query = spec_to_query(spec, [["__ALL__"]], schema)
+        return {m.alias: m.expr for m in query.measures if m.agg == "formula"}, query.sort
+
+    ref = lambda a: Expr("ref", (a,))  # noqa: E731
+    got, _ = formulas("(s_sum - k_sum) / s_sum", "round(f0 * -100, 2) + abs(-k_sum) ** 2", "[S_SUM] + int(k_sum)")
+    assert got["f0"] == Expr("/", (Expr("-", (ref("s_sum"), ref("k_sum"))), ref("s_sum")))
+    assert got["f1"] == Expr("+", (Expr("round", (Expr("*", (ref("f0"), Expr("num", (-100,)))), 2)),
+                                   Expr("pow", (Expr("abs", (Expr("neg", (ref("k_sum"),)),)), 2))))
+    assert got["f2"] == Expr("+", (ref("s_sum"), Expr("trunc", (ref("k_sum"),))))
+    # unknown names, bad syntax, unknown functions and reference cycles are NULL (the adapter's None)
+    got, _ = formulas("nope + 1", "s_sum +", "sqrt(s_sum)", "f4 + 1", "f3 * 2", "f5")
+    assert got["f0"] == Expr("+", (Expr("null"), Expr("num", (1,))))
+    assert got["f1"] == got["f2"] == got["f3"] == got["f4"] == got["f5"] == Expr("null")
+    # a formula can be sorted on, at the row level and in the row-total column
+    _, sort = formulas("s_sum / k_sum", sort=[{"field": "f0", "order": "desc"}])
+    assert sort == (SortKey("f0", True),)
+    with pytest.raises(CoreUnsupported, match="computed exponent"):
+        formulas("s_sum ** k_sum")
+
+
+def test_formula_totals_are_the_formula_of_the_total_measures():  # REQ-AGG-010
+    con = ibis.duckdb.connect()
+    con.create_table("m", pa.table({"region": ["North", "North", "South", "South"],
+                                    "sales": [100.0, 100.0, 80.0, 120.0], "cost": [60.0, 80.0, 20.0, 90.0]}))
+    s = PivotSpec(table="m", rows=["region"], totals=True,
+                  measures=[Measure(field="sales", agg="sum", alias="sales_sum"),
+                            Measure(field="cost", agg="sum", alias="cost_sum")],
+                  formulas=[{"id": "margin", "expr": "(sales_sum - cost_sum) / sales_sum"}],
+                  sort=[{"field": "margin", "order": "desc"}])
+    view = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    assert [(r["_path"], r["margin"]) for r in view["rows"]] == [
+        ("South", pytest.approx(90 / 200)), ("North", pytest.approx(60 / 200)),
+        ("__grand_total__", pytest.approx(150 / 400))]
+    assert view["grand_total_formula_source_rows"] == []

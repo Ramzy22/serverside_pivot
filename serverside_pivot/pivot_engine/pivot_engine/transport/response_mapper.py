@@ -328,8 +328,9 @@ class TanStackResponseMapper(FormulaEngineMixin):
         )
         _formula_errors_main = {}
         if not formulas_materialized_by_measure_axis:
+            engine_sorted = bool(self._engine_formula_ids(rows, tanstack_request))
             _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
-            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
+            rows = self._sort_rows_for_formula_sort(rows, tanstack_request, engine_sorted=engine_sorted)
 
         # Calculate pagination info if needed
         pagination = None
@@ -484,8 +485,9 @@ class TanStackResponseMapper(FormulaEngineMixin):
         # window functions, but that second pass is idempotent so it is safe.
         _formula_errors = {}
         if not formulas_materialized_by_measure_axis:
+            engine_sorted = bool(self._engine_formula_ids(rows, tanstack_request))
             _formula_errors = self._apply_formula_columns(rows, tanstack_request)
-            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
+            rows = self._sort_rows_for_formula_sort(rows, tanstack_request, engine_sorted=engine_sorted)
 
         return TanStackResponse(
             data=rows,

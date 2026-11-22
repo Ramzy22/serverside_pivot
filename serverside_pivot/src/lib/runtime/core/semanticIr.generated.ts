@@ -27,6 +27,12 @@ export interface PivotQuery {
        * first / last (REQ-AGG-008): the field whose smallest / largest value picks the record.
        */
       orderBy?: string;
+      /**
+       * REQ-AGG-010: a formula's expression tree {op, args}, evaluated on each node's measures (agg 'formula').
+       */
+      expr?: {
+        [k: string]: unknown;
+      };
     },
     ...{
       alias: string;
@@ -38,6 +44,12 @@ export interface PivotQuery {
        * first / last (REQ-AGG-008): the field whose smallest / largest value picks the record.
        */
       orderBy?: string;
+      /**
+       * REQ-AGG-010: a formula's expression tree {op, args}, evaluated on each node's measures (agg 'formula').
+       */
+      expr?: {
+        [k: string]: unknown;
+      };
     }[]
   ];
   filters?: Filter[];

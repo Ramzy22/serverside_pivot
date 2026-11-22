@@ -178,6 +178,9 @@ class PivotSpec:
     column_sort_options: Optional[Dict[str, Any]] = None
     group_allow_unbalanced: bool = False
     unbalanced_values: Optional[List[Any]] = None
+    # Measure formulas (REQ-AGG-010): [{"id", "expr"}], references canonicalized to measure ids.
+    # The core evaluates them per node; legacy leaves them to the adapter's post-processing.
+    formulas: Optional[List[Dict[str, Any]]] = None
 
     def copy(self):
         """Deep copy the PivotSpec"""
@@ -213,6 +216,7 @@ class PivotSpec:
             column_sort_options=d.get("column_sort_options"),
             group_allow_unbalanced=bool(d.get("group_allow_unbalanced", False)),
             unbalanced_values=d.get("unbalanced_values"),
+            formulas=d.get("formulas"),
         )
 
     def to_dict(self):
@@ -238,5 +242,6 @@ class PivotSpec:
             "drill_paths": [p.__dict__ for p in self.drill_paths] if self.drill_paths else None,
             "column_sort_options": self.column_sort_options,
             "group_allow_unbalanced": self.group_allow_unbalanced,
+            "formulas": self.formulas,
             "unbalanced_values": self.unbalanced_values,
         }

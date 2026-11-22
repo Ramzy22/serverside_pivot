@@ -15,7 +15,7 @@ from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
-from .ir import DetailQuery, DistinctQuery, PivotQuery, PredicateGroup
+from .ir import DetailQuery, DistinctQuery, PivotQuery, PredicateGroup, expr_to_wire
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
@@ -37,7 +37,8 @@ def canonical(query: PivotQuery) -> str:
     body = {
         "dataset": query.dataset,
         "rows": list(query.rows),
-        "measures": [[m.alias, m.agg, m.field, m.weight, m.q, *([m.order_by] if m.order_by is not None else [])]
+        "measures": [[m.alias, m.agg, m.field, m.weight, m.q, *([m.order_by] if m.order_by is not None else []),
+                      *([expr_to_wire(m.expr)] if m.expr is not None else [])]
                      for m in query.measures],
         "filters": [_canonical_filter(f, scalar) for f in query.filters],
         "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],

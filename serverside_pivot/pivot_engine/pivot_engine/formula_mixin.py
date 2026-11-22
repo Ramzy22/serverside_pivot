@@ -495,8 +495,28 @@ class FormulaEngineMixin:
             original_order.get(left_key, 0) < original_order.get(right_key, 0)
         )
 
-    def _sort_rows_for_formula_sort(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> List[Dict[str, Any]]:
-        if not rows or not self._has_formula_sort(request):
+    def _engine_formula_ids(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> set[str]:
+        """Measure formulas whose values the engine already put on the rows (REQ-AGG-010).
+
+        The core evaluates measure formulas on each node's own measures, the
+        row-total column and the grand total included; their values must not
+        be recomputed, summed or re-sorted here.  Legacy rows never carry them.
+        """
+        formula_ids = self._measure_formula_ids_from_request(request)
+        if not rows or not formula_ids:
+            return set()
+        keys: set = set()
+        for row in rows:
+            if isinstance(row, dict):
+                keys.update(k for k in row if isinstance(k, str))
+        return {
+            fid for fid in formula_ids
+            if any(key == fid or key.endswith(f"_{fid}") for key in keys)
+        }
+
+    def _sort_rows_for_formula_sort(self, rows: List[Dict[str, Any]], request: TanStackRequest,
+                                    *, engine_sorted: bool = False) -> List[Dict[str, Any]]:
+        if not rows or engine_sorted or not self._has_formula_sort(request):
             return rows
 
         grand_total_rows = [row for row in rows if _is_grand_total_row(row)]
@@ -694,6 +714,27 @@ class FormulaEngineMixin:
             formula_errors[formula_id] = "self_reference"
         for formula_id in (unresolved_formula_ids - self_referencing_ids):
             formula_errors[formula_id] = "circular_reference"
+
+        if self._engine_formula_ids(rows, request):
+            # REQ-AGG-010: the engine evaluated every measure formula; report errors, keep its values.
+            for formula_id in formula_ids - set(formula_errors):
+                if any(
+                    isinstance(row, dict)
+                    and any(
+                        isinstance(key, str)
+                        and (key == formula_id or key.endswith(f"_{formula_id}"))
+                        and value is None
+                        for key, value in row.items()
+                    )
+                    for row in rows
+                ):
+                    formula_errors[formula_id] = "expression_error"
+            from .planner.expression_parser import SafeExpressionParser
+
+            formula_errors.update(
+                self._apply_column_formula_columns(rows, column_formula_cols, SafeExpressionParser())
+            )
+            return formula_errors
 
         formula_alias_map = {}
         for col in measure_formula_cols:

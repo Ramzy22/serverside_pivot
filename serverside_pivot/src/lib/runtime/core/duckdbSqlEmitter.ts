@@ -212,9 +212,51 @@ function memberCondition(columnsDims: string[], member: unknown[], columns: Reco
         .join(' AND ');
 }
 
+type FormulaExpr = { op: string; args: unknown[] };
+
+/** REQ-AGG-010: a formula over the node's own aggregates; a NULL input or an undefined result is NULL. */
+function formulaSql(query: PivotQuery, e: FormulaExpr, condition: string | null, columns: Record<string, ColumnInfo>,
+                    keys: string[]): string {
+    const sub = (x: unknown) => formulaSql(query, x as FormulaExpr, condition, columns, keys);
+    const a = e.args;
+    switch (e.op) {
+        case 'null': return 'CAST(NULL AS DOUBLE)';
+        case 'num': return `CAST(${Number(a[0])} AS DOUBLE)`;
+        case 'ref': {
+            const m = query.measures.find((x) => x.alias === a[0]);
+            if (!m) throw new EmitterUnsupported(`formula over unknown measure ${String(a[0])}`);
+            return `CAST(${levelAggregate(query, m as Measure, condition, columns, keys)} AS DOUBLE)`;
+        }
+        case 'round': return `ROUND(${sub(a[0])}, ${Number(a[1])})`;
+        case 'pow': {
+            const exponent = Number(a[1]);
+            let x = sub(a[0]);
+            if (!Number.isInteger(exponent)) x = `(CASE WHEN ${x} < 0 THEN NULL ELSE ${x} END)`;
+            if (exponent < 0) x = `(CASE WHEN ${x} = 0 THEN NULL ELSE ${x} END)`;
+            return `POWER(${x}, CAST(${exponent} AS DOUBLE))`;
+        }
+        case '+': case '-': case '*': return `(${sub(a[0])} ${e.op} ${sub(a[1])})`;
+        case '/': return `(CASE WHEN ${sub(a[1])} = 0 THEN NULL ELSE ${sub(a[0])} / ${sub(a[1])} END)`;
+        case 'neg': return `(-${sub(a[0])})`;
+        case 'abs': return `ABS(${sub(a[0])})`;
+        case 'ceil': return `CEIL(${sub(a[0])})`;
+        case 'floor': return `FLOOR(${sub(a[0])})`;
+        case 'trunc': return `TRUNC(${sub(a[0])})`;
+        case 'min': case 'max': {
+            const xs = a.map(sub);
+            return `(CASE WHEN ${xs.map((x) => `${x} IS NULL`).join(' OR ')} THEN NULL ELSE ${e.op === 'min' ? 'LEAST' : 'GREATEST'}(${xs.join(', ')}) END)`;
+        }
+        default: throw new EmitterUnsupported(`formula operator ${e.op}`);
+    }
+}
+
 /** One measure at a level grouped by `keys`; a per-member axis value is level-aware (REQ-DIM-003). */
 function levelAggregate(query: PivotQuery, m: Measure, condition: string | null, columns: Record<string, ColumnInfo>,
                         keys: string[]): string {
+    if (m.agg === 'formula') {
+        const value = formulaSql(query, (m as unknown as { expr: FormulaExpr }).expr, condition, columns, keys);
+        return `(CASE WHEN isnan(${value}) OR isinf(${value}) THEN NULL ELSE ${value} END)`;
+    }
     if (m.agg !== 'member') return aggregate(m, condition, columns);
     const axis = query.unpivot;
     if (!axis) throw new EmitterUnsupported('member aggregation without a measure axis');

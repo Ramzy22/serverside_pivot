@@ -179,6 +179,9 @@ class TanStackRequestMapper(FormulaEngineMixin):
                 add_alias(column.get("formulaRef"), column_id)
                 add_alias(column.get("formulaLabel"), column_id)
                 add_alias(column.get("header"), column_id)
+                if not column.get("formulaRef"):  # the adapter's reference key: the label normalized
+                    add_alias(_normalize_formula_reference_key(
+                        column.get("formulaLabel") or column.get("header") or column_id, column_id), column_id)
         return lookup
 
     @staticmethod
@@ -212,6 +215,19 @@ class TanStackRequestMapper(FormulaEngineMixin):
 
         def resolve_alias(value: str) -> str:
             return alias_lookup.get(value, alias_lookup.get(value.lower(), value))
+
+        # Names that are not identifiers ("Gross Sales") are referenced raw: bracket the known ones first,
+        # longest first, so the identifier pass below never splits them.
+        spaced = sorted(
+            {alias for alias in alias_lookup if alias and not _FORMULA_IDENTIFIER_RE.fullmatch(alias)},
+            key=len, reverse=True,
+        )
+        if spaced:
+            spaced_re = re.compile(
+                r"(\[[^\]]+\])|(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, spaced)) + r")(?![A-Za-z0-9_])",
+                flags=re.IGNORECASE,
+            )  # one pass: an existing bracketed reference is kept as it is
+            text = spaced_re.sub(lambda m: m.group(1) or f"[{m.group(2)}]", text)
 
         def replace_bracket(match: re.Match) -> str:
             resolved = resolve_alias(match.group(1))
@@ -271,8 +287,20 @@ class TanStackRequestMapper(FormulaEngineMixin):
             request.columns or []
         )
 
+        formulas: List[Dict[str, Any]] = []
         for col in request.columns:
             if col.get("isFormula"):
+                if (
+                    not measure_axis_active
+                    and not self._is_column_formula_column(col)
+                    and col.get("id")
+                ):  # REQ-AGG-010: evaluated per node by the core
+                    formulas.append({
+                        "id": str(col.get("id")),
+                        "expr": self._canonicalize_measure_formula_expression(
+                            col.get("formulaExpr", ""), formula_alias_lookup
+                        ),
+                    })
                 if (
                     measure_axis_active
                     and not self._is_column_formula_column(col)
@@ -593,6 +621,7 @@ class TanStackRequestMapper(FormulaEngineMixin):
             column_sort_options=request.column_sort_options,
             group_allow_unbalanced=bool(getattr(request, "group_allow_unbalanced", False)),
             unbalanced_values=getattr(request, "unbalanced_values", None),
+            formulas=formulas or None,
         )
         return spec
 

@@ -7,6 +7,7 @@ fallback (REQ-AGG-001, F-SILENT).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
@@ -51,10 +52,85 @@ class IRValidationError(ValueError):
 class MeasureRef:
     alias: str
     agg: str
-    field: Optional[str]  # None only for count(*)
+    field: Optional[str]  # None only for count(*) and a formula
     weight: Optional[str] = None  # weighted_avg
     q: Optional[float] = None  # percentile, in [0, 1]
     order_by: Optional[str] = None  # first / last (REQ-AGG-008)
+    expr: Optional[Expr] = None  # a formula (REQ-AGG-010)
+
+
+@dataclass(frozen=True)
+class Expr:
+    """A formula expression (REQ-AGG-010), evaluated on one node's measures.
+
+    ``op`` is ``num`` (args: a finite number), ``ref`` (args: a measure alias),
+    ``null`` (no args: an invalid formula part), ``+ - * /`` (two expressions),
+    ``neg abs ceil floor trunc`` (one), ``round``
+    (an expression and integer digits 0..12), ``pow`` (an expression and a
+    number exponent, |e| <= 64), ``min max`` (two to eight expressions).
+    """
+
+    op: str
+    args: Tuple[Any, ...] = ()
+
+    def refs(self) -> List[str]:
+        if self.op == "ref":
+            return [str(self.args[0])]
+        return [r for a in self.args if isinstance(a, Expr) for r in a.refs()]
+
+
+FORMULA_AGG = "formula"
+_UNARY = frozenset({"neg", "abs", "ceil", "floor", "trunc"})
+_BINARY = frozenset({"+", "-", "*", "/"})
+
+
+def check_expr(e: Any, depth: int = 0) -> None:
+    """Validate a formula expression's shape (REQ-AGG-010); references are checked by the query."""
+    if not isinstance(e, Expr) or depth > 32:
+        raise IRValidationError("a formula is a bounded expression tree.")
+    a = e.args
+    if e.op == "null":
+        if a:
+            raise IRValidationError("a formula null takes no operands.")
+    elif e.op == "num":
+        if len(a) != 1 or isinstance(a[0], bool) or not isinstance(a[0], (int, float)) or not math.isfinite(a[0]):
+            raise IRValidationError("a formula number is one finite number.")
+    elif e.op == "ref":
+        if len(a) != 1 or not isinstance(a[0], str) or not a[0]:
+            raise IRValidationError("a formula reference names one measure.")
+    elif e.op in _BINARY:
+        if len(a) != 2:
+            raise IRValidationError(f"formula operator {e.op!r} takes two operands.")
+        for x in a:
+            check_expr(x, depth + 1)
+    elif e.op in _UNARY:
+        if len(a) != 1:
+            raise IRValidationError(f"formula function {e.op!r} takes one operand.")
+        check_expr(a[0], depth + 1)
+    elif e.op == "round":
+        if len(a) != 2 or isinstance(a[1], bool) or not isinstance(a[1], int) or not 0 <= a[1] <= 12:
+            raise IRValidationError("round takes an operand and integer digits 0..12.")
+        check_expr(a[0], depth + 1)
+    elif e.op == "pow":
+        if (len(a) != 2 or isinstance(a[1], bool) or not isinstance(a[1], (int, float))
+                or not math.isfinite(a[1]) or abs(a[1]) > 64):
+            raise IRValidationError("pow takes an operand and a number exponent of at most 64.")
+        check_expr(a[0], depth + 1)
+    elif e.op in {"min", "max"}:
+        if not 2 <= len(a) <= 8:
+            raise IRValidationError(f"{e.op} takes two to eight operands.")
+        for x in a:
+            check_expr(x, depth + 1)
+    else:
+        raise IRValidationError(f"unknown formula operator {e.op!r}.")
+
+
+def expr_to_wire(e: Expr) -> Dict[str, Any]:
+    return {"op": e.op, "args": [expr_to_wire(x) if isinstance(x, Expr) else x for x in e.args]}
+
+
+def expr_from_wire(obj: Any) -> Expr:
+    return Expr(str(obj["op"]), tuple(expr_from_wire(x) if isinstance(x, Mapping) else x for x in obj.get("args", ())))
 
 
 @dataclass(frozen=True)
@@ -412,7 +488,19 @@ class PivotQuery:
         if overlap:
             raise IRValidationError(f"measure alias collides with a dimension: {sorted(overlap)}")
         axis = self.unpivot
+        formulas = {m.alias: m for m in self.measures if m.agg == FORMULA_AGG}
         for m in self.measures:
+            if m.agg == FORMULA_AGG:  # REQ-AGG-010
+                if m.field is not None or m.weight is not None or m.q is not None or m.order_by is not None:
+                    raise IRValidationError(f"formula {m.alias!r} takes only an expression.")
+                check_expr(m.expr)
+                assert m.expr is not None
+                for ref in m.expr.refs():
+                    if ref not in aliases:
+                        raise IRValidationError(f"formula {m.alias!r} references unknown measure {ref!r}.")
+                continue
+            if m.expr is not None:
+                raise IRValidationError(f"measure {m.alias!r} is not a formula and takes no expression.")
             if axis is not None and axis.per_member and m.field == axis.value and m.agg != MEMBER_AGG:
                 raise IRValidationError(f"a per-member measure axis aggregates {m.field!r} by member ({MEMBER_AGG!r}).")
             if m.agg == MEMBER_AGG:  # REQ-DIM-003: each member's own aggregation, NULL above the label
@@ -453,6 +541,28 @@ class PivotQuery:
                 if schema[m.order_by] == "other":
                     raise IRValidationError(f"order field {m.order_by!r} is not orderable.")
         series = self.series_measures()  # REQ-AGG-009: a series is shown, never compared or computed with
+        for f in formulas.values():
+            assert f.expr is not None
+            if set(f.expr.refs()) & series:
+                raise IRValidationError(f"formula {f.alias!r} over a series measure.")
+        visiting: List[str] = []
+        done: set[str] = set()
+
+        def acyclic(alias: str) -> None:
+            if alias in done or alias not in formulas:
+                return
+            if alias in visiting:
+                raise IRValidationError(f"formula {alias!r} references itself.")
+            visiting.append(alias)
+            expr = formulas[alias].expr
+            assert expr is not None
+            for ref in expr.refs():
+                acyclic(ref)
+            visiting.pop()
+            done.add(alias)
+
+        for alias in formulas:
+            acyclic(alias)
         for flt in self.filters:
             check_filter(flt, schema)
         for mf in self.measure_filters:
@@ -575,7 +685,8 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             dataset=str(dataset or obj["dataset"]),
             rows=tuple(obj["rows"]),
             measures=tuple(
-                MeasureRef(m["alias"], m["agg"], m.get("field"), m.get("weight"), m.get("q"), m.get("orderBy"))
+                MeasureRef(m["alias"], m["agg"], m.get("field"), m.get("weight"), m.get("q"), m.get("orderBy"),
+                           None if m.get("expr") is None else expr_from_wire(m["expr"]))
                 for m in obj["measures"]
             ),
             filters=tuple(_filter_from_wire(f) for f in obj.get("filters", ())),
@@ -655,6 +766,8 @@ def measure_to_wire(m: MeasureRef) -> Dict[str, Any]:
     out: Dict[str, Any] = {"alias": m.alias, "agg": m.agg, "field": m.field, "weight": m.weight, "q": m.q}
     if m.order_by is not None:  # omitted when absent: existing wire forms and vectors are unchanged
         out["orderBy"] = m.order_by
+    if m.expr is not None:
+        out["expr"] = expr_to_wire(m.expr)
     return out
 
 

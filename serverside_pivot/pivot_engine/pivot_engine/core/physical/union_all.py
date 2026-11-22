@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 import ibis
 import pyarrow as pa
 
-from ..ir import CASE_FOLDING_OPS, MEMBER_AGG, STRING_OPS, Predicate, PredicateGroup
+from ..ir import CASE_FOLDING_OPS, FORMULA_AGG, MEMBER_AGG, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from ..registry import type_family
 from .lowering import lower as lower_measure
@@ -93,8 +93,78 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
     raise ValueError(f"unsupported operator {p.op!r}")
 
 
+@ibis.udf.scalar.builtin(name="round")  # type: ignore[untyped-decorator]  # Ibis decorators are untyped
+def _round(x: float, digits: int) -> float:  # type: ignore[empty-body]
+    """SQL ROUND on a double: half away from zero, a double result (Ibis would cast round(x, 0) to BIGINT)."""
+
+
+@ibis.udf.scalar.builtin(name="ceil")  # type: ignore[untyped-decorator]  # Ibis decorators are untyped
+def _ceil(x: float) -> float:  # type: ignore[empty-body]
+    """SQL CEIL on a double, a double result."""
+
+
+@ibis.udf.scalar.builtin(name="floor")  # type: ignore[untyped-decorator]  # Ibis decorators are untyped
+def _floor(x: float) -> float:  # type: ignore[empty-body]
+    """SQL FLOOR on a double, a double result."""
+
+
+@ibis.udf.scalar.builtin(name="trunc")  # type: ignore[untyped-decorator]  # Ibis decorators are untyped
+def _trunc(x: float) -> float:  # type: ignore[empty-body]
+    """SQL TRUNC on a double (toward zero), a double result."""
+
+
+def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any) -> Any:
+    """REQ-AGG-010: a formula over the node's own aggregates; a NULL input or an undefined result is NULL."""
+    null = ibis.null().cast("float64")
+    args = e.args
+    if e.op == "null":
+        return null
+    if e.op == "num":
+        return ibis.literal(float(args[0]), type="float64")
+    if e.op == "ref":
+        m = next(x for x in plan.query.measures if x.alias == args[0])
+        return _lower(m, table, plan, keys, condition).cast("float64")
+    if e.op in {"round", "pow"}:
+        x = _formula(args[0], table, plan, keys, condition)
+        if e.op == "round":
+            return _round(x, ibis.literal(int(args[1]), type="int32"))
+        exponent = float(args[1])
+        if exponent != int(exponent):  # a negative base has no real power
+            x = ibis.ifelse(x < 0, null, x)
+        if exponent < 0:
+            x = ibis.ifelse(x == 0, null, x)
+        return x.pow(ibis.literal(exponent, type="float64"))
+    xs = [_formula(a, table, plan, keys, condition) for a in args]
+    if e.op == "+":
+        return xs[0] + xs[1]
+    if e.op == "-":
+        return xs[0] - xs[1]
+    if e.op == "*":
+        return xs[0] * xs[1]
+    if e.op == "/":
+        return ibis.ifelse(xs[1] == 0, null, xs[0] / xs[1])
+    if e.op == "neg":
+        return -xs[0]
+    if e.op == "abs":
+        return xs[0].abs()
+    if e.op == "ceil":
+        return _ceil(xs[0])
+    if e.op == "floor":
+        return _floor(xs[0])
+    if e.op == "trunc":
+        return _trunc(xs[0])
+    any_null = xs[0].isnull()
+    for x in xs[1:]:
+        any_null = any_null | x.isnull()
+    pick = ibis.least(*xs) if e.op == "min" else ibis.greatest(*xs)
+    return ibis.ifelse(any_null, null, pick)
+
+
 def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any = None) -> Any:
     """One measure at a level grouped by ``keys``; a per-member axis value is level-aware (REQ-DIM-003)."""
+    if m.agg == FORMULA_AGG:
+        value = _formula(m.expr, table, plan, keys, condition)
+        return ibis.ifelse(value.isnan() | value.isinf(), ibis.null().cast("float64"), value)
     if m.agg != MEMBER_AGG:
         return lower_measure(m, table, condition)
     axis = plan.query.unpivot

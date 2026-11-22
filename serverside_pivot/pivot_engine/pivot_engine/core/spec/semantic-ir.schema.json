@@ -63,6 +63,10 @@
           "orderBy": {
             "type": "string",
             "description": "first / last (REQ-AGG-008): the field whose smallest / largest value picks the record."
+          },
+          "expr": {
+            "description": "REQ-AGG-010: a formula's expression tree {op, args}, evaluated on each node's measures (agg 'formula').",
+            "type": "object"
           }
         }
       }

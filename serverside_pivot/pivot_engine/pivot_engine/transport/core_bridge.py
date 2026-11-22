@@ -15,6 +15,8 @@ display contract; ``_key`` carries the canonical typed identity
 
 from __future__ import annotations
 
+import ast
+import math
 import re
 import time
 from dataclasses import replace
@@ -25,7 +27,7 @@ from ..core.authority.verifier import verify_scoped
 from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    MEMBER_AGG, Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
+    FORMULA_AGG, MEMBER_AGG, Category, Expr, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
@@ -484,6 +486,131 @@ def _measure(m: Any, reasons: List[str], *, alias: Optional[str] = None) -> Opti
                       None if order_by is None else str(order_by))
 
 
+# --------------------------------------------------------------------- formulas (REQ-AGG-010)
+
+_FORMULA_UNARY = {"abs": "abs", "ceil": "ceil", "floor": "floor", "int": "trunc"}
+_FORMULA_BINARY = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}
+_FORMULA_MAX_LENGTH = 2048
+
+
+class _FormulaDecline(Exception):
+    pass
+
+
+def _formula_expr(text: str, resolve: Callable[[str], Optional[str]]) -> Expr:
+    """A formula's text (the request mapper's canonical form) as a core expression.
+
+    The grammar is the adapter's: numbers, measure references (``name`` or
+    ``[name]``), ``+ - * / **``, unary minus, ``abs round ceil floor min max int
+    float``.  An unknown reference or an expression that cannot be evaluated
+    is NULL (the adapter's result for it); a computed exponent is declined.
+    """
+    null = Expr("null")
+    brackets: Dict[str, str] = {}
+
+    def bracket(match: Any) -> str:
+        name = f"__formula_bracket_{len(brackets)}"
+        brackets[name] = match.group(1).strip()
+        return name
+
+    source = re.sub(r"\[([^\]]+)\]", bracket, text)
+    if not source.strip() or len(source) > _FORMULA_MAX_LENGTH:
+        return null
+    try:
+        tree = ast.parse(source, mode="eval").body
+    except (SyntaxError, ValueError):
+        return null
+
+    def number(node: Any) -> Optional[float]:
+        if isinstance(node, ast.Constant) and not isinstance(node.value, bool) and isinstance(node.value, (int, float)):
+            return float(node.value) if math.isfinite(node.value) else None
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            inner = number(node.operand)
+            return None if inner is None else (-inner if isinstance(node.op, ast.USub) else inner)
+        return None
+
+    def convert(node: Any, depth: int) -> Expr:
+        if depth > 30:
+            return null
+        constant = number(node)
+        if constant is not None:
+            return Expr("num", (int(constant) if constant.is_integer() and abs(constant) < 2 ** 53 else constant,))
+        if isinstance(node, ast.Name):
+            alias = resolve(brackets.get(node.id, node.id))
+            return null if alias is None else Expr("ref", (alias,))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return Expr("neg", (convert(node.operand, depth + 1),))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+            return convert(node.operand, depth + 1)
+        if isinstance(node, ast.BinOp) and type(node.op) in _FORMULA_BINARY:
+            return Expr(_FORMULA_BINARY[type(node.op)], (convert(node.left, depth + 1), convert(node.right, depth + 1)))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            exponent = number(node.right)
+            if exponent is None:
+                raise _FormulaDecline("formula power with a computed exponent")
+            if abs(exponent) > 64:
+                return null
+            return Expr("pow", (convert(node.left, depth + 1), int(exponent) if exponent.is_integer() else exponent))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+            name, args = node.func.id, node.args
+            if name in _FORMULA_UNARY and len(args) == 1:
+                return Expr(_FORMULA_UNARY[name], (convert(args[0], depth + 1),))
+            if name == "float" and len(args) == 1:
+                return convert(args[0], depth + 1)
+            if name == "round" and len(args) in (1, 2):
+                digits = 0.0 if len(args) == 1 else number(args[1])
+                if digits is None or not digits.is_integer() or not 0 <= digits <= 12:
+                    raise _FormulaDecline("formula round with computed or out-of-range digits")
+                return Expr("round", (convert(args[0], depth + 1), int(digits)))
+            if name in {"min", "max"} and 2 <= len(args) <= 8:
+                return Expr(name, tuple(convert(a, depth + 1) for a in args))
+        return null
+
+    return convert(tree, 0)
+
+
+def _formulas(spec: Any, measures: Sequence[MeasureRef], derived: Sequence[DerivedMeasure],
+              reasons: List[str]) -> List[MeasureRef]:
+    """The spec's measure formulas as core measures; a formula in a reference cycle is NULL (the adapter's)."""
+    raw = [f for f in getattr(spec, "formulas", None) or [] if isinstance(f, Mapping) and f.get("id")]
+    if not raw:
+        return []
+    plain = {m.alias for m in measures if not m.alias.startswith(HIDDEN) and m.agg != "array_agg"}
+    series = {m.alias for m in measures if m.agg == "array_agg"}
+    derived_aliases = {d.alias for d in derived}
+    ids = [str(f["id"]) for f in raw]
+    if len(set(ids)) != len(ids) or set(ids) & (plain | series | derived_aliases):
+        reasons.append("formula id repeated or naming a measure")
+        return []
+    lookup: Dict[str, str] = {}
+    for alias in [*plain, *ids]:
+        lookup.setdefault(alias, alias)
+        lookup.setdefault(alias.lower(), alias)
+
+    def resolve(name: str) -> Optional[str]:
+        if name in derived_aliases or name.lower() in {d.lower() for d in derived_aliases}:
+            raise _FormulaDecline("formula over a derived measure")
+        return lookup.get(name, lookup.get(name.lower()))
+
+    exprs: Dict[str, Expr] = {}
+    try:
+        for f in raw:
+            exprs[str(f["id"])] = _formula_expr(str(f.get("expr") or ""), resolve)
+    except _FormulaDecline as exc:
+        reasons.append(str(exc))
+        return []
+    resolved: set = set()
+    progressed = True
+    while progressed:  # a formula resolves once every formula it references has (the adapter's evaluation plan)
+        progressed = False
+        for fid in ids:
+            deps = {r for r in exprs[fid].refs() if r in exprs}
+            if fid not in resolved and fid not in deps and deps <= resolved:
+                resolved.add(fid)
+                progressed = True
+    return [MeasureRef(fid, FORMULA_AGG, None, expr=exprs[fid] if fid in resolved else Expr("null")) for fid in ids]
+
+
 def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str]) -> Optional[FrozenSet[Tuple[Any, ...]]]:
     if target_paths is True or target_paths is None:
         return None
@@ -513,7 +640,8 @@ _SPEC_FIELDS = {"table", "rows", "columns", "measures", "filters", "custom_dimen
                 "group_allow_unbalanced", "unbalanced_values",  # REQ-DIM-005: a ragged hierarchy
                 "full_rows",  # checked below: only the displayed rows themselves (a no-op) are served
                 "limit",  # the hierarchy view is windowed by start/end rows
-                "column_sort_options"}  # orders the column catalog only; cells are keyed by member
+                "column_sort_options",  # orders the column catalog only; cells are keyed by member
+                "formulas"}  # REQ-AGG-010
 _MEASURE_FIELDS = {"field", "agg", "alias", "weighted_field", "expression", "percentile", "separator",
                    "null_handling", "filter_condition", "ratio_numerator", "ratio_denominator", "ratio_null_value",
                    "window_func", "window_group_by", "window_order_by", "window_frame_start", "window_frame_end",
@@ -613,6 +741,10 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
 
     rows = axis["rows"] if axis else [str(r) for r in spec.rows or []]
     measures, derived = (axis["measures"], []) if axis else _measures(spec, reasons)
+    if axis and getattr(spec, "formulas", None):
+        reasons.append("measure formula with a measure axis")
+    elif not axis:
+        measures = [*measures, *_formulas(spec, measures, derived, reasons)]
     ragged = None
     raw_sort = axis["sort"] if axis else (spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else []))
     if getattr(spec, "group_allow_unbalanced", False):  # REQ-DIM-005
@@ -885,7 +1017,7 @@ def core_hierarchy_view(
     if grand_total is not None and int(start_row) <= nodes <= int(end_row):
         rows.append(dict(grand_total))
     formula_sources: List[Dict[str, Any]] = []
-    if totals and include_grand_total_row and query.rows:
+    if totals and include_grand_total_row and query.rows and not _has_formulas(query):
         top = execute(replace(query, expanded=frozenset(), window=Window(1, None)), resolver).records()
         formula_sources = [legacy(r) for r in top]
     from ..hierarchy_rows import compute_hierarchy_color_scale_stats
@@ -900,6 +1032,11 @@ def core_hierarchy_view(
         "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
                                    "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
     }
+
+
+def _has_formulas(query: PivotQuery) -> bool:
+    """Formulas are evaluated on the grand total itself (REQ-AGG-010): no rollup source rows are needed."""
+    return any(m.agg == FORMULA_AGG for m in query.measures)
 
 
 def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
@@ -987,7 +1124,7 @@ def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: 
     if totals and grand_total is not None and start_row <= nodes <= end_row:
         rows.append(dict(grand_total))
     formula_sources: List[Dict[str, Any]] = []
-    if totals and include_grand_total_row and query.rows:  # the top-level groups, as in the pre-order view
+    if totals and include_grand_total_row and query.rows and not _has_formulas(query):  # the top-level groups
         top = replace(query, subtotals="before", expanded=frozenset(), window=Window(1, None))
         formula_sources = [legacy(r) for r in execute(top, resolver).records()]
     from ..hierarchy_rows import compute_hierarchy_color_scale_stats

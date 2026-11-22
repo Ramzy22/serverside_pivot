@@ -24,7 +24,7 @@ from pivot_engine.core.exec import execute
 from pivot_engine.core.ir import from_wire, to_wire
 from pivot_engine.core.ir import (
     Category, CategoryRule, DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate,
-    PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
+    Expr, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
 
 from ..oracle.oracle import Measure as OMeasure
@@ -73,7 +73,8 @@ def _oracle(records, query: PivotQuery):
     oq = OQuery(
         filters=[_to_oracle_filter(f) for f in query.filters],
         rows=list(query.rows),
-        measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q, m.order_by) for m in query.measures],
+        measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q, getattr(m, "order_by", None),
+                          getattr(m, "expr", None)) for m in query.measures],
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
         subtotals=query.subtotals,
@@ -137,6 +138,25 @@ AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "m
                        "stddev", "variance", "percentile", "weighted_avg", "first", "last", "array_agg"])
 
 
+def formula_exprs(refs, depth=3):
+    """REQ-AGG-010: formula trees over the given measures, numbers and every operator."""
+    leaf = st.one_of(st.sampled_from(refs).map(lambda r: Expr("ref", (r,))),
+                     st.sampled_from([0, 1, 2, -3, 0.5, 2.5]).map(lambda n: Expr("num", (n,))),
+                     st.just(Expr("null")))
+    if depth == 0:
+        return leaf
+    sub = formula_exprs(refs, depth - 1)
+    return st.one_of(
+        leaf,
+        st.tuples(st.sampled_from(["+", "-", "*", "/"]), sub, sub).map(lambda t: Expr(t[0], (t[1], t[2]))),
+        st.tuples(st.sampled_from(["neg", "abs", "ceil", "floor", "trunc"]), sub).map(lambda t: Expr(t[0], (t[1],))),
+        st.tuples(sub, st.integers(0, 2)).map(lambda t: Expr("round", t)),
+        st.tuples(sub, st.sampled_from([2, 0.5, -1, 3])).map(lambda t: Expr("pow", t)),
+        st.tuples(st.sampled_from(["min", "max"]), st.lists(sub, min_size=2, max_size=3)).map(
+            lambda t: Expr(t[0], tuple(t[1]))),
+    )
+
+
 @st.composite
 def queries(draw):
     categories = ()
@@ -183,6 +203,11 @@ def queries(draw):
         key_fields = key_fields + ["mk"]
     series = agg == "array_agg" or (unpivot is not None and unpivot.per_member
                                     and unpivot.members[0].agg == "array_agg")
+    formula = None
+    if not series and draw(st.booleans()):  # REQ-AGG-010: a formula over the node's own measures
+        measures = measures + (MeasureRef("k_count", "count", "v"),)
+        formula = MeasureRef("f", "formula", None, expr=draw(formula_exprs([alias, "k_count"])))
+        measures = measures + (formula,)
     ragged = None
     if unpivot is None and not categories and draw(st.booleans()):  # REQ-DIM-005: a ragged hierarchy
         fields = tuple(draw(st.sampled_from([("r", "c"), ("c", "r"), ("r", "c", "k")])))
@@ -191,14 +216,15 @@ def queries(draw):
         key_fields = key_fields + ["__ragn", "__ragf1"]
     mfs = ()
     if not series and draw(st.booleans()):
-        mfs = (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from([">", "<=", "="])),
-                             draw(st.integers(-5, 10))),)
+        mfs = (MeasureFilter(draw(st.integers(1, len(rows))), "f" if formula and draw(st.booleans()) else alias,
+                             draw(st.sampled_from([">", "<=", "="])), draw(st.integers(-5, 10))),)
     expanded = None
     if len(rows) == 2 and draw(st.booleans()):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
     if len(rows) == 3 and ragged is not None and draw(st.booleans()):
         expanded = frozenset(draw(st.sets(st.tuples(DIM, DIM) | st.tuples(DIM), max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
+                    *([SortKey("f", desc=draw(st.booleans()), absolute=draw(st.booleans()))] if formula else []),
                     *([] if series else [SortKey(alias, desc=draw(st.booleans()),
                                                  absolute=agg not in {"min", "max"} and draw(st.booleans()))]),
                     # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
@@ -218,7 +244,8 @@ def queries(draw):
         if draw(st.booleans()):  # several derived measures share one tree (mixed joins and windows)
             derived = (DerivedMeasure("pt", "percent_of_total", alias), DerivedMeasure("rk", "rank", alias))
         elif func == "ratio":
-            measures = measures + (MeasureRef("k_count", "count", "v"),)
+            if not formula:
+                measures = measures + (MeasureRef("k_count", "count", "v"),)
             derived = (DerivedMeasure("d", "ratio", alias, "k_count", null_value=draw(st.sampled_from([None, -1.0]))),)
         elif func in {"cumulative", "moving_avg"}:
             frame = draw(st.sampled_from([None, (None, 0), (-1, 1), (-2, 0), (0, None), (1, 2)]))

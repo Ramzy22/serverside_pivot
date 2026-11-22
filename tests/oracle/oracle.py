@@ -198,6 +198,7 @@ class Measure:
     weight: Optional[str] = None
     q: Optional[float] = None
     order_by: Optional[str] = None  # first / last (REQ-AGG-008)
+    expr: Any = None  # a formula (REQ-AGG-010): an object with .op and .args
 
 
 @dataclass
@@ -247,10 +248,72 @@ def _key(record: Record, rows: Sequence[str], depth: int) -> Tuple[Any, ...]:
     return tuple(record.get(f) for f in rows[:depth])
 
 
+def _half_away(x: float, digits: int) -> float:
+    """SQL ROUND on a double: scale, round half away from zero exactly, unscale."""
+    p = 10.0 ** digits
+    r = x * p
+    if not math.isfinite(r):
+        return x
+    whole = math.floor(abs(r))
+    rounded = whole + (1.0 if abs(r) - whole >= 0.5 else 0.0)
+    return math.copysign(rounded, r) / p
+
+
+def _formula(e: Any, value: Callable[[str], Any]) -> Optional[float]:
+    """REQ-AGG-010: evaluate a formula on one node; a NULL input or an undefined result is None."""
+    args = e.args
+    if e.op == "null":
+        return None
+    if e.op == "num":
+        return float(args[0])
+    if e.op == "ref":
+        v = value(args[0])
+        return None if v is None else float(v)
+    if e.op in {"round", "pow"}:
+        x = _formula(args[0], value)
+        if x is None:
+            return None
+        if e.op == "round":
+            return _half_away(x, int(args[1]))
+        exponent = float(args[1])
+        if (x < 0 and exponent != int(exponent)) or (x == 0 and exponent < 0):
+            return None
+        try:
+            return float(x ** exponent)
+        except OverflowError:
+            return None
+    xs = [_formula(a, value) for a in args]
+    if any(x is None for x in xs):
+        return None
+    if e.op == "+":
+        return xs[0] + xs[1]
+    if e.op == "-":
+        return xs[0] - xs[1]
+    if e.op == "*":
+        return xs[0] * xs[1]
+    if e.op == "/":
+        return None if xs[1] == 0 else xs[0] / xs[1]
+    if e.op == "neg":
+        return -xs[0]
+    if e.op == "abs":
+        return abs(xs[0])
+    if e.op == "ceil":
+        return float(math.ceil(xs[0]))
+    if e.op == "floor":
+        return float(math.floor(xs[0]))
+    if e.op == "trunc":
+        return float(math.trunc(xs[0]))
+    return min(xs) if e.op == "min" else max(xs)
+
+
 def _measure(query: Query, m: Measure, records: Sequence[Record], keys: Sequence[str],
              node: Optional[Tuple[Any, ...]] = None) -> Any:
     """``node`` is the node's path over ``keys`` (its label names the member even when ``records``,
     a pivot cell's subset, is empty)."""
+    if m.agg == "formula":  # REQ-AGG-010: the node's own measures, never its children's formula values
+        by_alias = {x.alias: x for x in query.measures}
+        result = _formula(m.expr, lambda alias: _measure(query, by_alias[alias], records, keys, node))
+        return None if result is None or not math.isfinite(result) else result
     if m.agg != "member":
         return aggregate(m.agg, records, m.field, m.weight, m.q, m.order_by)
     label, _value, _key, members, _drop = query.unpivot
