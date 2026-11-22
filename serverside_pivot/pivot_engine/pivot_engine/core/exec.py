@@ -52,6 +52,10 @@ def canonical(query: PivotQuery) -> str:
     }
     if query.subtotals != "before":  # default omitted: existing plan identities are unchanged
         body["subtotals"] = query.subtotals
+    if query.categories:  # REQ-DIM-001: the rules are part of the query's meaning
+        body["categories"] = [[c.name, [[_canonical_filter(r.when, scalar), CanonicalScalarCodec.encode(r.label)]
+                                        for r in c.rules], CanonicalScalarCodec.encode(c.fallback)]
+                              for c in query.categories]
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
 
@@ -73,9 +77,12 @@ def fingerprint(query: PivotQuery) -> str:
 
 def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> Any:
     """``strategy=None`` lets the physical planner choose."""
+    from .physical.union_all import with_categories
+
     relation = resolve(query.dataset)
+    query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
+    relation = with_categories(relation, query.categories)  # REQ-DIM-001: strategies see the category columns
     schema = relation.schema()
-    query.validate({name: type_family(dtype) for name, dtype in schema.items()})
     plan = logical_plan(query)
     expr = STRATEGIES[strategy or choose(plan, schema)](plan, relation)
     verify_scoped(expr)

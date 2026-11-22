@@ -23,7 +23,8 @@ from hypothesis import strategies as st
 from pivot_engine.core.exec import execute
 from pivot_engine.core.ir import from_wire, to_wire
 from pivot_engine.core.ir import (
-    DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    Category, CategoryRule, DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate,
+    PredicateGroup, SortKey, Window,
 )
 
 from ..oracle.oracle import Measure as OMeasure
@@ -81,6 +82,8 @@ def _oracle(records, query: PivotQuery):
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
+        categories=[(c.name, [(_to_oracle_filter(r.when), r.label) for r in c.rules], c.fallback)
+                    for c in query.categories],
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -115,7 +118,7 @@ def test_core_conforms_to_every_vector(vector):
 
 # ------------------------------------------------------------------ properties
 
-DIM = st.sampled_from(["A", "a", "B", "", "x|y", "x_y", None])
+DIM = st.sampled_from(["A", "a", "B", "", " ", "x|y", "x_y", None])
 RECORDS = st.lists(
     st.fixed_dictionaries({"r": DIM, "c": DIM, "k": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
                            "w": st.one_of(st.none(), st.integers(0, 4))}),
@@ -127,7 +130,15 @@ AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "m
 
 @st.composite
 def queries(draw):
-    rows = tuple(draw(st.sampled_from([("r",), ("r", "c"), ("c", "r")])))
+    categories = ()
+    if draw(st.booleans()):  # REQ-DIM-001: a text category (a row dimension) and an integer one (its member key)
+        text = st.sampled_from(["G1", "g1", "Other", "", "x|y"])
+        rules = tuple(CategoryRule(draw(FILTERS), draw(text)) for _ in range(draw(st.integers(0, 3))))
+        categories = (Category("g", rules, draw(text)),
+                      Category("n", tuple(CategoryRule(r.when, i) for i, r in enumerate(rules)), len(rules)))
+        rows = tuple(draw(st.sampled_from([("g",), ("g", "r"), ("r", "g")])))
+    else:
+        rows = tuple(draw(st.sampled_from([("r",), ("r", "c"), ("c", "r")])))
     agg = draw(AGG)
     alias = f"m_{agg}"
     measures = (MeasureRef(alias, agg, "v",
@@ -145,7 +156,7 @@ def queries(draw):
                             absolute=agg not in {"min", "max"} and draw(st.booleans())),
                     # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
                     SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
-                            by=draw(st.sampled_from(["w", "k"])))]
+                            by=draw(st.sampled_from(["w", "k", "n"] if categories else ["w", "k"])))]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):
@@ -171,7 +182,7 @@ def queries(draw):
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after"])),
                       expanded=expanded, window=window,
-                      columns=columns, column_members=members, derived=derived)
+                      columns=columns, column_members=members, derived=derived, categories=categories)
 
 
 NEEDLE = st.sampled_from(["a", "A", "", "|", "x_", "b"])
@@ -193,7 +204,7 @@ def leaf_filters(draw):
     if kind == "num":
         return Predicate("v", draw(st.sampled_from(["=", "!=", ">", ">=", "<", "<="])), draw(st.integers(-5, 5)))
     if kind == "null":
-        return Predicate(draw(st.sampled_from(["r", "c", "v"])), draw(st.sampled_from(["is_null", "is_not_null"])))
+        return Predicate(draw(st.sampled_from(["r", "c", "v"])), draw(st.sampled_from(["is_null", "is_not_null", "is_empty", "is_not_empty"])))
     low = draw(st.integers(-10, 10))
     return Predicate("v", "between", (low, low + draw(st.integers(0, 10))))
 

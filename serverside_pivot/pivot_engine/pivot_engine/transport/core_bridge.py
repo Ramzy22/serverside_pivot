@@ -15,6 +15,7 @@ display contract; ``_key`` carries the canonical typed identity
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
@@ -24,7 +25,7 @@ from ..core.authority.verifier import verify_scoped
 from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
@@ -46,6 +47,7 @@ _OPS = {
     "=": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">=", "in": "in", "not in": "not_in",
     "not_in": "not_in", "between": "between", "contains": "contains", "not_contains": "not_contains",
     "starts_with": "starts_with", "ends_with": "ends_with", "is_null": "is_null", "is_not_null": "is_not_null",
+    "is_empty": "is_empty", "is_not_empty": "is_not_empty",
 }
 _MEASURE_FILTER_OPS = {"=", "!=", "<", "<=", ">", ">="}
 
@@ -115,7 +117,8 @@ def _dimension_filter(f: Mapping[str, Any], families: Mapping[str, str], reasons
             reasons.append("between without [low, high]")
             return None
         value = (_coerce(value[0], family), _coerce(value[1], family))
-    elif op not in {"is_null", "is_not_null", "contains", "not_contains", "starts_with", "ends_with"}:
+    elif op not in {"is_null", "is_not_null", "is_empty", "is_not_empty", "contains", "not_contains", "starts_with",
+                    "ends_with"}:
         value = _coerce(value, family)
     return Predicate(str(field), op, value, bool(f.get("caseSensitive", False)))
 
@@ -141,6 +144,124 @@ def _filters(spec: Any, aliases: FrozenSet[str], families: Mapping[str, str], de
         if mapped is not None:
             rows.append(mapped)
     return tuple(rows), tuple(measure_filters)
+
+
+# --------------------------------------------------------------------- custom dimensions (REQ-DIM-001)
+
+CATEGORY_PREFIX = "__custom_category__"
+_CATEGORY_OPS = {
+    "=": "=", "eq": "=", "==": "=", "!=": "!=", "<>": "!=", "ne": "!=", "not_eq": "!=", "not eq": "!=",
+    "<": "<", "lt": "<", "<=": "<=", "lte": "<=", ">": ">", "gt": ">", ">=": ">=", "gte": ">=",
+    "in": "in", "not in": "not_in", "not_in": "not_in", "notin": "not_in", "notIn": "not_in",
+    "contains": "contains", "not_contains": "not_contains", "between": "between",
+    "starts_with": "starts_with", "startsWith": "starts_with", "startswith": "starts_with",
+    "ends_with": "ends_with", "endsWith": "ends_with", "endswith": "ends_with",
+    # The category UI's "empty" operators (REQ-NULL-004): NULL or a text of spaces only.
+    "is null": "is_empty", "is_null": "is_empty", "isNull": "is_empty", "isnull": "is_empty",
+    "is not null": "is_not_empty", "is_not_null": "is_not_empty", "isNotNull": "is_not_empty",
+    "isnotnull": "is_not_empty",
+}
+
+
+def category_field_id(dimension: Mapping[str, Any]) -> str:
+    """The legacy column name of a custom dimension (``__custom_category__<slug>``)."""
+    raw_field = dimension.get("field")
+    if isinstance(raw_field, str) and raw_field.startswith(CATEGORY_PREFIX):
+        return raw_field
+    raw_id = str(dimension.get("id") or dimension.get("name") or dimension.get("label") or "category")
+    slug = re.sub(r"[^a-z0-9_]+", "_", raw_id.strip().lower()).strip("_") or "category"
+    if not re.match(r"^[a-z_]", slug):
+        slug = f"c_{slug}"
+    return f"{CATEGORY_PREFIX}{slug}"
+
+
+def _category_clause(clause: Any, fallback_field: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(clause, Mapping):
+        return None
+    field_name = clause.get("field")
+    if not isinstance(field_name, str) or not field_name.strip():
+        field_name = fallback_field
+    if not isinstance(field_name, str) or not field_name.strip():
+        return None
+    raw_op = str(clause.get("operator", clause.get("op", clause.get("type", "eq"))) or "eq").strip()
+    op = _CATEGORY_OPS.get(raw_op) or _CATEGORY_OPS.get(raw_op.replace(" ", "_").lower(), raw_op)
+    if op in {"in", "not_in"}:
+        raw = clause.get("values") if clause.get("values") is not None else clause.get("value")
+        if isinstance(raw, str):
+            value: Any = [item.strip() for item in raw.split(",") if item.strip()]
+        elif isinstance(raw, (list, tuple, set)):
+            value = list(raw)
+        else:
+            value = [] if raw is None else [raw]
+    else:
+        value = clause.get("value")
+    return {"field": field_name.strip(), "op": op, "value": value, "caseSensitive": bool(clause.get("caseSensitive", False))}
+
+
+def _category_condition(condition: Any, fallback_field: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(condition, Mapping):
+        return None
+    op = "or" if str(condition.get("op") or condition.get("operator") or "AND").upper() == "OR" else "and"
+    source = condition.get("clauses")
+    if source is None:
+        source = condition.get("conditions")
+    if isinstance(source, list):
+        clauses = [c for c in (_category_clause(item, fallback_field) for item in source) if c is not None]
+    else:
+        single = _category_clause(condition, fallback_field)
+        clauses = [single] if single else []
+    return {"op": op, "conditions": clauses} if clauses else None
+
+
+def _categories(spec: Any, families: Dict[str, str], reasons: List[str]) -> Tuple[Category, ...]:
+    """Legacy custom dimensions as IR categories; ``families`` gains each category column.
+
+    Same labels, fallback and hidden order keys as legacy
+    (``__sortkey__<field>``: rule index for "creation", the numeric label for
+    "numeric"), with conditions mapped to exact core filters.
+    """
+    out: List[Category] = []
+    for dimension in getattr(spec, "custom_dimensions", None) or []:
+        if not isinstance(dimension, Mapping):
+            continue
+        name = category_field_id(dimension)
+        fallback = str(dimension.get("fallbackLabel") or dimension.get("defaultLabel") or dimension.get("fallback")
+                       or "Other")
+        rules = dimension.get("rules") if isinstance(dimension.get("rules"), list) else []
+        labelled: List[CategoryRule] = []
+        creation: List[CategoryRule] = []
+        numeric: List[CategoryRule] = []
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, Mapping):
+                continue
+            raw = _category_condition(rule.get("condition") or rule, str(rule.get("field") or ""))
+            if raw is None:
+                continue
+            when = _dimension_filter(raw, families, reasons)
+            if when is None:
+                continue
+            label = str(rule.get("label") or "").strip()
+            if label:
+                labelled.append(CategoryRule(when, label))
+            creation.append(CategoryRule(when, i))
+            try:
+                numeric.append(CategoryRule(when, float(label)))
+            except (TypeError, ValueError):
+                pass
+        if name in families:
+            reasons.append(f"custom dimension {name!r} collides with a column")
+            continue
+        out.append(Category(name, tuple(labelled), fallback))
+        families[name] = "string"
+        order = str(dimension.get("order") or "creation").strip().lower()
+        key = f"__sortkey__{name}"
+        if order == "creation":
+            out.append(Category(key, tuple(creation), len(rules)))
+            families[key] = "integer"
+        elif order in {"numeric", "numeric_desc"}:
+            out.append(Category(key, tuple(numeric), 1e18))
+            families[key] = "floating"
+    return tuple(out)
 
 
 # --------------------------------------------------------------------- spec -> IR
@@ -300,8 +421,8 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         extra = set(s) - _SORT_KEYS if isinstance(s, Mapping) else {"<not a mapping>"}
         if extra:
             reasons.append(f"sort keys {sorted(extra)}")
-    for attr, label in (("custom_dimensions", "custom dimensions"),
-                        ("having", "having"), ("subtotals", "explicit subtotals"),
+    categories = _categories(spec, families, reasons)
+    for attr, label in (("having", "having"), ("subtotals", "explicit subtotals"),
                         ("drill_paths", "drill paths"), ("cursor", "keyset cursor"),
                         ("grouping_config", "grouping sets")):
         if getattr(spec, attr, None):
@@ -384,6 +505,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         window=Window(offset, limit),
         columns=tuple(columns),
         derived=tuple(derived),
+        categories=categories,
     )
 
 
@@ -602,6 +724,9 @@ def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[s
     if cache is not None and key in cache:
         return cache[key]
     plan = logical_plan(unwindowed)
+    from ..core.physical.union_all import with_categories
+
+    relation = with_categories(relation, query.categories)
     union, _ = TREES[choose(plan, relation.schema())](plan, relation)
     counted = union.count()
     verify_scoped(counted)  # every core expression is proven scoped before it runs
@@ -640,8 +765,7 @@ def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: 
     relation = resolve(spec.table)
     families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
     reasons: List[str] = []
-    if getattr(spec, "custom_dimensions", None):
-        reasons.append("custom dimensions")
+    categories = _categories(spec, families, reasons)  # REQ-DIM-001
     fields = payload.get("row_fields") or payload.get("pathFields") or payload.get("rowFields") or []
     fields = [str(f) for f in fields] if isinstance(fields, list) else []
     unknown = [f for f in fields if f not in families]
@@ -669,6 +793,7 @@ def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: 
         search=text_filter or None,
         sort=(SortKey(sort_col, sort_dir == "desc"),) if sort_col else (),
         window=Window(max(0, int(offset)), max(0, int(limit))),
+        categories=categories,
     )
     table, total = detail(query, lambda _name: relation)
     return {"rows": table.to_pylist(), "total_rows": total}
@@ -683,8 +808,7 @@ def core_unique_values(resolve: Callable[[str], Any], spec: Any, column_id: str,
     relation = resolve(spec.table)
     families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
     reasons: List[str] = []
-    if getattr(spec, "custom_dimensions", None):
-        reasons.append("custom dimensions")
+    categories = _categories(spec, families, reasons)  # REQ-DIM-001
     axis = getattr(spec, "measure_axis", None)
     if axis is not None and getattr(axis, "placement", "none") != "none":
         reasons.append("measure axis")
@@ -703,5 +827,5 @@ def core_unique_values(resolve: Callable[[str], Any], spec: Any, column_id: str,
     if reasons:
         raise CoreUnsupported(reasons)
     query = DistinctQuery(str(spec.table), column_id, tuple(filters), str(search or "").strip() or None,
-                          Window(max(0, int(offset)), max(0, int(limit))))
+                          Window(max(0, int(offset)), max(0, int(limit))), categories)
     return distinct_values(query, lambda _name: relation)

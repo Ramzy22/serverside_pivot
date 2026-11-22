@@ -82,6 +82,9 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
             return col.notnull() if null_listed else ibis.literal(True)
         outside = col.notin(values).fill_null(False)
         return (outside & col.notnull()) if null_listed else (outside | col.isnull())
+    if p.op in {"is_empty", "is_not_empty"}:  # REQ-NULL-004
+        empty = col.isnull() | (col.strip() == "") if col.type().is_string() else col.isnull()
+        return empty if p.op == "is_empty" else ~empty
     if p.op == "is_null":
         return col.isnull()
     if p.op == "is_not_null":
@@ -112,8 +115,28 @@ def _member_condition(table: Any, schema: Any, columns: Sequence[str], member: T
     return cond
 
 
+def with_categories(relation: Any, categories: Sequence[Any]) -> Any:
+    """Attach the category columns (REQ-DIM-001), in order: the first matching rule's label, else the fallback.
+
+    A rule condition has row-filter semantics (``_predicate``), so it never
+    matches NULL unless it says so.  Idempotent: validation forbids a
+    category named like an existing column.
+    """
+    for c in categories:
+        if c.name in relation.columns:
+            continue
+        family = c.family()
+        dtype = {"string": "string", "integer": "int64", "floating": "float64"}[family]
+        expr = ibis.literal(c.fallback, type=dtype)
+        for rule in reversed(c.rules):
+            expr = ibis.ifelse(_predicate(relation, rule.when), ibis.literal(rule.label, type=dtype), expr)
+        relation = relation.mutate(**{c.name: expr})
+    return relation
+
+
 def filtered(relation: Any, query: Any) -> Any:
-    """E0 before measure filters: the scoped relation with the row filters applied."""
+    """E0 before measure filters: the scoped relation, with its categories, with the row filters applied."""
+    relation = with_categories(relation, getattr(query, "categories", ()))
     return relation.filter([_predicate(relation, p) for p in query.filters]) if query.filters else relation
 
 
@@ -189,8 +212,9 @@ def tree(
     plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]
 ) -> Tuple[Any, List[Any]]:
     """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, and the order key."""
-    schema = relation.schema()
     q = plan.query
+    relation = with_categories(relation, q.categories)
+    schema = relation.schema()
     e0 = filtered(relation, q)
     e = _eligible(e0, plan)
     source = e if plan.values_from == "E" else e0

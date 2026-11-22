@@ -146,6 +146,11 @@ function predicate(f: Filter, columns: Record<string, ColumnInfo>): string {
         const outside = `COALESCE(${col} NOT IN (${sqlList}), FALSE)`;
         return nullListed ? `(${outside} AND ${col} IS NOT NULL)` : `(${outside} OR ${col} IS NULL)`;
     }
+    if (op === 'is_empty' || op === 'is_not_empty') { // REQ-NULL-004: NULL or a text of spaces only
+        const info = columns[f.field];
+        const empty = info && info.family === 'string' ? `(${col} IS NULL OR trim(${col}) = '')` : `(${col} IS NULL)`;
+        return op === 'is_empty' ? empty : `(NOT ${empty})`;
+    }
     if (op === 'is_null') return `(${col} IS NULL)`;
     if (op === 'is_not_null') return `(${col} IS NOT NULL)`;
     throw new EmitterUnsupported(`operator ${op}`);
@@ -246,27 +251,61 @@ function frameBound(offset: number | null | undefined, isStart: boolean): string
 // ------------------------------------------------------------------ the emitter
 
 /** Distinct column members over E0 (scope ∧ row filters), each dimension ordered NULLS LAST (as `exec.column_members`). */
+// ------------------------------------------------------------------ categories (REQ-DIM-001)
+
+interface CategorySource {
+    ctes: string[];
+    relation: string; // the relation holding the base columns plus every category column
+    columns: Record<string, ColumnInfo>;
+}
+
+/** One CTE per category, in order (a rule may reference an earlier category). */
+function withCategories(query: PivotQuery, options: EmitOptions): CategorySource {
+    const columns: Record<string, ColumnInfo> = { ...options.columns };
+    const ctes: string[] = [];
+    let relation = quoteIdent(options.table);
+    (query.categories || []).forEach((c, i) => {
+        if (columns[c.name]) throw new EmitterUnsupported(`category ${c.name} collides with a column`);
+        const labels = [...c.rules.map((r) => r.label), c.fallback];
+        let info: ColumnInfo;
+        if (labels.every((v) => typeof v === 'string')) info = { family: 'string', sqlType: 'VARCHAR' };
+        else if (labels.every((v) => typeof v === 'number' && Number.isInteger(v))) info = { family: 'integer', sqlType: 'BIGINT' };
+        else if (labels.every((v) => typeof v === 'number')) info = { family: 'floating', sqlType: 'DOUBLE' };
+        else throw new EmitterUnsupported(`category ${c.name} mixes label types`);
+        const whens = c.rules.map((r) => `WHEN ${predicate(r.when as Filter, columns)} THEN ${typedLiteral(r.label, info)}`);
+        const expr = whens.length ? `CASE ${whens.join(' ')} ELSE ${typedLiteral(c.fallback, info)} END` : typedLiteral(c.fallback, info);
+        const name = `__cat${i}`;
+        ctes.push(`${name} AS (SELECT *, ${expr} AS ${quoteIdent(c.name)} FROM ${relation})`);
+        relation = name;
+        columns[c.name] = info;
+    });
+    return { ctes, relation, columns };
+}
+
 export function emitColumnMembersSql(query: PivotQuery, options: EmitOptions): string {
     const dims = query.columns || [];
     if (!dims.length) throw new EmitterUnsupported('column members without column dimensions');
-    dims.forEach((d) => { if (!options.columns[d]) throw new EmitterUnsupported(`unknown column ${d}`); });
-    const where = (query.filters || []).map((f) => predicate(f as Filter, options.columns));
+    const source = withCategories(query, options);
+    dims.forEach((d) => { if (!source.columns[d]) throw new EmitterUnsupported(`unknown column ${d}`); });
+    const where = (query.filters || []).map((f) => predicate(f as Filter, source.columns));
     const cols = dims.map(quoteIdent).join(', ');
     const order = dims.map((d) => `(${quoteIdent(d)} IS NULL) ASC, ${quoteIdent(d)} ASC`).join(', ');
-    return `SELECT DISTINCT ${cols} FROM ${quoteIdent(options.table)}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order}`;
+    const prefix = source.ctes.length ? `WITH ${source.ctes.join(', ')} ` : '';
+    return `${prefix}SELECT DISTINCT ${cols} FROM ${source.relation}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order}`;
 }
 
 export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
-    const { columns } = options;
+    const catSource = withCategories(query, options);
+    const { columns } = catSource;
     const rows = query.rows;
     const need = (name: string) => {
         if (!columns[name]) throw new EmitterUnsupported(`unknown column ${name}`);
     };
     rows.forEach(need);
     (query.columns || []).forEach(need);
-    const ctes: string[] = [];
+    const ctes: string[] = [...catSource.ctes];
     const where = (query.filters || []).map((f) => predicate(f as Filter, columns));
-    ctes.push(`__e0 AS (SELECT * FROM ${quoteIdent(options.table)}${where.length ? ` WHERE ${where.join(' AND ')}` : ''})`);
+    ctes.push(`__e0 AS (SELECT * FROM ${catSource.relation}${where.length ? ` WHERE ${where.join(' AND ')}` : ''})`);
 
     // E: records whose group passes at every filtered level (REQ-TOT-001), groups evaluated on E0.
     const byLevel = new Map<number, NonNullable<PivotQuery['measureFilters']>>();

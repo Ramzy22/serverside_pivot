@@ -238,6 +238,60 @@
           }
         }
       }
+    },
+    "categories": {
+      "description": "REQ-DIM-001: user-defined dimension columns, computed in order before filters. Each record gets the label of the first rule whose condition holds, else the fallback.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "rules",
+          "fallback"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "when",
+                "label"
+              ],
+              "properties": {
+                "when": {
+                  "$ref": "#/$defs/filter"
+                },
+                "label": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "fallback": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -264,6 +318,8 @@
             "contains",
             "ends_with",
             "in",
+            "is_empty",
+            "is_not_empty",
             "is_not_null",
             "is_null",
             "not_contains",

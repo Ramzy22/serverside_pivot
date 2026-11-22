@@ -115,6 +115,9 @@ _OPS: Dict[str, Callable[[Any, Any], bool]] = {
     "ends_with": lambda a, b: a is not None and a.endswith(b),
     "is_null": lambda a, _b: a is None,
     "is_not_null": lambda a, _b: a is not None,
+    # REQ-NULL-004: empty = NULL or a text of spaces only
+    "is_empty": lambda a, _b: a is None or (isinstance(a, str) and a.strip(" ") == ""),
+    "is_not_empty": lambda a, _b: not (a is None or (isinstance(a, str) and a.strip(" ") == "")),
 }
 
 
@@ -177,6 +180,8 @@ class Query:
     columns: Sequence[str] = ()  # REQ-PIV-001
     column_members: Sequence[Tuple[Any, ...]] = ()
     derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
+    # REQ-DIM-001: (name, [(predicate, label), ...], fallback), evaluated in order on every record
+    categories: Sequence[Tuple[str, Sequence[Tuple[Any, Any]], Any]] = ()
 
 
 # ----------------------------------------------------------------- engine
@@ -210,8 +215,20 @@ def _measures(query: Query, records: Sequence[Record]) -> Dict[str, Any]:
     return out
 
 
+def with_categories(query: Query, data: Sequence[Record]) -> List[Record]:
+    """REQ-DIM-001: each record gets, per category, the first matching rule's label, else the fallback."""
+    out = []
+    for record in data:
+        r = dict(record)
+        for name, rules, fallback in query.categories:
+            r[name] = next((label for when, label in rules if when(r)), fallback)
+        out.append(r)
+    return out
+
+
 def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], List[Record]]:
     """Return (E0, E) per SEMANTICS §2."""
+    data = with_categories(query, data)
     e0 = [r for r in data if in_scope(r, query.scope) and all(p(r) for p in query.filters)]
     passing: Dict[int, set] = {}
     for level in sorted({mf.level for mf in query.measure_filters}):

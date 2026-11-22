@@ -73,6 +73,17 @@ export interface PivotQuery {
     frame?: [number | null, number | null] | null;
     nullValue?: number | null;
   }[];
+  /**
+   * REQ-DIM-001: user-defined dimension columns, computed in order before filters. Each record gets the label of the first rule whose condition holds, else the fallback.
+   */
+  categories?: {
+    name: string;
+    rules: {
+      when: Filter;
+      label: string | number;
+    }[];
+    fallback: string | number;
+  }[];
 }
 export interface Predicate {
   field: string;
@@ -87,6 +98,8 @@ export interface Predicate {
     | "contains"
     | "ends_with"
     | "in"
+    | "is_empty"
+    | "is_not_empty"
     | "is_not_null"
     | "is_null"
     | "not_contains"

@@ -13,6 +13,8 @@ from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 from .registry import REGISTRY, UnknownAggregationError
 
 __all__ = [
+    "Category",
+    "CategoryRule",
     "IRValidationError",
     "MeasureFilter",
     "MeasureRef",
@@ -22,12 +24,15 @@ __all__ = [
     "SortKey",
     "Window",
     "PREDICATE_OPS",
+    "extend_schema",
     "from_wire",
 ]
 
 STRING_OPS = frozenset({"contains", "not_contains", "starts_with", "ends_with"})
 PREDICATE_OPS = frozenset(
-    {"=", "!=", ">", ">=", "<", "<=", "in", "not_in", "is_null", "is_not_null", "between"} | STRING_OPS
+    {"=", "!=", ">", ">=", "<", "<=", "in", "not_in", "is_null", "is_not_null", "between",
+     "is_empty", "is_not_empty"}  # REQ-NULL-004: empty = NULL or a text of spaces only
+    | STRING_OPS
 )
 GROUP_OPS = frozenset({"and", "or"})
 # Operators where ``case_sensitive=False`` folds case (string columns only).
@@ -112,6 +117,78 @@ class Window:
 DERIVED_FUNCS = frozenset({"ratio", "percent_of_total", "rank", "dense_rank", "cumulative", "moving_avg"})
 
 
+def check_filter(f: Any, schema: Mapping[str, str]) -> None:
+    """Validate one row filter against ``schema`` (column -> type family)."""
+    if isinstance(f, PredicateGroup):
+        if f.op not in GROUP_OPS:
+            raise IRValidationError(f"unsupported filter group operator {f.op!r}.")
+        if not f.items:
+            raise IRValidationError("a filter group needs at least one condition.")
+        for item in f.items:
+            check_filter(item, schema)
+        return
+    if not isinstance(f, Predicate):
+        raise IRValidationError(f"filter {f!r} is not a predicate or group.")
+    if f.field not in schema:
+        raise IRValidationError(f"filter references unknown column {f.field!r}.")
+    if f.op not in PREDICATE_OPS:
+        raise IRValidationError(f"unsupported filter operator {f.op!r}.")
+    if f.op in {"in", "not_in"} and not isinstance(f.value, (list, tuple, frozenset, set)):
+        raise IRValidationError(f"{f.op} requires a list value.")
+    if f.op == "between" and not (isinstance(f.value, (list, tuple)) and len(f.value) == 2):
+        raise IRValidationError("between requires [low, high].")
+    if f.op in STRING_OPS:
+        if schema[f.field] != "string":
+            raise IRValidationError(f"{f.op} requires a string column, not {schema[f.field]} {f.field!r}.")
+        if not isinstance(f.value, str):
+            raise IRValidationError(f"{f.op} requires a string value.")
+
+
+@dataclass(frozen=True)
+class CategoryRule:
+    when: Filter
+    label: Any
+
+
+@dataclass(frozen=True)
+class Category:
+    """A user-defined dimension column (REQ-DIM-001).
+
+    Each record gets the label of the first rule whose condition holds (row
+    filter semantics, so a condition never matches NULL unless it says so),
+    otherwise ``fallback``.  Rules may reference earlier categories.  Labels
+    and the fallback share one type family: string, integer or floating.
+    """
+
+    name: str
+    rules: Tuple[CategoryRule, ...]
+    fallback: Any
+
+    def family(self) -> str:
+        labels = [r.label for r in self.rules] + [self.fallback]
+        if any(v is None or isinstance(v, bool) for v in labels):
+            raise IRValidationError(f"category {self.name!r} labels must be text or numbers, not NULL or booleans.")
+        if all(isinstance(v, str) for v in labels):
+            return "string"
+        if all(isinstance(v, int) for v in labels):
+            return "integer"
+        if all(isinstance(v, (int, float)) for v in labels):
+            return "floating"
+        raise IRValidationError(f"category {self.name!r} mixes label types.")
+
+
+def extend_schema(schema: Mapping[str, str], categories: Tuple[Category, ...]) -> Dict[str, str]:
+    """``schema`` plus the category columns, validating each category in order."""
+    out = dict(schema)
+    for c in categories:
+        if not c.name or c.name in out:
+            raise IRValidationError(f"category name {c.name!r} is empty or collides with a column.")
+        for rule in c.rules:
+            check_filter(rule.when, out)
+        out[c.name] = c.family()
+    return out
+
+
 @dataclass(frozen=True)
 class DerivedMeasure:
     """A measure computed from base measures over the visible tree (REQ-AGG-005, REQ-AGG-007).
@@ -153,6 +230,7 @@ class PivotQuery:
     columns: Tuple[str, ...] = ()
     column_members: Tuple[Tuple[Any, ...], ...] = ()
     derived: Tuple[DerivedMeasure, ...] = ()
+    categories: Tuple[Category, ...] = ()  # REQ-DIM-001: computed before filters, in order
 
     def cells(self) -> List[Tuple[int, Tuple[Any, ...], MeasureRef, str]]:
         """(member index, member, measure, output column) for every pivot cell."""
@@ -169,6 +247,7 @@ class PivotQuery:
 
     def validate(self, schema: Mapping[str, str]) -> PivotQuery:
         """``schema`` maps column -> type family ("string", "integer", "floating", "decimal", ...)."""
+        schema = extend_schema(schema, self.categories)
         columns = set(schema)
 
         def need(name: Optional[str], what: str) -> None:
@@ -212,32 +291,8 @@ class PivotQuery:
                 need(m.weight, f"weight of measure {m.alias!r}")
                 if schema[m.weight] not in {"integer", "floating", "decimal"}:
                     raise IRValidationError(f"weight column {m.weight!r} must be numeric.")
-        def check(f: Any) -> None:
-            if isinstance(f, PredicateGroup):
-                if f.op not in GROUP_OPS:
-                    raise IRValidationError(f"unsupported filter group operator {f.op!r}.")
-                if not f.items:
-                    raise IRValidationError("a filter group needs at least one condition.")
-                for item in f.items:
-                    check(item)
-                return
-            if not isinstance(f, Predicate):
-                raise IRValidationError(f"filter {f!r} is not a predicate or group.")
-            need(f.field, "filter")
-            if f.op not in PREDICATE_OPS:
-                raise IRValidationError(f"unsupported filter operator {f.op!r}.")
-            if f.op in {"in", "not_in"} and not isinstance(f.value, (list, tuple, frozenset, set)):
-                raise IRValidationError(f"{f.op} requires a list value.")
-            if f.op == "between" and not (isinstance(f.value, (list, tuple)) and len(f.value) == 2):
-                raise IRValidationError("between requires [low, high].")
-            if f.op in STRING_OPS:
-                if schema[f.field] != "string":
-                    raise IRValidationError(f"{f.op} requires a string column, not {schema[f.field]} {f.field!r}.")
-                if not isinstance(f.value, str):
-                    raise IRValidationError(f"{f.op} requires a string value.")
-
         for flt in self.filters:
-            check(flt)
+            check_filter(flt, schema)
         for mf in self.measure_filters:
             if mf.measure not in aliases:
                 raise IRValidationError(f"measure filter references unknown measure {mf.measure!r}.")
@@ -350,6 +405,7 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
+            categories=categories_from_wire(obj.get("categories", ())),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
             columns=tuple(obj.get("columns", ())),
@@ -398,11 +454,30 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         out["expanded"] = sorted((list(p) for p in query.expanded), key=repr)
     if query.subtotals != "before":  # default omitted: existing wire forms and vectors are unchanged
         out["subtotals"] = query.subtotals
+    if query.categories:
+        out["categories"] = categories_to_wire(query.categories)
     return out
 
 
 def _freeze(value: Any) -> Any:
     return tuple(value) if isinstance(value, list) else value
+
+
+def filter_to_wire(f: Filter) -> Dict[str, Any]:
+    if isinstance(f, PredicateGroup):
+        return {"op": f.op, "conditions": [filter_to_wire(i) for i in f.items]}
+    value = list(f.value) if isinstance(f.value, (tuple, frozenset, set)) else f.value
+    return {"field": f.field, "op": f.op, "value": value, "caseSensitive": f.case_sensitive}
+
+
+def categories_to_wire(categories: Tuple[Category, ...]) -> List[Dict[str, Any]]:
+    return [{"name": c.name, "rules": [{"when": filter_to_wire(r.when), "label": r.label} for r in c.rules],
+             "fallback": c.fallback} for c in categories]
+
+
+def categories_from_wire(objs: Any) -> Tuple[Category, ...]:
+    return tuple(Category(str(o["name"]), tuple(CategoryRule(_filter_from_wire(r["when"]), r["label"])
+                                                for r in o.get("rules", ())), o["fallback"]) for o in objs)
 
 
 def _filter_from_wire(obj: Mapping[str, Any]) -> Filter:
@@ -422,8 +497,10 @@ class DetailQuery:
     search: Optional[str] = None  # case-insensitive substring over every column
     sort: Tuple[SortKey, ...] = ()
     window: Window = field(default_factory=Window)
+    categories: Tuple[Category, ...] = ()  # REQ-DIM-001
 
     def validate(self, schema: Mapping[str, str]) -> DetailQuery:
+        schema = extend_schema(schema, self.categories)
         if not self.dataset:
             raise IRValidationError("dataset is required.")
         probe = PivotQuery(dataset=self.dataset, rows=(), measures=(MeasureRef("__n", "count", None),),
@@ -457,8 +534,10 @@ class DistinctQuery:
     filters: Tuple[Filter, ...] = ()
     search: Optional[str] = None  # case-insensitive substring of the value's text; NULL never matches
     window: Window = field(default_factory=Window)
+    categories: Tuple[Category, ...] = ()  # REQ-DIM-001
 
     def validate(self, schema: Mapping[str, str]) -> DistinctQuery:
+        schema = extend_schema(schema, self.categories)
         DetailQuery(self.dataset, filters=self.filters, search=self.search, window=self.window).validate(schema)
         if self.column not in schema:
             raise IRValidationError(f"distinct column references unknown column {self.column!r}.")

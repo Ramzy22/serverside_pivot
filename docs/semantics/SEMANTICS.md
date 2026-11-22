@@ -69,6 +69,12 @@ Definitions, for a request over dataset `D`:
 |---|---|
 | REQ-PIV-001 | A column pivot has explicit, ordered column members (the column window). Each cell is the measure over the node's records whose column values equal the member, with null-safe typed equality, so a NULL member is the NULL group. Every registry aggregation is supported in cells, including holistic ones. The node's own measure is the row total. The column catalog is the distinct members over E0, ordered by value with NULLS LAST. Two members whose display keys collide are an error, never a merge. |
 
+## 3d. Custom dimensions (REQ-DIM)
+
+| Id | Requirement |
+|---|---|
+| REQ-DIM-001 | A category is a column computed for every record before filters, in definition order (a rule may reference an earlier category). Its value is the label of the first rule whose condition holds, else the fallback. Conditions are row filters (REQ-NULL-003/004), so a comparison never matches NULL. Labels and the fallback share one type: text, integer or floating. A category can be a row or column dimension, a filter field, a drill-through path field and a filter-options column. Its rules are part of the query's identity. Legacy custom dimensions map to categories with the same labels and fallback. Their "creation" and "numeric" orders map to a hidden numeric category, `__sortkey__<field>`, used as a REQ-SORT-003 member key. Legacy evaluates conditions case-insensitively, including membership; the core is exact unless a clause asks for case-insensitivity (F-CASE). |
+
 ## 3c. Records (REQ-DET)
 
 | Id | Requirement |
@@ -83,6 +89,7 @@ Definitions, for a request over dataset `D`:
 | REQ-NULL-001 | SQL NULL stays NULL end to end: JSON `null`, never `NaN`, `""`, `"null"` or `"Grand Total"`. |
 | REQ-NULL-002 | A NULL dimension value is its own group, distinct from the empty string and from the grand total. |
 | REQ-NULL-003 | Row filters: membership (`in`, `not_in`) is set membership, so a NULL in the list selects the NULL group and `not_in` keeps NULL rows unless NULL is listed. Comparisons, `between` and string operators never match NULL. Case folding (`caseSensitive: false`) applies to `=`, `!=` and string operators on string columns; membership is always exact, because case variants are distinct groups. |
+| REQ-NULL-004 | `is_empty` is true for NULL, and for a text value made only of spaces (or empty). `is_not_empty` is its negation. On non-text columns, `is_empty` is `is_null`. These are the custom-category UI's "empty" operators. Ordinary `is_null` and `is_not_null` stay exact. |
 | REQ-ID-001 | A row's identity is `(dataset, presence_mask, [(field_id, typed value)…])`, encoded with `CanonicalPathCodec`. The grand total is the empty path, and a NULL member is a typed null token, distinct from `""`. Identity never comes from joining strings, so values containing `|`, `_` or `/` cannot collide. |
 | REQ-ID-002 | Absent (a rolled-up level) and NULL (a member whose value is NULL) are different identities. |
 

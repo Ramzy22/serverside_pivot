@@ -29,6 +29,8 @@ def to_oracle(query: Any) -> Query:
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
+        categories=[(c.name, [(_filter(r.when), r.label) for r in c.rules], c.fallback)
+                    for c in getattr(query, "categories", ())],
     )
 
 

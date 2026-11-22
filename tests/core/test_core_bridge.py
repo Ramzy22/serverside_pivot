@@ -94,12 +94,14 @@ def test_expansion_paths_are_coerced_and_filtered():
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True),
           filters=[{"field": "v_sum", "op": ">", "value": 1}]), "measure filter with column pivot"),
     (dict(rows=["r"], columns=["zz"], pivot_config=PivotConfig(enabled=True)), "unknown column fields ['zz']"),
-    (dict(custom_dimensions=[{"id": "x"}]), "custom dimensions"),
+    (dict(custom_dimensions=[{"id": "x", "rules": [{"label": "L", "field": "nope", "op": "=", "value": 1}]}]),
+     "filter on unknown field 'nope'"),
     (dict(having=[{"field": "v_sum"}]), "having"),
     (dict(group_allow_unbalanced=True), "unbalanced hierarchy"),
     (dict(measure_axis=MeasureAxisConfig(placement="rows")), "measure axis"),
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
-    (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "__sortkey__r"}]), "custom member order"),
+    (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "v", "sortType": "tenor"}]),
+     "custom member order with a sort type"),
     (dict(measures=[Measure(field="v", agg="mode", alias="m")]), "aggregation 'mode'"),
     (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="ntile")]), "window function 'ntile'"),
     (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="rank", window_group_by=["r"])]),
@@ -129,8 +131,8 @@ def test_unsupported_features_are_named(kw, reason):
 
 def test_all_reasons_are_reported_together():
     with pytest.raises(CoreUnsupported) as info:
-        spec_to_query(spec(columns=["c"], custom_dimensions=[{"id": "x"}]), True, SCHEMA)
-    assert info.value.reasons == ("column pivot without pivot_config", "custom dimensions")
+        spec_to_query(spec(columns=["c"], group_allow_unbalanced=True), True, SCHEMA)
+    assert info.value.reasons == ("column pivot without pivot_config", "unbalanced hierarchy")
 
 
 def test_hierarchy_view_contract():
@@ -350,3 +352,76 @@ def test_member_key_sort_is_core_served_and_matches_legacy(order):
     expected = [p for p, _ in pillars]
     assert labels == (expected if order == "asc" else expected[::-1])
     assert core == run("off")
+
+
+CUSTOM_DIMENSION = {
+    "id": "Sales Band", "order": "creation", "fallbackLabel": "Small",
+    "rules": [
+        {"label": "Huge", "condition": {"op": "AND", "clauses": [{"field": "sales", "operator": "gte", "value": 100}]}},
+        {"label": "Mid", "field": "sales", "operator": "between", "value": [10, 99.5]},
+        {"label": "West-ish", "condition": {"op": "OR", "clauses": [
+            {"field": "region", "operator": "in", "values": "West, North"},
+            {"field": "region", "operator": "is null"}]}},
+    ],
+}
+
+
+@pytest.mark.parametrize("rows, sort", [
+    (["__custom_category__sales_band"], []),
+    (["__custom_category__sales_band", "region"], []),
+    (["region", "__custom_category__sales_band"], [{"id": "__custom_category__sales_band", "desc": True,
+                                                    "sortKeyField": "__sortkey____custom_category__sales_band"}]),
+])
+def test_custom_dimension_is_core_served_and_matches_legacy(rows, sort):
+    """REQ-DIM-001: first matching rule's label, else the fallback; creation order via the hidden key."""
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    def run(mode):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            # A NULL region only where region is not a row level: legacy drops a NULL leaf and renders
+            # a NULL root as the grand total (F-NULL-LEAF / F-NULL-GT); the core keeps both.
+            null_region = None if "region" not in rows else "Central"
+            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+                "region": ["West", "East", "North", null_region, "East", "South"],
+                "sales": [150.0, 50.0, 5.0, 1.0, 99.5, 120.0]}))
+            request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA, table="t",
+                columns=[*({"id": r} for r in rows), {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+                filters={}, sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+                totals=True, custom_dimensions=[CUSTOM_DIMENSION])
+            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
+            return response.total_rows, [(r.get("_path"), r.get("sales_sum")) for r in response.data]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = run("on")
+    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    legacy = run("off")
+    assert core == legacy, (core, legacy)
+
+
+def test_custom_dimension_keeps_a_null_member_below_a_category():
+    """REQ-NULL-001 under a category: the NULL region is its own leaf (legacy drops it, F-NULL-LEAF)."""
+    import pyarrow as pa
+
+    con = ibis.duckdb.connect()
+    con.create_table("t", pa.table({"region": ["West", None], "sales": [150.0, 1.0]}))
+    s = spec(rows=["__custom_category__sales_band", "region"], measures=[Measure(field="sales", agg="sum", alias="s")],
+             custom_dimensions=[CUSTOM_DIMENSION])
+    view = core_hierarchy_view(lambda _n: con.table("t"), s, [["__ALL__"]], 0, 99)
+    assert [(r["_path"], r["s"]) for r in view["rows"]] == [
+        ("Huge", 150.0), ("Huge|||West", 150.0), ("West-ish", 1.0), ("West-ish|||", 1.0)]
+    assert view["rows"][-1]["region"] is None
