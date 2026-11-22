@@ -206,7 +206,9 @@ def tree(
     union, ancestor = _with_ancestor_measures(union, parts, plan)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
-        order.append((union[DEPTH] >= i).cast("int8"))  # parent before its children
+        below = (union[DEPTH] >= i).cast("int8")  # 1 for the descendants of a level-i group
+        # REQ-LAYOUT-001: the group row first (pre-order) or after its descendants (post-order).
+        order.append(below if q.subtotals == "before" else below.desc())
         dimension_sorted = False
         for field, desc, is_measure, absolute in plan.sort:
             if is_measure:

@@ -170,6 +170,7 @@ class Query:
     measure_filters: List[MeasureFilter] = field(default_factory=list)
     scope: Mapping[str, Tuple[Any, ...]] = field(default_factory=dict)
     totals: str = "visible"  # REQ-TOT-003/004
+    subtotals: str = "before"  # REQ-LAYOUT-001: group row before (pre-order) or after (post-order) its descendants
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
     sort_desc: Mapping[str, bool] = field(default_factory=dict)  # shorthand: dimension -> descending
     sort: Sequence[Tuple[Any, ...]] = ()  # REQ-SORT-001/002: (field, descending[, absolute]), in precedence
@@ -273,12 +274,14 @@ def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ..
 
 
 def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
-    """Flattened visible tree in hierarchical order, grand total first."""
+    """Flattened visible tree in hierarchical order: grand total first, each group before its
+    descendants; with ``subtotals="after"`` the reverse (post-order: grand total last)."""
     e0, e = eligible_sets(query, data)
     totals_source = e if query.totals == "visible" else e0
     expanded = None if query.expanded is None else {tuple(p) for p in query.expanded}
 
-    out = [Row((), _measures(query, totals_source))]
+    post_order = query.subtotals == "after"
+    out: List[Row] = []
 
     def visit(prefix: Tuple[Any, ...]) -> None:
         depth = len(prefix) + 1
@@ -289,11 +292,19 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
                   for c in candidates}
         children = _order_siblings(query, depth, candidates, values)
         for child in children:
-            out.append(Row(child, values[child]))
+            if not post_order:
+                out.append(Row(child, values[child]))
             if expanded is None or child in expanded:
                 visit(child)
+            if post_order:
+                out.append(Row(child, values[child]))
 
+    grand_total = Row((), _measures(query, totals_source))
+    if not post_order:
+        out.append(grand_total)
     visit(())
+    if post_order:
+        out.append(grand_total)
     if query.derived:
         _derive(query, out)
     return out
@@ -302,9 +313,9 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
 def _derive(query: Query, out: List[Row]) -> None:
     """Derived measures, computed row by row from the finished visible tree."""
     siblings: Dict[Tuple[Any, ...], List[Row]] = {}
-    for row in out:  # pre-order: siblings appear in display order
+    for row in out:  # siblings appear in display order (pre- or post-order alike)
         siblings.setdefault(("p", len(row.path)) + tuple(row.path[:-1]), []).append(row)
-    grand = out[0].values
+    grand = next(r for r in out if r.path == ()).values
     for d in query.derived:
         for group in siblings.values():
             values = [r.values[d.of] for r in group]

@@ -2427,7 +2427,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         end_row: int,
         *,
         include_grand_total: bool,
-        layout_unsupported: bool,
+        tabular_subtotals: bool = False,
         legacy: Callable[[], Awaitable[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         """Serve the hierarchy view from the core, the legacy engines, or both (shadow).
@@ -2440,9 +2440,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         mode = core_shadow.core_mode()
         if mode == "off":
-            return await legacy()
-        if layout_unsupported:
-            core_shadow.record_unsupported(["subtotal footer layout"])
             return await legacy()
         resolve = getattr(self.controller, "resolve_table", None)
         if resolve is None:
@@ -2458,6 +2455,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 lambda: core_hierarchy_view(
                     resolve, pivot_spec, target_paths, start_row, end_row,
                     include_grand_total_row=include_grand_total, total_cache=cache, capture=capture,
+                    tabular_subtotals=tabular_subtotals,
                 ),
             )
         except CoreUnsupported as exc:
@@ -3123,7 +3121,8 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 start_row,
                 end_row,
                 include_grand_total=include_grand_total,
-                layout_unsupported=_hier_show_subtotal_footers or _hier_tabular_subtotals,
+                # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
+                tabular_subtotals=_hier_tabular_subtotals,
                 legacy=_legacy_hierarchy_view,
             )
             hierarchy_view_finished_at = time.perf_counter()

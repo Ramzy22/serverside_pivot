@@ -341,7 +341,8 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
     const order: string[] = [];
     rows.forEach((k, idx) => {
         const i = idx + 1;
-        order.push(`(CASE WHEN ${DEPTH} >= ${i} THEN 1 ELSE 0 END) ASC`);
+        // REQ-LAYOUT-001: the group row before (pre-order) or after (post-order) its descendants.
+        order.push(`(CASE WHEN ${DEPTH} >= ${i} THEN 1 ELSE 0 END) ${query.subtotals === 'after' ? 'DESC' : 'ASC'}`);
         let dimensionSorted = false;
         sort.forEach((s) => {
             let expr: string;

@@ -142,6 +142,8 @@ class PivotQuery:
     measure_filters: Tuple[MeasureFilter, ...] = ()
     sort: Tuple[SortKey, ...] = ()
     totals: str = "visible"  # REQ-TOT-003 / REQ-TOT-004
+    # REQ-LAYOUT-001: a group row "before" its descendants (pre-order) or "after" them (post-order).
+    subtotals: str = "before"
     expanded: Optional[FrozenSet[Tuple[Any, ...]]] = None  # None = everything expanded
     window: Window = field(default_factory=Window)
     # Column pivot (REQ-PIV-001): the column dimensions and the explicit,
@@ -250,6 +252,8 @@ class PivotQuery:
                 raise IRValidationError(f"absolute sort needs a numeric value, not {s.field!r}.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
+        if self.subtotals not in {"before", "after"}:
+            raise IRValidationError(f"subtotals must be 'before' or 'after', not {self.subtotals!r}.")
         if self.window.offset < 0 or (self.window.limit is not None and self.window.limit < 0):
             raise IRValidationError("window offset/limit must be non-negative.")
         if self.expanded is not None:
@@ -336,6 +340,7 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)))
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
+            subtotals=obj.get("subtotals", "before"),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
             columns=tuple(obj.get("columns", ())),
@@ -381,6 +386,8 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
     }
     if query.expanded is not None:
         out["expanded"] = sorted((list(p) for p in query.expanded), key=repr)
+    if query.subtotals != "before":  # default omitted: existing wire forms and vectors are unchanged
+        out["subtotals"] = query.subtotals
     return out
 
 

@@ -34,6 +34,7 @@ def algebraic_queries(draw):
         dataset="t", rows=rows, measures=measures, measure_filters=mfs,
         sort=(SortKey(rows[0], desc=True),) if draw(st.booleans()) else (),
         totals=draw(st.sampled_from(["visible", "all_data"])),
+        subtotals=draw(st.sampled_from(["before", "after"])),
         window=Window(draw(st.integers(0, 3)), draw(st.one_of(st.none(), st.integers(0, 8)))),
     )
 

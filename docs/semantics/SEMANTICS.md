@@ -58,8 +58,9 @@ Definitions, for a request over dataset `D`:
 
 | Id | Requirement |
 |---|---|
-| REQ-SORT-001 | Siblings are ordered by the sort entries in precedence order. A dimension entry orders only its own level by member value. A measure entry orders the siblings at every level by the node's own value. Ties, and levels without a dimension entry, fall back to the member value ascending. NULL sorts last in both directions, for members and for measure values. A parent always precedes its children. |
+| REQ-SORT-001 | Siblings are ordered by the sort entries in precedence order. A dimension entry orders only its own level by member value. A measure entry orders the siblings at every level by the node's own value. Ties, and levels without a dimension entry, fall back to the member value ascending. NULL sorts last in both directions, for members and for measure values. A parent precedes its children, unless REQ-LAYOUT-001 places it after them. |
 | REQ-SORT-002 | An `absolute` sort entry orders a numeric dimension or measure by its magnitude, with the same direction and NULLS LAST rules. It is invalid on non-numeric values. |
+| REQ-LAYOUT-001 | Subtotal position: `before` (default) is pre-order, so the grand total comes first and each group precedes its descendants. `after` is post-order, so each group follows its descendants and the grand total comes last. Sibling order (REQ-SORT-001), the set of nodes and their values do not change. The tabular layout with subtotals is post-order over the fully expanded tree, with group rows marked `_isTabularSubtotal`. In the hierarchy and outline layouts, "subtotal footers" add no rows: the expandable group row is the subtotal. |
 
 ## 3b. Column pivot (REQ-PIV)
 

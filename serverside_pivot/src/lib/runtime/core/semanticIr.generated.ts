@@ -45,6 +45,10 @@ export interface PivotQuery {
     absolute?: boolean;
   }[];
   totals?: "visible" | "all_data";
+  /**
+   * REQ-LAYOUT-001: a group row before its descendants (pre-order, default) or after them (post-order).
+   */
+  subtotals?: "before" | "after";
   expanded?: [unknown, ...unknown[]][] | null;
   window?: {
     offset?: number;

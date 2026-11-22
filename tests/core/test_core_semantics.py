@@ -75,6 +75,7 @@ def _oracle(records, query: PivotQuery):
         measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q) for m in query.measures],
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
+        subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
         sort=[(s.field, s.desc, s.absolute) for s in query.sort],
         columns=list(query.columns),
@@ -165,7 +166,8 @@ def queries(draw):
         columns = ("k",)
         members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
-                      totals=draw(st.sampled_from(["visible", "all_data"])), expanded=expanded, window=window,
+                      totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after"])),
+                      expanded=expanded, window=window,
                       columns=columns, column_members=members, derived=derived)
 
 

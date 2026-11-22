@@ -15,23 +15,10 @@ from pivot_engine.tanstack_adapter import (  # noqa: E402
 )
 
 
-ROW_META_KEYS = {
-    "_id",
-    "_path",
-    "_isTotal",
-    "_level",
-    "_expanded",
-    "_parentPath",
-    "_has_children",
-    "_is_expanded",
-    "_pathFields",
-    "depth",
-    "_depth",
-    "uuid",
-    "subRows",
-    "region",
-    "country",
-}
+from pivot_engine.tanstack_adapter import ROW_META_KEYS as _ADAPTER_ROW_META_KEYS
+
+# Row metadata plus the grouping columns of these fixtures.
+ROW_META_KEYS = set(_ADAPTER_ROW_META_KEYS) | {"region", "country"}
 
 
 @pytest.fixture

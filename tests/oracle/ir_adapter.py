@@ -23,6 +23,7 @@ def to_oracle(query: Any) -> Query:
         filters=[_filter(f) for f in query.filters],
         measure_filters=[MeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
+        subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
         sort=[(s.field, s.desc, s.absolute) for s in query.sort],
         columns=list(query.columns),

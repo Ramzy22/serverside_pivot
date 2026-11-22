@@ -50,6 +50,8 @@ def canonical(query: PivotQuery) -> str:
                     for d in query.derived],
         "columnMembers": [CanonicalPathCodec.encode(list(m)) for m in query.column_members],
     }
+    if query.subtotals != "before":  # default omitted: existing plan identities are unchanged
+        body["subtotals"] = query.subtotals
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
 

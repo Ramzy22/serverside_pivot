@@ -129,6 +129,13 @@
         "all_data"
       ]
     },
+    "subtotals": {
+      "description": "REQ-LAYOUT-001: a group row before its descendants (pre-order, default) or after them (post-order).",
+      "enum": [
+        "before",
+        "after"
+      ]
+    },
     "expanded": {
       "type": [
         "array",

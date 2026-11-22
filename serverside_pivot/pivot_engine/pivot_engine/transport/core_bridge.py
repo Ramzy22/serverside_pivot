@@ -281,7 +281,7 @@ def _unknown_keys(f: Any, reasons: List[str]) -> None:
 
 
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
-                  end_row: Optional[int] = None) -> PivotQuery:
+                  end_row: Optional[int] = None, subtotals: str = "before") -> PivotQuery:
     """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
 
     The query's window addresses the legacy flattened list (nodes in tree
@@ -360,7 +360,8 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     if reasons:
         raise CoreUnsupported(reasons)
 
-    offset = max(0, int(start_row)) + 1
+    # Pre-order puts the grand total first (+1 skips it); post-order puts it last (REQ-LAYOUT-001).
+    offset = max(0, int(start_row)) + (1 if subtotals == "before" else 0)
     limit = None if end_row is None else max(0, int(end_row) - int(start_row) + 1)
     return PivotQuery(
         dataset=str(spec.table),
@@ -369,6 +370,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         filters=filters,
         measure_filters=measure_filters,
         sort=tuple(sort),
+        subtotals=subtotals,
         expanded=_expanded(target_paths, rows, families) if rows else None,
         window=Window(offset, limit),
         columns=tuple(columns),
@@ -461,8 +463,13 @@ def core_hierarchy_view(
     include_grand_total_row: bool = False,
     total_cache: Optional[Dict[str, int]] = None,
     capture: Optional[Dict[str, Any]] = None,
+    tabular_subtotals: bool = False,
 ) -> Dict[str, Any]:
     """The ``run_hierarchy_view`` contract, answered by the core.
+
+    ``tabular_subtotals``: the tabular subtotal layout (REQ-LAYOUT-001), the
+    post-order of the fully expanded tree; group rows carry
+    ``_isTabularSubtotal`` and the grand total comes last.
 
     ``capture`` (shadow referee, opt-in) receives the core query and, for
     datasets of at most ``CAPTURE_MAX_ROWS`` records, the scoped data.
@@ -474,7 +481,10 @@ def core_hierarchy_view(
     """
     started = time.perf_counter()
     relation = resolve(spec.table)
-    query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row)
+    if tabular_subtotals:
+        target_paths = [["__ALL__"]]  # every group is open: collapse state does not apply to a flat layout
+    query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row,
+                          subtotals="after" if tabular_subtotals else "before")
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     query, keys = _resolve_members(query, spec, resolver)
     if capture is not None:
@@ -486,6 +496,9 @@ def core_hierarchy_view(
         return _legacy_row(record, query, keys, totals_column)
 
     nodes = _visible_node_count(query, relation, total_cache) - 1
+    if tabular_subtotals:
+        return _post_order_view(query, resolver, legacy, nodes, int(start_row), int(end_row), totals,
+                                include_grand_total_row, started)
     grand_total = None
     if totals and int(start_row) == 0:  # the core orders the grand total first: one query serves both
         limit = None if query.window.limit is None else query.window.limit + 1
@@ -512,6 +525,42 @@ def core_hierarchy_view(
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
         # Same profile layer as the legacy controller, so profile consumers keep working.
         "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
+                                   "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
+    }
+
+
+def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: Callable[[Mapping[str, Any]], Dict[str, Any]],
+                     nodes: int, start_row: int, end_row: int, totals: bool, include_grand_total_row: bool,
+                     started: float) -> Dict[str, Any]:
+    """Tabular subtotals: the core's post-order is the legacy list (grand total last, at index ``nodes``)."""
+    depth = len(query.rows)
+    grand_total = None
+    rows: List[Dict[str, Any]] = []
+    for record in execute(query, resolver).records():
+        row = legacy(record)
+        if not record["path"]:
+            grand_total = row
+            continue
+        if len(record["path"]) < depth:
+            row["_isTabularSubtotal"] = True
+        rows.append(row)
+    if totals and grand_total is None and include_grand_total_row:
+        grand_total = legacy(execute(replace(query, window=Window(nodes, 1)), resolver).records()[0])
+    if totals and grand_total is not None and start_row <= nodes <= end_row:
+        rows.append(dict(grand_total))
+    formula_sources: List[Dict[str, Any]] = []
+    if totals and include_grand_total_row and query.rows:  # the top-level groups, as in the pre-order view
+        top = replace(query, subtotals="before", expanded=frozenset(), window=Window(1, None))
+        formula_sources = [legacy(r) for r in execute(top, resolver).records()]
+    from ..hierarchy_rows import compute_hierarchy_color_scale_stats
+
+    return {
+        "rows": rows,
+        "total_rows": nodes + (1 if totals else 0),
+        "grand_total_row": grand_total if include_grand_total_row else None,
+        "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
+        "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
+        "profile": {"controller": {"operation": "hierarchy_view", "engine": "core", "layout": "tabular_subtotals",
                                    "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
     }
 

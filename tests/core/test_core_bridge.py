@@ -263,3 +263,47 @@ def _drill(mode, payload, monkeypatch):
 def test_legacy_drill_honours_row_fields(mode, monkeypatch):  # REQ-DET-001
     assert _drill(mode, {"rowPath": "North", "rowFields": ["region"]}, monkeypatch) == 2
     assert _drill(mode, {"row_path": "North", "row_fields": ["region"]}, monkeypatch) == 2
+
+
+@pytest.mark.parametrize("totals", [False, True])
+@pytest.mark.parametrize("window", [(0, 99), (0, 2), (3, 6), (5, 9)])
+def test_tabular_subtotals_post_order_matches_legacy(totals, window):
+    """REQ-LAYOUT-001: tabular subtotals are the post-order of the fully expanded tree (grand total last)."""
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    def run(mode):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
+                "region": ["North", "North", "South", "East"], "country": ["USA", "Canada", "Brazil", "Japan"],
+                "sales": [1.0, 2.0, 4.0, 8.0]}))
+            request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA, table="s",
+                columns=[{"id": "region"}, {"id": "country"},
+                         {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+                filters={}, sorting=[], grouping=["region", "country"], aggregations=[],
+                pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=True,
+                layout_mode="tabular", show_subtotal_footers=True)
+            response = asyncio.run(adapter.handle_virtual_scroll_request(
+                request, window[0], window[1], expanded_paths=[["North"]]))  # expansion is ignored
+            return response.total_rows, [(r.get("_path"), bool(r.get("_isTabularSubtotal")), bool(r.get("_isTotal")),
+                                          r.get("sales_sum")) for r in response.data]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    from pivot_engine.runtime import core_shadow
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = run("on")
+    assert core_shadow.STATS["core_served_hierarchy"] > served, "the core must serve the tabular subtotal layout"
+    assert core == run("off")
