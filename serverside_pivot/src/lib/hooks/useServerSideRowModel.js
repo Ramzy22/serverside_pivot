@@ -686,21 +686,24 @@ export const useServerSideRowModel = ({
                 /** @type {any} */
                 const isCompleteBlock = absStart === blockStart && blockRows.length >= expectedRowsForBlock;
 
-                // Use dataVersion for stale response protection
-                // The retained schema can describe an older sparse window.
-                // A viewport response is bound to its own request version, so
-                // stamp cached rows with that request's actual column range.
+                // Stamp cached rows with the column range this response actually
+                // carries: the server may clamp or narrow the requested window, and
+                // claiming the requested range would cache columns never delivered.
+                // Without a response window, use the request that produced this
+                // response (same version); the last requested window is the last resort.
                 /** @type {any} */
                 const matchingInflight = inflightRequestRef.current?.version === dataVersion
                     ? inflightRequestRef.current : null;
                 /** @type {any} */
-                const effectiveResponseColStart = matchingInflight
-                    ? matchingInflight.colStart
-                    : (responseColStart ?? lastRequestedColStartRef.current);
+                const hasResponseWindow = responseColEnd !== null && responseColEnd !== undefined;
                 /** @type {any} */
-                const effectiveResponseColEnd = matchingInflight
-                    ? matchingInflight.colEnd
-                    : (responseColEnd ?? lastRequestedColEndRef.current);
+                const effectiveResponseColStart = hasResponseWindow
+                    ? responseColStart
+                    : (matchingInflight ? matchingInflight.colStart : lastRequestedColStartRef.current);
+                /** @type {any} */
+                const effectiveResponseColEnd = hasResponseWindow
+                    ? responseColEnd
+                    : (matchingInflight ? matchingInflight.colEnd : lastRequestedColEndRef.current);
                 setBlockLoaded(
                     b,
                     blockRows,

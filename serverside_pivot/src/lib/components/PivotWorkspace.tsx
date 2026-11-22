@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { PivotRuntimeRoot } from '../runtime/PivotRuntimeRoot';
+import { useResponseQueue } from '../runtime/responseQueue';
 import {
     createRuntimeRequest,
     isRuntimeRequestV1,
@@ -97,6 +98,8 @@ const runtimeDebug = (event: string, detail: Record<string, unknown>): void => {
  */
 export function PivotWorkspace({ transport, onStateChange, ...initialProps }: PivotWorkspaceProps) {
     const [runtimeProps, setRuntimeProps] = useState<PivotRuntimeProps>(() => initialProps);
+    // Every response is delivered in order; a single slot lost responses batched in one tick.
+    const [queuedResponse, enqueueResponse] = useResponseQueue<PivotRuntimeProps['runtimeResponse']>();
     const clientTransportRef = useRef<ClientPivotTransport | null>(null);
     const resolvedMode = resolveExecutionMode(runtimeProps, {
         hasExternalServerTransport: Boolean(transport),
@@ -223,7 +226,7 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
                 columns: Array.isArray(response.payload.columns) ? response.payload.columns.length : 0,
                 message: response.message,
             });
-            setRuntimeProps(previous => ({ ...previous, runtimeResponse: response }));
+            enqueueResponse(response);
         }).catch(error => {
             // A superseded viewport request is expected and must not replace a
             // fresher response with an error state.
@@ -235,7 +238,7 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
                 kind: request.kind,
                 message: error instanceof Error ? error.message : String(error),
             });
-            setRuntimeProps(previous => ({ ...previous, runtimeResponse: runtimeError(request, error) }));
+            enqueueResponse(runtimeError(request, error));
         }).finally(() => {
             pendingRequestsRef.current.delete(controller);
         });
@@ -256,5 +259,12 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
         if (nextProps.runtimeRequest) dispatch(nextProps.runtimeRequest);
     }, [dispatch, onStateChange]);
 
-    return <PivotRuntimeRoot {...runtimeProps} setProps={publish} payloadTransport={activeTransport} />;
+    return (
+        <PivotRuntimeRoot
+            {...runtimeProps}
+            runtimeResponse={queuedResponse ?? runtimeProps.runtimeResponse}
+            setProps={publish}
+            payloadTransport={activeTransport}
+        />
+    );
 }

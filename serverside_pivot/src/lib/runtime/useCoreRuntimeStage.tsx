@@ -1,6 +1,7 @@
 // @ts-nocheck -- composed leaf hooks are progressively typed at their owners.
 // Core-stage composition. Focused sub-hooks own individual state groups.
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { useResponseQueue } from './responseQueue';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens, resolveThemeOverrides, buildThemeCssVars, toCssPx } from '../utils/styles';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
 import { normalizeColumnOrderValue, areStringArraysEqual } from '../utils/columnOrder';
@@ -336,7 +337,8 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
       ownsClientTransportRef.current = true;
     }
   }
-  [stage.localRuntimeResponse, stage.setLocalRuntimeResponse] = useState(null);
+  // Ordered delivery: a single slot lost client responses batched in the same tick.
+  [stage.localRuntimeResponse, stage.setLocalRuntimeResponse] = useResponseQueue();
   if (stage.clientRuntimeActive && stage.localRuntimeResponse) {
     stage.runtimeResponse = stage.localRuntimeResponse;
   }
