@@ -95,7 +95,7 @@ def test_expansion_paths_are_coerced_and_filtered():
     (dict(custom_dimensions=[{"id": "x", "rules": [{"label": "L", "field": "nope", "op": "=", "value": 1}]}]),
      "filter on unknown field 'nope'"),
     (dict(having=[{"field": "v_sum"}]), "having"),
-    (dict(group_allow_unbalanced=True), "unbalanced hierarchy"),
+    (dict(group_allow_unbalanced=True, rows=["r", "v"]), "ragged hierarchy over fields of different types"),
     (dict(measure_axis=MeasureAxisConfig(placement="columns")), "measure axis on columns"),
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
     (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "v", "sortType": "tenor"}]),
@@ -115,7 +115,9 @@ def test_expansion_paths_are_coerced_and_filtered():
                                                {"field": "r", "op": "=", "value": "A"}]}]), "compound measure filter"),
     (dict(rows=["r", "zz"]), "unknown row fields ['zz']"),
     (dict(full_rows=["r", "c", "hidden"]), "spec field 'full_rows'"),
-    (dict(unbalanced_values=["x"]), "spec field 'unbalanced_values'"),
+    (dict(group_allow_unbalanced=True, rows=["r", "c"], measure_axis=MeasureAxisConfig(
+        placement="rows", label_field="M", value_field="V", members=[{"measureAlias": "v_sum", "label": "S"}])),
+     "ragged hierarchy with a measure axis"),
     (dict(sort=[{"field": "r", "order": "asc", "collation": "nocase"}]), "sort keys ['collation']"),
     (dict(sort=[{"field": "r", "nulls": "first"}]), "nulls 'first'"),
     (dict(sort=[{"field": "r", "semanticType": "calendar"}]), "semantic sort 'calendar'"),  # tenor: REQ-SORT-005
@@ -129,8 +131,8 @@ def test_unsupported_features_are_named(kw, reason):
 
 def test_all_reasons_are_reported_together():
     with pytest.raises(CoreUnsupported) as info:
-        spec_to_query(spec(columns=["c"], group_allow_unbalanced=True), True, SCHEMA)
-    assert info.value.reasons == ("column pivot without pivot_config", "unbalanced hierarchy")
+        spec_to_query(spec(rows=["r", "v"], columns=["c"], group_allow_unbalanced=True), True, SCHEMA)
+    assert info.value.reasons == ("column pivot without pivot_config", "ragged hierarchy over fields of different types")
 
 
 def test_hierarchy_view_contract():
@@ -698,3 +700,29 @@ def test_tenor_sort_and_supplied_member_keys_map_to_the_core():  # REQ-SORT-005,
         SortKey("r", by="k"),)
     # a member order for a dimension that is not a row level orders nothing
     assert mapped([{"field": "c", "sortKeyField": "k"}], rows=("r",)) == ()
+
+
+def test_full_rows_equal_to_the_rows_is_a_no_op():
+    schema = ibis.schema({"r": "string", "c": "string", "v": "int64"})
+    spec = PivotSpec(table="t", rows=["r", "c"], full_rows=["r", "c"],
+                     measures=[Measure(field="v", agg="sum", alias="v_sum")])
+    assert spec_to_query(spec, [["__ALL__"]], schema).rows == ("r", "c")
+
+
+def test_ragged_hierarchy_view_maps_each_member_to_its_own_field():  # REQ-DIM-005
+    con = ibis.duckdb.connect()
+    con.create_table("g", pa.table({"l1": ["Root", "Root", "Root", "Direct", ""], "l2": ["Desk", None, "Desk", None, "Orphan"],
+                                    "h": ["A", "B", "C", None, "D"], "v": [100.0, -250.0, 50.0, 30.0, 15.0]}))
+    s = PivotSpec(table="g", rows=["l1", "l2", "h"], measures=[Measure(field="v", agg="sum", alias="v_sum")],
+                  group_allow_unbalanced=True, totals=True)
+    view = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    got = {r["_path"]: (r["v_sum"], r["depth"], r.get("_pathFields"), r.get("_has_children")) for r in view["rows"]}
+    assert got["Root"] == (-100.0, 0, ["l1"], True)
+    assert got["Root|||B"] == (-250.0, 1, ["l1", "h"], False)
+    assert got["Root|||Desk|||C"] == (50.0, 2, ["l1", "l2", "h"], False)
+    assert got["Orphan|||D"] == (15.0, 1, ["l2", "h"], False)
+    assert got["Direct"] == (30.0, 0, ["l1"], False)
+    row = next(r for r in view["rows"] if r["_path"] == "Root|||B")
+    assert (row["l1"], row["h"], "l2" in row) == ("Root", "B", False)
+    with pytest.raises(CoreUnsupported, match="flat layout"):
+        spec_to_query(s, True, con.table("g").schema(), subtotals="none")

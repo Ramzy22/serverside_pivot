@@ -60,6 +60,9 @@ def canonical(query: PivotQuery) -> str:
         body["categories"] = [[c.name, [[_canonical_filter(r.when, scalar), CanonicalScalarCodec.encode(r.label)]
                                         for r in c.rules], CanonicalScalarCodec.encode(c.fallback)]
                               for c in query.categories]
+    if query.ragged is not None:  # REQ-DIM-005
+        body["ragged"] = [list(query.ragged.fields),
+                          None if query.ragged.missing is None else [scalar(v) for v in query.ragged.missing]]
     if query.unpivot is not None:  # REQ-DIM-002
         u = query.unpivot
         body["unpivot"] = [u.label, u.value, u.key, u.drop_nulls,

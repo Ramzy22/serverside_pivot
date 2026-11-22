@@ -272,11 +272,50 @@ class Unpivot:
         return {**schema, self.label: "string", self.value: self.value_family(schema), self.key: "integer"}
 
 
+@dataclass(frozen=True)
+class Ragged:
+    """A ragged hierarchy over ``fields`` (REQ-DIM-005).
+
+    Each record's path is its present values of ``fields`` in order; a value
+    is missing when NULL or NaN, or when it is one of ``missing`` (default: the
+    empty text).  The prepared relation gains, per position i, the i-th
+    present value ``__rag{i}`` (NULL once the path has ended) and the index of
+    the field it came from ``__ragf{i}``, plus the path length ``__ragn``.
+    The query's rows are the positional columns; a NULL there is no node.
+    """
+
+    fields: Tuple[str, ...]
+    missing: Optional[Tuple[Any, ...]] = None
+
+    def names(self) -> Tuple[str, ...]:
+        return tuple(f"__rag{i}" for i in range(1, len(self.fields) + 1))
+
+    def extend(self, schema: Mapping[str, str]) -> Dict[str, str]:
+        if not self.fields or len(set(self.fields)) != len(self.fields):
+            raise IRValidationError("a ragged hierarchy needs distinct fields.")
+        for f in self.fields:
+            if f not in schema:
+                raise IRValidationError(f"ragged hierarchy references unknown column {f!r}.")
+        families = {schema[f] for f in self.fields}
+        if len(families) != 1 or families <= {"other", "boolean"}:
+            raise IRValidationError("a ragged hierarchy's fields share one orderable type.")
+        out = dict(schema)
+        family = families.pop()
+        for i, name in enumerate(self.names(), start=1):
+            if name in out or f"__ragf{i}" in out:
+                raise IRValidationError(f"ragged hierarchy column {name!r} collides with a column.")
+            out[name] = family
+            out[f"__ragf{i}"] = "integer"
+        out["__ragn"] = "integer"
+        return out
+
+
 def relation_schema(schema: Mapping[str, str], categories: Tuple[Category, ...],
-                    unpivot: Optional[Unpivot]) -> Dict[str, str]:
-    """The schema the query sees: the dataset's, its categories, then the measure axis."""
+                    unpivot: Optional[Unpivot], ragged: Optional[Ragged] = None) -> Dict[str, str]:
+    """The schema the query sees: the dataset's, its categories, the measure axis, then a ragged hierarchy."""
     out = extend_schema(schema, categories)
-    return out if unpivot is None else unpivot.extend(out)
+    out = out if unpivot is None else unpivot.extend(out)
+    return out if ragged is None else ragged.extend(out)
 
 
 @dataclass(frozen=True)
@@ -323,6 +362,7 @@ class PivotQuery:
     derived: Tuple[DerivedMeasure, ...] = ()
     categories: Tuple[Category, ...] = ()  # REQ-DIM-001: computed before filters, in order
     unpivot: Optional[Unpivot] = None  # REQ-DIM-002: the measure axis, after the categories
+    ragged: Optional[Ragged] = None  # REQ-DIM-005: a ragged hierarchy; rows are its positional columns
 
     def cells(self) -> List[Tuple[int, Tuple[Any, ...], MeasureRef, str]]:
         """(member index, member, measure, output column) for every pivot cell."""
@@ -346,7 +386,11 @@ class PivotQuery:
 
     def validate(self, schema: Mapping[str, str]) -> PivotQuery:
         """``schema`` maps column -> type family ("string", "integer", "floating", "decimal", ...)."""
-        schema = relation_schema(schema, self.categories, self.unpivot)
+        schema = relation_schema(schema, self.categories, self.unpivot, self.ragged)
+        if self.ragged is not None and tuple(self.rows) != self.ragged.names():
+            raise IRValidationError("a ragged hierarchy's rows are its positional columns, in order.")
+        if self.ragged is not None and self.subtotals == "none":
+            raise IRValidationError("a ragged hierarchy has no flat layout: its leaves end at different depths.")
         columns = set(schema)
 
         def need(name: Optional[str], what: str) -> None:
@@ -545,6 +589,9 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             subtotals=obj.get("subtotals", "before"),
             categories=categories_from_wire(obj.get("categories", ())),
             unpivot=unpivot_from_wire(obj.get("unpivot")),
+            ragged=None if obj.get("ragged") is None else Ragged(
+                tuple(obj["ragged"]["fields"]),
+                None if obj["ragged"].get("missing") is None else tuple(obj["ragged"]["missing"])),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
             columns=tuple(obj.get("columns", ())),
@@ -598,6 +645,9 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         out["categories"] = categories_to_wire(query.categories)
     if query.unpivot is not None:
         out["unpivot"] = unpivot_to_wire(query.unpivot)
+    if query.ragged is not None:  # omitted when absent: existing wire forms are unchanged
+        out["ragged"] = {"fields": list(query.ragged.fields),
+                         **({"missing": list(query.ragged.missing)} if query.ragged.missing is not None else {})}
     return out
 
 

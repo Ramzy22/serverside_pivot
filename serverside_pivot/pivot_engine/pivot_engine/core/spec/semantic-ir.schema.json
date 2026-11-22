@@ -372,6 +372,27 @@
           }
         }
       }
+    },
+    "ragged": {
+      "description": "REQ-DIM-005: a ragged hierarchy over these fields; the rows are its positional columns __rag1..n (a NULL there is no node).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "missing": {
+          "description": "values that count as missing (default: the empty text); NULL and NaN always do",
+          "type": "array"
+        }
+      }
     }
   },
   "$defs": {

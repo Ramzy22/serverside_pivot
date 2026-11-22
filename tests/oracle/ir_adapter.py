@@ -36,6 +36,7 @@ def to_oracle(query: Any) -> Query:
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
             [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
             query.unpivot.drop_nulls),
+        ragged=None if getattr(query, "ragged", None) is None else (list(query.ragged.fields), query.ragged.missing),
     )
 
 

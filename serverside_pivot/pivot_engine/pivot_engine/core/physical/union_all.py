@@ -180,10 +180,54 @@ def with_unpivot(relation: Any, unpivot: Any) -> Any:
     return out
 
 
+def with_ragged(relation: Any, ragged: Any) -> Any:
+    """REQ-DIM-005: per position i, the i-th present value, the index of its field, and the path length."""
+    if ragged is None or "__ragn" in relation.columns:
+        return relation
+    schema = relation.schema()
+    dtypes = {schema[f] for f in ragged.fields}
+    first = schema[ragged.fields[0]]
+    widened = "int64" if first.is_integer() else "float64" if first.is_floating() else (
+        "string" if first.is_string() else None)
+    dtype = first if len(dtypes) == 1 else widened
+    if dtype is None:
+        raise ValueError(f"ragged hierarchy fields of different types: {sorted(map(str, dtypes))}")
+    present = []
+    for f in ragged.fields:
+        col = relation[f]
+        ok = col.notnull()
+        if schema[f].is_floating():
+            ok = ok & ~col.isnan()
+        if ragged.missing is None:
+            if schema[f].is_string():
+                ok = ok & (col != "")
+        else:
+            ok = ok & ~col.isin(list(ragged.missing))
+        present.append(ok.fill_null(False))
+    counts, running = [], ibis.literal(0, type="int64")
+    for ok in present:
+        running = running + ok.cast("int64")
+        counts.append(running)
+    cols: Dict[str, Any] = {}
+    for i in range(1, len(ragged.fields) + 1):
+        value = ibis.null().cast(dtype)
+        index = ibis.null().cast("int64")
+        for j in reversed(range(len(ragged.fields))):
+            hit = present[j] & (counts[j] == i)
+            value = ibis.ifelse(hit, relation[ragged.fields[j]].cast(dtype), value)
+            index = ibis.ifelse(hit, ibis.literal(j, type="int64"), index)
+        cols[f"__rag{i}"] = value
+        cols[f"__ragf{i}"] = index
+    cols["__ragn"] = counts[-1]
+    return relation.mutate(**cols)
+
+
 def prepared(relation: Any, query: Any) -> Any:
-    """The relation the query sees: categories (REQ-DIM-001), then the measure axis (REQ-DIM-002)."""
+    """The relation the query sees: categories (REQ-DIM-001), the measure axis (REQ-DIM-002), then a ragged
+    hierarchy (REQ-DIM-005)."""
     relation = with_categories(relation, getattr(query, "categories", ()))
-    return with_unpivot(relation, getattr(query, "unpivot", None))
+    relation = with_unpivot(relation, getattr(query, "unpivot", None))
+    return with_ragged(relation, getattr(query, "ragged", None))
 
 
 def filtered(relation: Any, query: Any) -> Any:
@@ -212,14 +256,18 @@ def _paths_table(paths: Sequence[Tuple[Any, ...]], keys: Sequence[str], schema: 
 def _eligible(e0: Any, plan: LogicalPlan) -> Any:
     """E: records of E0 whose group passes at every filtered level (REQ-TOT-001)."""
     e = e0
+    ragged = plan.query.ragged is not None
     for level_no, filters in sorted(plan.filters_by_level.items()):
         keys = list(plan.rows[:level_no])
-        grouped = e0.group_by(keys).aggregate(**_measures(e0, plan, [f.measure for f in filters], keys))
+        # REQ-DIM-005: only records with a node at this level are filtered by it
+        groups = e0.filter(e0[keys[-1]].notnull()) if ragged else e0
+        grouped = groups.group_by(keys).aggregate(**_measures(groups, plan, [f.measure for f in filters], keys))
         cond = None
         for f in filters:
             term = _CMP[f.op](grouped[f.measure], f.value)
             cond = term if cond is None else (cond & term)
-        e = _semi_join_on_keys(e, grouped.filter(cond), keys)
+        passing = _semi_join_on_keys(e, grouped.filter(cond), keys)
+        e = passing.union(e.filter(e[keys[-1]].isnull()), distinct=False) if ragged else passing
     return e
 
 
@@ -235,6 +283,8 @@ def _direct(source: Any, plan: LogicalPlan) -> LevelAggregate:
 def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: LogicalPlan, schema: Any) -> Any:
     keys = list(level.keys)
     rel = aggregate(keys)
+    if plan.query.ragged is not None and keys:  # REQ-DIM-005: a path that has ended is no node
+        rel = rel.filter(rel[keys[-1]].notnull())
     if plan.values_from == "E0" and keys:
         rel = _semi_join_on_keys(rel, eligible.select(keys), keys)  # shown iff E ∩ n ≠ ∅
     if level.visible_parents is not None:

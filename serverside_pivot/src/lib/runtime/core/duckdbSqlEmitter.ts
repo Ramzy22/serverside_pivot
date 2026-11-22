@@ -362,6 +362,42 @@ function withCategories(query: PivotQuery, options: EmitOptions): CategorySource
         columns[axis.value] = valueInfo;
         columns[axis.key] = { family: 'integer', sqlType: 'BIGINT' };
     }
+    const ragged = query.ragged;
+    if (ragged) { // REQ-DIM-005: per position the i-th present value, its field index, and the path length
+        ragged.fields.forEach((f) => { if (!columns[f]) throw new EmitterUnsupported(`unknown column ${f}`); });
+        const first = columns[ragged.fields[0]];
+        const same = ragged.fields.every((f) => columns[f].sqlType === first.sqlType);
+        const info: ColumnInfo = same ? first : first.family === 'integer' ? { family: 'integer', sqlType: 'BIGINT' }
+            : first.family === 'floating' ? { family: 'floating', sqlType: 'DOUBLE' }
+                : first.family === 'string' ? { family: 'string', sqlType: 'VARCHAR' } : (() => {
+                    throw new EmitterUnsupported('ragged hierarchy fields of different types');
+                })();
+        const present = ragged.fields.map((f) => {
+            const col = quoteIdent(f);
+            const terms = [`${col} IS NOT NULL`];
+            if (columns[f].family === 'floating') terms.push(`NOT isnan(${col})`);
+            if (!ragged.missing) {
+                if (columns[f].family === 'string') terms.push(`${col} <> ''`);
+            } else if (ragged.missing.length) {
+                terms.push(`${col} NOT IN (${ragged.missing.map((v) => typedLiteral(v, columns[f])).join(', ')})`);
+            }
+            return `COALESCE(${terms.join(' AND ')}, FALSE)`;
+        });
+        const counts = present.map((_p, j) => present.slice(0, j + 1).map((p) => `CAST(${p} AS BIGINT)`).join(' + '));
+        const extra: string[] = [];
+        ragged.fields.forEach((_f, k) => {
+            const i = k + 1;
+            const hits = ragged.fields.map((f, j) => `WHEN ${present[j]} AND ${counts[j]} = ${i}`);
+            extra.push(`CASE ${hits.map((h, j) => `${h} THEN CAST(${quoteIdent(ragged.fields[j])} AS ${info.sqlType})`).join(' ')} END AS ${quoteIdent(`__rag${i}`)}`);
+            extra.push(`CASE ${hits.map((h, j) => `${h} THEN CAST(${j} AS BIGINT)`).join(' ')} END AS ${quoteIdent(`__ragf${i}`)}`);
+            columns[`__rag${i}`] = info;
+            columns[`__ragf${i}`] = { family: 'integer', sqlType: 'BIGINT' };
+        });
+        extra.push(`${counts[counts.length - 1]} AS ${quoteIdent('__ragn')}`);
+        columns.__ragn = { family: 'integer', sqlType: 'BIGINT' };
+        ctes.push(`__ragged AS (SELECT *, ${extra.join(', ')} FROM ${relation})`);
+        relation = '__ragged';
+    }
     return { ctes, relation, columns };
 }
 
@@ -406,8 +442,12 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             return `${quoteIdent(f.measure)} ${f.op} ${literal(f.value, undefined)}`;
         });
         const name = `__mf${level}`;
-        ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases, keys).join(', ')} FROM __e0 GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
-        semi.push(`EXISTS (SELECT 1 FROM ${name} g WHERE ${nullSafeJoin('e', 'g', keys)})`);
+        // REQ-DIM-005: in a ragged hierarchy only records with a node at this level are filtered by it.
+        const last = quoteIdent(keys[keys.length - 1]);
+        const groups = query.ragged ? `(SELECT * FROM __e0 WHERE ${last} IS NOT NULL)` : '__e0';
+        ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases, keys).join(', ')} FROM ${groups} GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
+        const exists = `EXISTS (SELECT 1 FROM ${name} g WHERE ${nullSafeJoin('e', 'g', keys)})`;
+        semi.push(query.ragged ? `(e.${last} IS NULL OR ${exists})` : exists);
     });
     ctes.push(`__e AS (SELECT * FROM __e0 e${semi.length ? ` WHERE ${semi.join(' AND ')}` : ''})`);
     const source = query.totals === 'all_data' ? '__e0' : '__e';
@@ -419,6 +459,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
     levelList.forEach((level) => {
         const keys = level.keys;
         const restrictions: string[] = [];
+        if (query.ragged && keys.length) restrictions.push(`a.${quoteIdent(keys[keys.length - 1])} IS NOT NULL`); // REQ-DIM-005
         if (query.totals === 'all_data' && keys.length) {
             restrictions.push(`EXISTS (SELECT 1 FROM __e v WHERE ${nullSafeJoin('a', 'v', keys)})`);
         }

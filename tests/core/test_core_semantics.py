@@ -24,7 +24,7 @@ from pivot_engine.core.exec import execute
 from pivot_engine.core.ir import from_wire, to_wire
 from pivot_engine.core.ir import (
     Category, CategoryRule, DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate,
-    PredicateGroup, SortKey, Unpivot, UnpivotMember, Window,
+    PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
 
 from ..oracle.oracle import Measure as OMeasure
@@ -89,6 +89,7 @@ def _oracle(records, query: PivotQuery):
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
             [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
             query.unpivot.drop_nulls),
+        ragged=None if getattr(query, "ragged", None) is None else (list(query.ragged.fields), query.ragged.missing),
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -182,6 +183,12 @@ def queries(draw):
         key_fields = key_fields + ["mk"]
     series = agg == "array_agg" or (unpivot is not None and unpivot.per_member
                                     and unpivot.members[0].agg == "array_agg")
+    ragged = None
+    if unpivot is None and not categories and draw(st.booleans()):  # REQ-DIM-005: a ragged hierarchy
+        fields = tuple(draw(st.sampled_from([("r", "c"), ("c", "r"), ("r", "c", "k")])))
+        ragged = Ragged(fields, draw(st.sampled_from([None, ("A",), ("", " ")])))
+        rows = ragged.names()
+        key_fields = key_fields + ["__ragn", "__ragf1"]
     mfs = ()
     if not series and draw(st.booleans()):
         mfs = (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from([">", "<=", "="])),
@@ -189,6 +196,8 @@ def queries(draw):
     expanded = None
     if len(rows) == 2 and draw(st.booleans()):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
+    if len(rows) == 3 and ragged is not None and draw(st.booleans()):
+        expanded = frozenset(draw(st.sets(st.tuples(DIM, DIM) | st.tuples(DIM), max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
                     *([] if series else [SortKey(alias, desc=draw(st.booleans()),
                                                  absolute=agg not in {"min", "max"} and draw(st.booleans()))]),
@@ -196,7 +205,7 @@ def queries(draw):
                     SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
                             by=draw(st.sampled_from(key_fields))),
                     # REQ-SORT-005: a text row level ordered by its tenor value
-                    SortKey(draw(st.sampled_from([r for r in rows if r in {"r", "c", "g", "mn"}])),
+                    SortKey(draw(st.sampled_from([r for r in rows if r in {"r", "c", "g", "mn"} or r.startswith("__rag")])),
                             desc=draw(st.booleans()), semantic="tenor")]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
@@ -218,17 +227,19 @@ def queries(draw):
             derived = (DerivedMeasure("d", func, alias, desc=draw(st.booleans())),)
     columns, members = (), ()
     if draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
-        columns = ("k",)
-        members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
+        columns = ("w",) if ragged is not None and "k" in ragged.fields else ("k",)
+        member_value = DIM if columns == ("k",) else st.one_of(st.none(), st.integers(0, 4))
+        members = tuple((v,) for v in draw(st.lists(member_value, max_size=3, unique=True)))
         if not series and draw(st.booleans()) and alias not in {k.field for k in sort}:
             # REQ-SORT-004: a pivot cell, possibly outside the returned column window
-            sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),),
+            sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(member_value),),
                                    absolute=agg not in {"min", "max", "first", "last"} and draw(st.booleans())),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
-                      totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after", "none"])),
+                      totals=draw(st.sampled_from(["visible", "all_data"])),
+                      subtotals=draw(st.sampled_from(["before", "after"] if ragged is not None else ["before", "after", "none"])),
                       expanded=expanded, window=window,
                       columns=columns, column_members=members, derived=derived, categories=categories,
-                      unpivot=unpivot)
+                      unpivot=unpivot, ragged=ragged)
 
 
 NEEDLE = st.sampled_from(["a", "A", "", "|", "x_", "b"])
@@ -277,6 +288,23 @@ def _table(records):
 @given(records=RECORDS, query=queries())
 def test_core_equals_oracle(records, query):
     _assert_equal(_core(_con(_table(records)), query), _oracle(records, query))
+
+
+@pytest.mark.parametrize("missing", [None, ("-",)])
+def test_ragged_hierarchy_paths_skip_missing_levels(missing):  # REQ-DIM-005
+    blank = "" if missing is None else "-"
+    rows = [("Root", "Desk", None, 100), ("Root", None, None, -250), ("Root", "Desk", "Sub", 50),
+            ("Direct", None, blank, 30), (blank, "Orphan", None, 15), (None, None, None, 7)]
+    records = [{"r": a, "c": b, "k": c, "v": v, "w": 1} for a, b, c, v in rows]
+    ragged = Ragged(("r", "c", "k"), missing)
+    query = PivotQuery(dataset="t", rows=ragged.names(), measures=(MeasureRef("s", "sum", "v"),),
+                       measure_filters=(MeasureFilter(3, "s", ">", 0),), ragged=ragged)
+    core = _core(_con(_table(records)), query)
+    _assert_equal(core, _oracle(records, query))
+    got = {path: values["s"] for path, values in core}
+    # Root>Desk>Sub passes the level-3 filter; records ending above level 3 are not filtered by it
+    assert got == {(): -48, ("Direct",): 30, ("Orphan",): 15, ("Root",): -100, ("Root", "Desk"): 150,
+                   ("Root", "Desk", "Sub"): 50}
 
 
 @pytest.mark.parametrize("desc", [False, True])

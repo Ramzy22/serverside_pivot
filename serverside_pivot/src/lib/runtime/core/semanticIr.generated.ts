@@ -138,6 +138,19 @@ export interface PivotQuery {
       }[]
     ];
   };
+  /**
+   * REQ-DIM-005: a ragged hierarchy over these fields; the rows are its positional columns __rag1..n (a NULL there is no node).
+   */
+  ragged?: {
+    /**
+     * @minItems 1
+     */
+    fields: [string, ...string[]];
+    /**
+     * values that count as missing (default: the empty text); NULL and NaN always do
+     */
+    missing?: unknown[];
+  };
 }
 export interface Predicate {
   field: string;

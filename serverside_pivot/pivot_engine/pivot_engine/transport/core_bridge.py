@@ -25,7 +25,7 @@ from ..core.authority.verifier import verify_scoped
 from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    MEMBER_AGG, Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Unpivot, UnpivotMember, Window,
+    MEMBER_AGG, Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
@@ -389,6 +389,29 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
             "measures": [MeasureRef(value, agg, value)]}
 
 
+# --------------------------------------------------------------------- ragged hierarchy (REQ-DIM-005)
+
+
+def _ragged(spec: Any, rows: Sequence[str], families: Dict[str, str], subtotals: str, axis: Any,
+            reasons: List[str]) -> Optional[Ragged]:
+    """``group_allow_unbalanced`` as an IR :class:`Ragged` over the row fields; ``families`` gains its columns."""
+    if axis:
+        reasons.append("ragged hierarchy with a measure axis")
+    if subtotals == "none":
+        reasons.append("ragged hierarchy in a flat layout")  # its leaves end at different depths
+    unknown = [r for r in rows if r not in families]
+    if not rows or unknown or len({families[r] for r in rows}) != 1:
+        reasons.append("ragged hierarchy over fields of different types")
+    if reasons:
+        return None
+    raw = getattr(spec, "unbalanced_values", None)
+    family = families[rows[0]]
+    missing = None if raw is None else tuple(_coerce(v, family) for v in raw)
+    ragged = Ragged(tuple(rows), missing)
+    families.update(ragged.extend(families))
+    return ragged
+
+
 # --------------------------------------------------------------------- spec -> IR
 
 
@@ -487,7 +510,8 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
 # construction rather than silently partial.
 _SPEC_FIELDS = {"table", "rows", "columns", "measures", "filters", "custom_dimensions", "sort", "offset", "cursor",
                 "totals", "having", "subtotals", "grouping_config", "pivot_config", "measure_axis", "drill_paths",
-                "group_allow_unbalanced",
+                "group_allow_unbalanced", "unbalanced_values",  # REQ-DIM-005: a ragged hierarchy
+                "full_rows",  # checked below: only the displayed rows themselves (a no-op) are served
                 "limit",  # the hierarchy view is windowed by start/end rows
                 "column_sort_options"}  # orders the column catalog only; cells are keyed by member
 _MEASURE_FIELDS = {"field", "agg", "alias", "weighted_field", "expression", "percentile", "separator",
@@ -568,8 +592,9 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
                         ("grouping_config", "grouping sets")):
         if getattr(spec, attr, None):
             reasons.append(label)
-    if getattr(spec, "group_allow_unbalanced", False):
-        reasons.append("unbalanced hierarchy")
+    full_rows = [str(r) for r in getattr(spec, "full_rows", None) or []]
+    if full_rows and full_rows != [str(r) for r in spec.rows or []]:
+        reasons.append("spec field 'full_rows'")  # visual totals over hidden deeper levels
     axis = _measure_axis(spec, families, reasons)  # REQ-DIM-002
     if axis is None and reasons and getattr(getattr(spec, "measure_axis", None), "placement", "none") != "none":
         raise CoreUnsupported(reasons)  # the rest of the spec names the axis columns: only the axis reasons count
@@ -588,6 +613,17 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
 
     rows = axis["rows"] if axis else [str(r) for r in spec.rows or []]
     measures, derived = (axis["measures"], []) if axis else _measures(spec, reasons)
+    ragged = None
+    raw_sort = axis["sort"] if axis else (spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else []))
+    if getattr(spec, "group_allow_unbalanced", False):  # REQ-DIM-005
+        ragged = _ragged(spec, rows, families, subtotals, axis, reasons)
+        if ragged is not None:
+            positions = dict(zip(rows, ragged.names()))
+            raw_sort = [{**s, "field": positions[s["field"]]} if isinstance(s, Mapping) and s.get("field") in positions
+                        else s for s in raw_sort]
+            rows = list(ragged.names())
+            measures = [*measures, MeasureRef(f"{HIDDEN}ragn", "max", "__ragn"),
+                        *(MeasureRef(f"{HIDDEN}ragf{i}", "min", f"__ragf{i}") for i in range(1, len(rows) + 1))]
     aliases = frozenset(m.alias for m in measures if not m.alias.startswith(HIDDEN))
     if derived and columns:
         reasons.append("derived measure with column pivot")
@@ -596,7 +632,6 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         reasons.append(f"unknown row fields {unknown}")
 
     sort: List[SortKey] = []
-    raw_sort = axis["sort"] if axis else (spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else []))
     for s in raw_sort:
         sort_type = str(s.get("sortType") or "").strip().lower()
         absolute = bool(s.get("absoluteSort")) or sort_type in {"absolute", "abs", "absolute_value", "absolute-value"}
@@ -670,6 +705,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         derived=tuple(derived),
         categories=categories,
         unpivot=axis["unpivot"] if axis else None,
+        ragged=ragged,
     )
     # Typed errors before any core expression is built (REQ-AGG-001, REQ-AGG-008).
     return query.validate({name: type_family(dtype) for name, dtype in schema.items()})
@@ -726,11 +762,38 @@ def _legacy_values(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[
     return out
 
 
+def _ragged_row(record: Mapping[str, Any], query: PivotQuery, values: Dict[str, Any]) -> Dict[str, Any]:
+    """REQ-DIM-005: a ragged node in the legacy shape: each path member under the field it came from."""
+    assert query.ragged is not None
+    fields = query.ragged.fields
+    raw, path = record["values"], record["path"]
+    if not path:
+        out: Dict[str, Any] = {fields[0]: None, **values}
+        out.update({"_id": GRAND_TOTAL_ID, "_isTotal": True, "_path": GRAND_TOTAL_DISPLAY_PATH, "depth": 0,
+                    "_rowKey": "[]"})
+        return out
+    path_fields = [fields[int(raw[f"{HIDDEN}ragf{i}"])] for i in range(1, len(path) + 1)]
+    out = {**dict(zip(path_fields, path)), **values}
+    out.update({
+        "_id": str(path[-1]),
+        "_path": CanonicalPathCodec.display_path(list(path)),
+        "_pathFields": path_fields,
+        "depth": len(path) - 1,
+        "_has_children": int(raw[f"{HIDDEN}ragn"] or 0) > len(path),
+    })
+    row_key = _canonical_row_key(path)
+    if row_key is not None:
+        out["_rowKey"] = row_key
+    return out
+
+
 def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str] = (),
                 totals_column: bool = False) -> Dict[str, Any]:
     rows = query.rows
     path = record["path"]
     values = _legacy_values(record, query, keys, totals_column)
+    if query.ragged is not None:
+        return _ragged_row(record, query, values)
     if not path:
         out: Dict[str, Any] = {f: None for f in rows[:1]}
         out.update(values)
@@ -1010,6 +1073,8 @@ def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: 
     relation = resolve(spec.table)
     families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
     reasons: List[str] = []
+    if getattr(spec, "group_allow_unbalanced", False):
+        reasons.append("drill-through in a ragged hierarchy")  # its paths are positional, not per field
     categories = _categories(spec, families, reasons)  # REQ-DIM-001
     fields = payload.get("row_fields") or payload.get("pathFields") or payload.get("rowFields") or []
     fields = [str(f) for f in fields] if isinstance(fields, list) else []

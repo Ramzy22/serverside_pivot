@@ -221,6 +221,8 @@ class Query:
     # REQ-DIM-002: (label, value, key, [(member label, field, order[, agg, weight, q, order_by]), ...], drop_nulls),
     # after the categories; REQ-DIM-003: members with their own aggregation (value measure agg "member")
     unpivot: Optional[Tuple[str, str, str, Sequence[Tuple[str, str, int]], bool]] = None
+    # REQ-DIM-005: (fields, missing values or None); the rows are __rag1..n
+    ragged: Optional[Tuple[Sequence[str], Optional[Sequence[Any]]]] = None
 
 
 # ----------------------------------------------------------------- engine
@@ -299,14 +301,43 @@ def with_unpivot(query: Query, data: Sequence[Record]) -> List[Record]:
     return out
 
 
+def _missing(value: Any, missing: Optional[Sequence[Any]]) -> bool:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return True
+    if missing is None:
+        return value == ""
+    return any(value == m and isinstance(value, bool) == isinstance(m, bool) for m in missing)
+
+
+def with_ragged(query: Query, data: Sequence[Record]) -> List[Record]:
+    """REQ-DIM-005: each record's path is its present field values in order; __rag{i} is the i-th
+    (None once the path has ended), __ragf{i} the index of its field, __ragn the path length."""
+    if query.ragged is None:
+        return list(data)
+    fields, missing = query.ragged
+    out = []
+    for record in data:
+        present = [(j, record.get(f)) for j, f in enumerate(fields) if not _missing(record.get(f), missing)]
+        extra: Dict[str, Any] = {"__ragn": len(present)}
+        for i in range(1, len(fields) + 1):
+            j, value = present[i - 1] if i <= len(present) else (None, None)
+            extra[f"__rag{i}"] = value
+            extra[f"__ragf{i}"] = j
+        out.append({**record, **extra})
+    return out
+
+
 def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], List[Record]]:
     """Return (E0, E) per SEMANTICS §2."""
-    data = with_unpivot(query, with_categories(query, data))
+    data = with_ragged(query, with_unpivot(query, with_categories(query, data)))
     e0 = [r for r in data if in_scope(r, query.scope) and all(p(r) for p in query.filters)]
     passing: Dict[int, set] = {}
+    ragged = query.ragged is not None
     for level in sorted({mf.level for mf in query.measure_filters}):
         groups: Dict[Tuple[Any, ...], List[Record]] = {}
         for r in e0:
+            if ragged and r.get(query.rows[level - 1]) is None:
+                continue  # REQ-DIM-005: no node at this level: not filtered by it
             groups.setdefault(_key(r, query.rows, level), []).append(r)
         level_filters = [mf for mf in query.measure_filters if mf.level == level]
         passing[level] = {
@@ -315,7 +346,9 @@ def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], L
             if all(_OPS[mf.op](_measures(query, members, query.rows[:level])[mf.measure], mf.value)
                    for mf in level_filters)
         }
-    e = [r for r in e0 if all(_key(r, query.rows, lvl) in keys for lvl, keys in passing.items())]
+    e = [r for r in e0 if all(_key(r, query.rows, lvl) in keys
+                              or (ragged and r.get(query.rows[lvl - 1]) is None)
+                              for lvl, keys in passing.items())]
     return e0, e
 
 
@@ -472,6 +505,8 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
         if depth > len(query.rows):
             return
         candidates = {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix}
+        if query.ragged is not None:  # REQ-DIM-005: a path that has ended is no node
+            candidates = {c for c in candidates if c[-1] is not None}
         values = {c: _measures(query, [r for r in totals_source if _key(r, query.rows, depth) == c],
                                query.rows[:depth])
                   for c in candidates}

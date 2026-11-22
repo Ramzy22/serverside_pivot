@@ -25,6 +25,8 @@ _MERGEABLE = {"sum", "count", "min", "max", "avg"}
 def supports(plan: LogicalPlan, schema: Any) -> bool:
     if plan.query.columns:
         return False  # pivot cells aggregate conditionally; the reference strategy serves them
+    if plan.query.ragged is not None:
+        return False  # ragged levels end at different depths; the reference strategy serves them
     for m in plan.query.measures:
         if m.agg not in _MERGEABLE:
             return False
