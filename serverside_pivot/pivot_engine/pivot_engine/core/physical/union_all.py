@@ -421,7 +421,41 @@ def _with_member_keys(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, 
         predicates = [union[k].identical_to(lookup[f"__kanc{i}_{j}"]) for j, k in enumerate(keys)]
         joined = union.left_join(lookup, predicates)
         union = joined.select(*[joined[c] for c in union.columns], joined[name])
+    for dim, _kind in plan.semantic_keys:  # REQ-SORT-005: a key of the member value itself
+        name = names[dim] = f"__key{plan.rows.index(dim) + 1}"
+        union = union.mutate(**{name: tenor_days(union[dim])})
     return union, names
+
+
+_WS = "[\t\n\f\r ]*"
+TENOR_PATTERN = f"^{_WS}([0-9]+(?:\\.[0-9]+)?){_WS}([A-Za-z]){_WS}$"
+ISO_PATTERN = f"^{_WS}([0-9]{{4}})-([0-9]{{2}})-([0-9]{{2}}){_WS}$"
+MONTH_YEAR_PATTERN = f"^{_WS}([A-Za-z]+)[\t\n\f\r ]+([0-9]{{4}}){_WS}$"
+_UNITS = {"d": 1.0, "w": 7.0, "m": 30.4375, "y": 365.25}
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def tenor_days(text: Any) -> Any:
+    """REQ-SORT-005: days of a tenor (1D, 2W, 6M, 1Y), else of an ISO date, else of a month-year; else NULL."""
+    def group(pattern: str, i: int) -> Any:
+        return text.re_extract(pattern, i).nullif("")
+
+    number = group(TENOR_PATTERN, 1).cast("float64")
+    unit = group(TENOR_PATTERN, 2).lower()
+    factor = ibis.null().cast("float64")
+    for letter, days in reversed(list(_UNITS.items())):
+        factor = ibis.ifelse(unit == letter, ibis.literal(days), factor)
+    year, month, day = (group(ISO_PATTERN, i).cast("float64") for i in (1, 2, 3))
+    iso = (year - 1970.0) * 365.25 + (month - 1.0) * 30.4375 + day
+    my_year = group(MONTH_YEAR_PATTERN, 2).cast("float64")
+    abbr = group(MONTH_YEAR_PATTERN, 1).lower().substr(0, 3)
+    my_month = ibis.null().cast("float64")
+    for n, name in reversed(list(enumerate(_MONTHS, start=1))):
+        my_month = ibis.ifelse(abbr == name, ibis.literal(float(n)), my_month)
+    month_year = (my_year - 1970.0) * 365.25 + (my_month - 1.0) * 30.4375
+    return ibis.ifelse(number.notnull() & factor.notnull(), number * factor,
+                       ibis.ifelse(year.notnull(), iso, ibis.ifelse(month_year.notnull(), month_year,
+                                                                    ibis.null().cast("float64"))))
 
 
 def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, int], str]]:

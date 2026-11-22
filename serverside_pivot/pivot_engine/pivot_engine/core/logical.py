@@ -39,6 +39,7 @@ class LogicalPlan:
     descending: Dict[str, bool]  # row dimension -> descending (its own level)
     sort: Tuple[Tuple[str, bool, bool, bool], ...] = ()  # (field, descending, is_measure, absolute), in precedence
     member_keys: Tuple[Tuple[str, str], ...] = ()  # (row dimension, key column): REQ-SORT-003
+    semantic_keys: Tuple[Tuple[str, str], ...] = ()  # (row dimension, semantic kind): REQ-SORT-005
 
     @property
     def rows(self) -> Tuple[str, ...]:
@@ -77,4 +78,5 @@ def plan(query: PivotQuery) -> LogicalPlan:
         descending={s.field: s.desc for s in query.sort if s.field in query.rows},
         sort=tuple((s.field, s.desc, s.field not in query.rows, s.absolute) for s in query.sort),
         member_keys=tuple((s.field, s.by) for s in query.sort if s.by is not None),
+        semantic_keys=tuple((s.field, s.semantic) for s in query.sort if s.semantic is not None),
     )

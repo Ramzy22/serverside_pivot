@@ -7,6 +7,7 @@ over speed.  Do not import engine code from here.
 
 from __future__ import annotations
 
+import re
 import math
 import statistics
 from dataclasses import dataclass, field
@@ -369,6 +370,39 @@ def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ..
     return sorted(candidates, key=functools.cmp_to_key(compare))
 
 
+_WS = "[\t\n\f\r ]*"
+_TENOR = re.compile(f"^{_WS}([0-9]+(?:\\.[0-9]+)?){_WS}([A-Za-z]){_WS}$")
+_ISO = re.compile(f"^{_WS}([0-9]{{4}})-([0-9]{{2}})-([0-9]{{2}}){_WS}$")
+_MONTH_YEAR = re.compile(f"^{_WS}([A-Za-z]+)[\t\n\f\r ]+([0-9]{{4}}){_WS}$")
+_UNITS = {"d": 1.0, "w": 7.0, "m": 30.4375, "y": 365.25}
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def tenor_days(text: Any) -> Optional[float]:
+    """REQ-SORT-005: a tenor (number and unit D/W/M/Y, in days), else an ISO date (days from 1970 at
+    365.25 a year and 30.4375 a month), else a month-year (first three letters); else None."""
+    if not isinstance(text, str):
+        return None
+    m = _TENOR.match(text)
+    if m and m.group(2).lower() in _UNITS:
+        return float(m.group(1)) * _UNITS[m.group(2).lower()]
+    m = _ISO.match(text)
+    if m:
+        year, month, day = (float(g) for g in m.groups())
+        return (year - 1970.0) * 365.25 + (month - 1.0) * 30.4375 + day
+    m = _MONTH_YEAR.match(text)
+    if m and m.group(1)[:3].lower() in _MONTHS:
+        return (float(m.group(2)) - 1970.0) * 365.25 + (_MONTHS.index(m.group(1)[:3].lower()) + 1.0 - 1.0) * 30.4375
+    return None
+
+
+def _member_key(by: Any, records: Sequence[Record], member: Tuple[Any, ...]) -> Any:
+    """REQ-SORT-003: MIN(by) over the member's records; REQ-SORT-005: the member value's semantic key."""
+    if isinstance(by, tuple) and by[0] == "semantic":
+        return tenor_days(member[-1])
+    return _min_or_none([r.get(by) for r in records])
+
+
 def _min_or_none(values: Sequence[Any]) -> Any:
     present = [v for v in values if v is not None]
     return min(present) if present else None
@@ -396,7 +430,7 @@ def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[R
             v = values[c][f]
         elif by is not None:
             level = list(query.rows).index(f) + 1
-            v = _min_or_none([r.get(by) for r in source if _key(r, query.rows, level) == c[:level]])
+            v = _member_key(by, [r for r in source if _key(r, query.rows, level) == c[:level]], c[:level])
         else:
             v = c[list(query.rows).index(f)]
         return None if v is None else (abs(v) if absolute else v)
@@ -446,7 +480,7 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
             by = entry[3] if len(entry) > 3 else None
             member = entry[4] if len(entry) > 4 else None
             if entry[0] == query.rows[depth - 1] and by is not None:
-                member_keys[by] = {c: _min_or_none([r.get(by) for r in totals_source if _key(r, query.rows, depth) == c])
+                member_keys[by] = {c: _member_key(by, [r for r in totals_source if _key(r, query.rows, depth) == c], c)
                                    for c in candidates}
             if member is not None:
                 m = next(m for m in query.measures if m.alias == entry[0])

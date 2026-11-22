@@ -1829,7 +1829,8 @@ async def test_sparse_pivot_measure_sort_orders_mixed_sign_values(
         profile_sink=profile,
     )
 
-    assert profile["planner"]["path"] == "sparse_materialized"
+    # The core serves the pivot under PIVOT_CORE=on; the legacy sparse path is not used.
+    assert profile["planner"]["path"] == ("core" if os.environ.get("PIVOT_CORE") == "on" else "sparse_materialized")
     assert result.column("row_label").to_pylist() == expected_rows
     assert result.column("Sort_pnl_sum").to_pylist() == expected_values
 

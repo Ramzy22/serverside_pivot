@@ -45,6 +45,8 @@ _AGG = {
     "first": "first", "last": "last",  # REQ-AGG-008: need an order field (the IR rejects one without)
     "array_agg": "array_agg",  # REQ-AGG-009: a series ordered by its order field, else by value
 }
+# Sort types that order by the plain (signed) value; "value" is the UI's name for a measure's signed sort.
+_PLAIN_SORT_TYPES = frozenset({"alphanumeric", "basic", "default", "natural", "value"})
 _OPS = {
     "=": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">=", "in": "in", "not in": "not_in",
     "not_in": "not_in", "between": "between", "contains": "contains", "not_contains": "not_contains",
@@ -472,7 +474,10 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
         if any(v is None or v == "" for v in p):
             # A display path cannot tell the NULL member from "" (F-EXPAND-EMPTY): not addressable.
             raise CoreUnsupported(["expanded path with an empty or NULL member (send rowKey)"])
-        out.add(tuple(_coerce(v, families[rows[i]]) for i, v in enumerate(p)))
+        try:
+            out.add(tuple(_coerce(v, families[rows[i]]) for i, v in enumerate(p)))
+        except CoreUnsupported:
+            continue  # a stale path (the field's type changed) names no node: it expands nothing
     return frozenset(out)
 
 
@@ -531,7 +536,7 @@ def _unknown_keys(f: Any, reasons: List[str]) -> None:
 
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
                   end_row: Optional[int] = None, subtotals: str = "before",
-                  cell_sorts: Optional[List[Tuple[int, str, str, bool]]] = None) -> PivotQuery:
+                  cell_sorts: Optional[List[Tuple[int, str, str, bool, bool]]] = None) -> PivotQuery:
     """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
 
     The query's window addresses the legacy flattened list (nodes in tree
@@ -541,7 +546,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     With a column pivot (REQ-SORT-004), ``__RowTotal__<alias>`` sorts by the
     row total and ``<column key>_<alias>`` by that pivot cell; a cell sort
     needs the typed member, so it is appended to ``cell_sorts`` as
-    (precedence, key, alias, desc) for :func:`_resolve_members` (without
+    (precedence, key, alias, desc, absolute) for :func:`_resolve_members` (without
     ``cell_sorts`` it is unsupported).  A plain measure alias names no column
     of a pivoted view and is ignored, as legacy does.
     """
@@ -601,21 +606,30 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         if (s.get("field") not in rows and key_field == f"__sortkey__{s.get('field')}"
                 and (s.get("field") == axis_label or (axis is None and s.get("field") not in families))):
             continue  # the measure-axis level is not shown (axis off or label not a row): nothing to order
+        semantic_kind = str(semantic or ("tenor" if sort_type == "curve_pillar_tenor" else "")).strip().lower()
         if key_field and key_field in families and s.get("field") in rows:
-            # REQ-SORT-003: members ordered by MIN(key) (legacy: a hidden sort key per member).
-            if absolute or semantic or (sort_type and sort_type not in {"alphanumeric", "basic", "default", "natural"}):
+            # REQ-SORT-003: members ordered by MIN(key) (legacy: a hidden sort key per member).  A supplied
+            # key is the order: it wins over a semantic type or a pillar sort type, as in legacy.
+            if absolute or (sort_type and sort_type not in _PLAIN_SORT_TYPES | {"curve_pillar_tenor"}):
                 reasons.append("custom member order with a sort type")
             elif str(s.get("nulls") or "last").lower() != "last":
                 reasons.append(f"nulls {s.get('nulls')!r}")
             else:
                 sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", False, str(key_field)))
+        elif key_field and key_field in families and s.get("field") not in columns:
+            continue  # a member order for a dimension that is not a row level: nothing to order
         elif key_field and key_field in families:
-            reasons.append("custom member order")
+            reasons.append("custom member order on a column dimension")
+        elif semantic_kind == "tenor" and s.get("field") in rows and families.get(str(s.get("field"))) == "string":
+            if absolute or str(s.get("nulls") or "last").lower() != "last":
+                reasons.append("tenor sort with absolute or nulls first")
+            else:  # REQ-SORT-005
+                sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", semantic="tenor"))
         elif semantic:
             reasons.append(f"semantic sort {semantic!r}")
         elif str(s.get("nulls") or "last").lower() != "last":
             reasons.append(f"nulls {s.get('nulls')!r}")
-        elif sort_type and not absolute and sort_type not in {"alphanumeric", "basic", "default", "natural"}:
+        elif sort_type and not absolute and sort_type not in _PLAIN_SORT_TYPES:
             reasons.append(f"sort type {sort_type!r}")
         elif s.get("field") in rows or (s.get("field") in aliases and not columns):
             sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", absolute))
@@ -624,12 +638,12 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         elif columns and str(s.get("field") or "").startswith("__RowTotal__")                 and str(s["field"])[len("__RowTotal__"):] in aliases:
             sort.append(SortKey(str(s["field"])[len("__RowTotal__"):], str(s.get("order", "asc")).lower() == "desc",
                                 absolute))
-        elif columns and cell_sorts is not None and not absolute and any(
+        elif columns and cell_sorts is not None and any(
                 str(s.get("field") or "").endswith(f"_{a}") for a in aliases):
             field_text = str(s["field"])
             alias = max((a for a in aliases if field_text.endswith(f"_{a}")), key=len)
             cell_sorts.append((len(sort), field_text[: -len(alias) - 1], alias,
-                               str(s.get("order", "asc")).lower() == "desc"))
+                               str(s.get("order", "asc")).lower() == "desc", absolute))
         else:
             reasons.append(f"sort on {s.get('field')!r}")
 
@@ -670,7 +684,7 @@ def legacy_column_key(member: Sequence[Any]) -> str:
 
 
 def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any],
-                     cell_sorts: Sequence[Tuple[int, str, str, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
+                     cell_sorts: Sequence[Tuple[int, str, str, bool, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
     """Bind the column window: every member, or the legacy-selected keys, in their order.
 
     Deferred cell sorts are typed here; one naming no member is ignored, as legacy does.
@@ -688,9 +702,9 @@ def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any
     keys = list(by_key) if wanted is None else [str(k) for k in wanted if str(k) in by_key]
     sort = list(query.sort)
     inserted = 0
-    for position, key, alias, desc in cell_sorts:
+    for position, key, alias, desc, absolute in cell_sorts:
         if key in by_key:
-            sort.insert(position + inserted, SortKey(alias, desc, member=by_key[key]))
+            sort.insert(position + inserted, SortKey(alias, desc, absolute, member=by_key[key]))
             inserted += 1
     return replace(query, column_members=tuple(by_key[k] for k in keys), sort=tuple(sort)), keys
 
@@ -777,7 +791,7 @@ def core_hierarchy_view(
     relation = resolve(spec.table)
     if tabular_subtotals or flat:
         target_paths = [["__ALL__"]]  # every group is open: collapse state does not apply to a flat layout
-    cell_sorts: List[Tuple[int, str, str, bool]] = []
+    cell_sorts: List[Tuple[int, str, str, bool, bool]] = []
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row,
                           subtotals="none" if flat else ("after" if tabular_subtotals else "before"),
                           cell_sorts=cell_sorts)
@@ -861,7 +875,7 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     limit = getattr(spec, "limit", None) or None  # the run_pivot contract: limit 0 (or None) = no limit
     plain = copy.copy(spec)
     plain.offset = 0
-    cell_sorts: List[Tuple[int, str, str, bool]] = []
+    cell_sorts: List[Tuple[int, str, str, bool, bool]] = []
     query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     query, keys = _resolve_members(query, spec, resolver, cell_sorts)

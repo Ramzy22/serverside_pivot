@@ -42,7 +42,8 @@ def canonical(query: PivotQuery) -> str:
         "filters": [_canonical_filter(f, scalar) for f in query.filters],
         "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],
         "sort": [[k.field, k.desc, k.absolute, *([k.by] if k.by else []),
-                  *([CanonicalPathCodec.encode(list(k.member))] if k.member is not None else [])]
+                  *([CanonicalPathCodec.encode(list(k.member))] if k.member is not None else []),
+                  *([{"semantic": k.semantic}] if k.semantic else [])]
                  for k in query.sort],
         "totals": query.totals,
         "expanded": None if query.expanded is None

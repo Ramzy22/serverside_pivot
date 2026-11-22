@@ -59,6 +59,10 @@ export interface PivotQuery {
      * REQ-SORT-004: order a measure by the node's value within this column member (a pivot cell).
      */
     member?: unknown[];
+    /**
+     * REQ-SORT-005: order a text row dimension's members by a key computed from the member value.
+     */
+    semantic?: "tenor";
   }[];
   totals?: "visible" | "all_data";
   /**

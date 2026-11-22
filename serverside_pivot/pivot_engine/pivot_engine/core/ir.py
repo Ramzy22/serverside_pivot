@@ -104,7 +104,9 @@ class SortKey:
     magnitude (REQ-SORT-002).  ``by`` (dimension entries only) orders the
     level's members by MIN(by) over each member's records (REQ-SORT-003).
     ``member`` (measure entries only) orders by the node's value within one
-    column member, a pivot cell (REQ-SORT-004).
+    column member, a pivot cell (REQ-SORT-004).  ``semantic`` (text dimension
+    entries only) orders the members by a key computed from the member value:
+    "tenor" (REQ-SORT-005).
     """
 
     field: str
@@ -112,6 +114,10 @@ class SortKey:
     absolute: bool = False
     by: Optional[str] = None
     member: Optional[Tuple[Any, ...]] = None
+    semantic: Optional[str] = None
+
+
+SEMANTIC_SORTS = frozenset({"tenor"})
 
 
 @dataclass(frozen=True)
@@ -423,6 +429,13 @@ class PivotQuery:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
             if s.absolute and not _numeric_sort_target(s.field, self.rows, self.measures, schema):
                 raise IRValidationError(f"absolute sort needs a numeric value, not {s.field!r}.")
+            if s.semantic is not None:  # REQ-SORT-005
+                if s.semantic not in SEMANTIC_SORTS:
+                    raise IRValidationError(f"unknown semantic sort {s.semantic!r}.")
+                if s.field not in self.rows or schema.get(s.field) != "string":
+                    raise IRValidationError(f"a semantic sort orders a text row dimension, not {s.field!r}.")
+                if s.by is not None or s.absolute:
+                    raise IRValidationError("a semantic sort takes no member key and is not absolute.")
             if s.by is not None:
                 if s.field not in self.rows:
                     raise IRValidationError(f"a member key ('by') orders a row dimension, not {s.field!r}.")
@@ -495,9 +508,9 @@ def _numeric_sort_target(name: str, rows: Tuple[str, ...], measures: Tuple[Measu
     if name in rows or name not in {m.alias for m in measures}:
         return schema.get(name) in numeric
     m = next(m for m in measures if m.alias == name)
-    if m.agg in {"min", "max"}:
+    if m.agg in {"min", "max", "first", "last", "member"}:  # the input's type (a member axis: the value column's)
         return m.field is not None and schema.get(m.field) in numeric
-    return True  # every other aggregation yields a number
+    return m.agg != "array_agg"  # every other aggregation yields a number; a series is never ordered
 
 
 def cell_name(member_index: int, alias: str) -> str:
@@ -526,7 +539,7 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
                 MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
             ),
             sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)), s.get("by"),
-                               None if s.get("member") is None else tuple(s["member"]))
+                               None if s.get("member") is None else tuple(s["member"]), s.get("semantic"))
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
@@ -566,7 +579,8 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
                            for f in query.measure_filters],
         "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute, **({"by": k.by} if k.by else {}),
-                  **({"member": list(k.member)} if k.member is not None else {})}
+                  **({"member": list(k.member)} if k.member is not None else {}),
+                  **({"semantic": k.semantic} if k.semantic else {})}
                  for k in query.sort],
         "totals": query.totals,
         "window": {"offset": query.window.offset, "limit": query.window.limit},

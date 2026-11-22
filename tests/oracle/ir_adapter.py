@@ -25,7 +25,8 @@ def to_oracle(query: Any) -> Query:
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute, s.by, s.member) for s in query.sort],
+        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member)
+              for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),

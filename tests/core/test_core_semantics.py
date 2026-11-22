@@ -78,7 +78,8 @@ def _oracle(records, query: PivotQuery):
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute, s.by, s.member) for s in query.sort],
+        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member)
+              for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
@@ -123,8 +124,11 @@ def test_core_conforms_to_every_vector(vector):
 # ------------------------------------------------------------------ properties
 
 DIM = st.sampled_from(["A", "a", "B", "", " ", "x|y", "x_y", None])
+# REQ-SORT-005: tenors, ISO dates, month-years and near misses (equal keys tie by member value)
+TENOR_DIM = st.sampled_from(["1M", "2W", "1m", " 12M ", "1Y", "1.5Y", "0D", "7D", "1W", "1X", "M1",
+                             "2025-01-31", "Jan 2025", "january 2025", "Feb2025", "", None])
 RECORDS = st.lists(
-    st.fixed_dictionaries({"r": DIM, "c": DIM, "k": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
+    st.fixed_dictionaries({"r": DIM, "c": st.one_of(DIM, TENOR_DIM), "k": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
                            "w": st.one_of(st.none(), st.integers(0, 4))}),
     min_size=0, max_size=16,
 )
@@ -190,7 +194,10 @@ def queries(draw):
                                                  absolute=agg not in {"min", "max"} and draw(st.booleans()))]),
                     # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
                     SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
-                            by=draw(st.sampled_from(key_fields)))]
+                            by=draw(st.sampled_from(key_fields))),
+                    # REQ-SORT-005: a text row level ordered by its tenor value
+                    SortKey(draw(st.sampled_from([r for r in rows if r in {"r", "c", "g", "mn"}])),
+                            desc=draw(st.booleans()), semantic="tenor")]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):
@@ -215,7 +222,8 @@ def queries(draw):
         members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
         if not series and draw(st.booleans()) and alias not in {k.field for k in sort}:
             # REQ-SORT-004: a pivot cell, possibly outside the returned column window
-            sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),)),)
+            sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),),
+                                   absolute=agg not in {"min", "max", "first", "last"} and draw(st.booleans())),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after", "none"])),
                       expanded=expanded, window=window,
@@ -269,6 +277,20 @@ def _table(records):
 @given(records=RECORDS, query=queries())
 def test_core_equals_oracle(records, query):
     _assert_equal(_core(_con(_table(records)), query), _oracle(records, query))
+
+
+@pytest.mark.parametrize("desc", [False, True])
+def test_tenor_sort_orders_by_days_with_unparsed_members_last(desc):  # REQ-SORT-005
+    members = ["1Y", "2W", "Jan 2025", "1X", "6M", "1M", "7D", "1W", "2025-01-31", None]
+    records = [{"r": "A", "c": c, "k": "A", "v": 1, "w": 1} for c in members]
+    query = PivotQuery(dataset="t", rows=("c",), measures=(MeasureRef("n", "count", "v"),),
+                       sort=(SortKey("c", desc=desc, semantic="tenor"),))
+    core = _core(_con(_table(records)), query)
+    _assert_equal(core, _oracle(records, query))
+    by_days = ["1W", "7D", "2W", "1M", "6M", "1Y", "Jan 2025", "2025-01-31"]  # 7D and 1W tie: by member value
+    if desc:
+        by_days = ["2025-01-31", "Jan 2025", "1Y", "6M", "1M", "2W", "1W", "7D"]
+    assert [path[0] for path, _ in core if path] == [*by_days, "1X", None]
 
 
 @pytest.mark.parametrize("sort", [(), (SortKey("m_member", member=("a",)),)])

@@ -233,6 +233,28 @@ function levelAggregate(query: PivotQuery, m: Measure, condition: string | null,
     return `CASE ${whens.join(' ')} ELSE CAST(NULL AS ${type}) END`;
 }
 
+// REQ-SORT-005 (as core/physical/union_all.tenor_days): tenor, else ISO date, else month-year; else NULL.
+const WS = '[\\t\\n\\f\\r ]*';
+const TENOR = `^${WS}([0-9]+(?:\\.[0-9]+)?)${WS}([A-Za-z])${WS}$`;
+const ISO = `^${WS}([0-9]{4})-([0-9]{2})-([0-9]{2})${WS}$`;
+const MONTH_YEAR = `^${WS}([A-Za-z]+)[\\t\\n\\f\\r ]+([0-9]{4})${WS}$`;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+function tenorDays(x: string): string {
+    const g = (pattern: string, i: number) => `NULLIF(regexp_extract(${x}, '${pattern}', ${i}), '')`;
+    const num = `CAST(${g(TENOR, 1)} AS DOUBLE)`;
+    const unit = `lower(${g(TENOR, 2)})`;
+    const factor = `CASE ${unit} WHEN 'd' THEN 1.0 WHEN 'w' THEN 7.0 WHEN 'm' THEN 30.4375 WHEN 'y' THEN 365.25 END`;
+    const [y, m, d] = [1, 2, 3].map((i) => `CAST(${g(ISO, i)} AS DOUBLE)`);
+    const iso = `((${y} - 1970.0) * 365.25 + (${m} - 1.0) * 30.4375 + ${d})`;
+    const myYear = `CAST(${g(MONTH_YEAR, 2)} AS DOUBLE)`;
+    const abbr = `substr(lower(${g(MONTH_YEAR, 1)}), 1, 3)`;
+    const myMonth = `CASE ${abbr} ${MONTHS.map((name, i) => `WHEN '${name}' THEN ${i + 1}.0`).join(' ')} END`;
+    const monthYear = `((${myYear} - 1970.0) * 365.25 + (${myMonth} - 1.0) * 30.4375)`;
+    return `CAST(CASE WHEN ${num} IS NOT NULL AND (${factor}) IS NOT NULL THEN ${num} * (${factor}) `
+        + `WHEN ${y} IS NOT NULL THEN ${iso} WHEN ${monthYear} IS NOT NULL THEN ${monthYear} END AS DOUBLE)`;
+}
+
 function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, aliases: Set<string> | undefined,
                         keys: string[]): string[] {
     const out = query.measures
@@ -458,6 +480,13 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         ctes.push(`__cells AS (SELECT t.*, ${extra.join(', ')} FROM ${tree} t ${joins.join(' ')})`);
         tree = '__cells';
     }
+    // REQ-SORT-005: a dimension ordered by a semantic key gets the key of its member value.
+    const semanticKeys = sort.filter((s) => rows.includes(s.field) && typeof s.semantic === 'string');
+    if (semanticKeys.length) {
+        const extra = semanticKeys.map((s) => `${tenorDays(`t.${quoteIdent(s.field)}`)} AS ${quoteIdent(`__key${rows.indexOf(s.field) + 1}`)}`);
+        ctes.push(`__semantic AS (SELECT t.*, ${extra.join(', ')} FROM ${tree} t)`);
+        tree = '__semantic';
+    }
     // REQ-SORT-003: a dimension ordered by a member key gets MIN(key) over each level-i ancestor's records.
     const memberKeys = sort.filter((s) => rows.includes(s.field) && typeof s.by === 'string');
     if (memberKeys.length) {
@@ -482,7 +511,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             let expr: string;
             if (!rows.includes(s.field) && Array.isArray(s.member)) expr = quoteIdent(`__cell${leaf}_${n}`);
             else if (!rows.includes(s.field)) expr = quoteIdent(`__sort${leaf}_${s.field}`);
-            else if (typeof s.by === 'string') expr = quoteIdent(`__key${rows.indexOf(s.field) + 1}`);
+            else if (typeof s.by === 'string' || typeof s.semantic === 'string') expr = quoteIdent(`__key${rows.indexOf(s.field) + 1}`);
             else { expr = quoteIdent(s.field); if (!s.absolute) ordered.add(s.field); }
             if (s.absolute) expr = `abs(${expr})`;
             order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
@@ -498,7 +527,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             let expr: string;
             if (!rows.includes(s.field) && Array.isArray(s.member)) expr = quoteIdent(`__cell${i}_${n}`);
             else if (!rows.includes(s.field)) expr = quoteIdent(`__sort${i}_${s.field}`);
-            else if (s.field === k && typeof s.by === 'string') expr = quoteIdent(`__key${i}`); // ties: member value
+            else if (s.field === k && (typeof s.by === 'string' || typeof s.semantic === 'string')) expr = quoteIdent(`__key${i}`); // ties: member value
             else if (s.field === k) { expr = quoteIdent(k); dimensionSorted = true; } else return;
             if (s.absolute) expr = `abs(${expr})`;
             order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);

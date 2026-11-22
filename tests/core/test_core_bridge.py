@@ -118,7 +118,7 @@ def test_expansion_paths_are_coerced_and_filtered():
     (dict(unbalanced_values=["x"]), "spec field 'unbalanced_values'"),
     (dict(sort=[{"field": "r", "order": "asc", "collation": "nocase"}]), "sort keys ['collation']"),
     (dict(sort=[{"field": "r", "nulls": "first"}]), "nulls 'first'"),
-    (dict(sort=[{"field": "r", "semanticType": "tenor"}]), "semantic sort 'tenor'"),
+    (dict(sort=[{"field": "r", "semanticType": "calendar"}]), "semantic sort 'calendar'"),  # tenor: REQ-SORT-005
     (dict(filters=[{"field": "r", "op": "=", "value": "A", "regex": True}]), "filter keys ['regex']"),
 ])
 def test_unsupported_features_are_named(kw, reason):
@@ -680,3 +680,21 @@ def test_per_member_measure_axis_is_exact_below_the_label_and_blank_above(rows):
         assert got["Price"] == pytest.approx((10 * 1 + 20 * 3 + 30 * 1 + 40 * 1) / 6)
         assert (got["Sales|||North"], got["Peak|||South"]) == (150.0, 9.0)
         assert got["Price|||North"] == pytest.approx((10 * 1 + 20 * 3) / 4)
+
+
+def test_tenor_sort_and_supplied_member_keys_map_to_the_core():  # REQ-SORT-005, REQ-SORT-003
+    schema = ibis.schema({"r": "string", "c": "string", "k": "int64", "v": "int64"})
+
+    def mapped(sort, rows=("r", "c")):
+        spec = PivotSpec(table="t", rows=list(rows), measures=[Measure(field="v", agg="sum", alias="v_sum")],
+                         sort=sort)
+        return spec_to_query(spec, [["__ALL__"]], schema).sort
+
+    assert mapped([{"field": "r", "order": "desc", "semanticType": "tenor", "sortKeyField": "__sortkey__r"}]) == (
+        SortKey("r", True, semantic="tenor"),)
+    assert mapped([{"field": "c", "sortType": "curve_pillar_tenor"}]) == (SortKey("c", semantic="tenor"),)
+    # a supplied key column is the order (it wins over the semantic type)
+    assert mapped([{"field": "r", "semanticType": "tenor", "sortType": "curve_pillar_tenor", "sortKeyField": "k"}]) == (
+        SortKey("r", by="k"),)
+    # a member order for a dimension that is not a row level orders nothing
+    assert mapped([{"field": "c", "sortKeyField": "k"}], rows=("r",)) == ()
