@@ -57,6 +57,7 @@ class AggregationEntry:
     cost_class: str
     sql: str
     params: FrozenSet[str]
+    optional_params: FrozenSet[str] = frozenset()  # params a measure may omit (array_agg's orderBy)
 
     def accepts(self, family: str) -> bool:
         return any(family in _FAMILIES.get(i, ()) for i in self.inputs if i != "star")
@@ -75,6 +76,7 @@ class Registry:
                 cost_class=raw["costClass"],
                 sql=raw["sql"],
                 params=frozenset(raw.get("params", ())),
+                optional_params=frozenset(raw.get("optionalParams", ())),
             )
             for name, raw in spec["aggregations"].items()
         }

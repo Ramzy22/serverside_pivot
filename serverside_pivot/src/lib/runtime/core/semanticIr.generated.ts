@@ -112,11 +112,25 @@ export interface PivotQuery {
         label: string;
         field: string;
         order: number;
+        /**
+         * REQ-DIM-003: the member's own aggregation (all members or none); the value measure is then agg 'member'.
+         */
+        agg?: string;
+        weight?: string;
+        q?: number;
+        orderBy?: string;
       },
       ...{
         label: string;
         field: string;
         order: number;
+        /**
+         * REQ-DIM-003: the member's own aggregation (all members or none); the value measure is then agg 'member'.
+         */
+        agg?: string;
+        weight?: string;
+        q?: number;
+        orderBy?: string;
       }[]
     ];
   };

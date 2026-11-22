@@ -95,8 +95,27 @@ def _first_last(records: Sequence[Record], field_name: Optional[str], order_by: 
     return (max(pairs) if last else min(pairs))[1]
 
 
+def _rank(value: Any) -> Any:
+    """A total order on values: a struct orders by its fields in turn (as SQL does)."""
+    if isinstance(value, dict):
+        return tuple(_rank(v) for v in value.values())
+    return value
+
+
+def _series(records: Sequence[Record], field_name: Optional[str], order_by: Optional[str]) -> Any:
+    """REQ-AGG-009: the non-NULL values ordered by the order field (records with a NULL order are
+    skipped), ties by value; without an order field, by value; NULL when there is none."""
+    items = [((_rank(r[order_by]),) if order_by else (), _rank(r[field_name]), r[field_name]) for r in records
+             if r.get(field_name) is not None and (order_by is None or r.get(order_by) is not None)]
+    if not items:
+        return None
+    return [value for *_key, value in sorted(items, key=lambda item: (item[0], item[1]))]
+
+
 def aggregate(agg: str, records: Sequence[Record], field_name: Optional[str],
               weight: Optional[str] = None, q: Optional[float] = None, order_by: Optional[str] = None) -> Any:
+    if agg == "array_agg":
+        return _series(records, field_name, order_by)
     if agg in {"first", "last"}:
         return _first_last(records, field_name, order_by, agg == "last")
     if agg == "percentile":
@@ -198,7 +217,8 @@ class Query:
     derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
     # REQ-DIM-001: (name, [(predicate, label), ...], fallback), evaluated in order on every record
     categories: Sequence[Tuple[str, Sequence[Tuple[Any, Any]], Any]] = ()
-    # REQ-DIM-002: (label, value, key, [(member label, field, order), ...], drop_nulls), after the categories
+    # REQ-DIM-002: (label, value, key, [(member label, field, order[, agg, weight, q, order_by]), ...], drop_nulls),
+    # after the categories; REQ-DIM-003: members with their own aggregation (value measure agg "member")
     unpivot: Optional[Tuple[str, str, str, Sequence[Tuple[str, str, int]], bool]] = None
 
 
@@ -224,12 +244,30 @@ def _key(record: Record, rows: Sequence[str], depth: int) -> Tuple[Any, ...]:
     return tuple(record.get(f) for f in rows[:depth])
 
 
-def _measures(query: Query, records: Sequence[Record]) -> Dict[str, Any]:
-    out = {m.alias: aggregate(m.agg, records, m.field, m.weight, m.q, m.order_by) for m in query.measures}
+def _measure(query: Query, m: Measure, records: Sequence[Record], keys: Sequence[str],
+             node: Optional[Tuple[Any, ...]] = None) -> Any:
+    """``node`` is the node's path over ``keys`` (its label names the member even when ``records``,
+    a pivot cell's subset, is empty)."""
+    if m.agg != "member":
+        return aggregate(m.agg, records, m.field, m.weight, m.q, m.order_by)
+    label, _value, _key, members, _drop = query.unpivot
+    if label not in keys:  # REQ-DIM-003: no value above the label
+        return None
+    name = node[list(keys).index(label)] if node is not None else (records[0][label] if records else None)
+    if name is None:
+        return None
+    member = next(x for x in members if x[0] == name)  # the node holds one member
+    _l, source, _o, agg, weight, q, order_by = member
+    return aggregate(agg, records, source, weight, q, order_by)
+
+
+def _measures(query: Query, records: Sequence[Record], keys: Sequence[str] = ()) -> Dict[str, Any]:
+    node = tuple(records[0].get(k) for k in keys) if records else None  # every record of a node shares its path
+    out = {m.alias: _measure(query, m, records, keys, node) for m in query.measures}
     for j, member in enumerate(query.column_members):
         matching = [r for r in records if tuple(r.get(c) for c in query.columns) == tuple(member)]
         for m in query.measures:
-            out[f"__c{j}__{m.alias}"] = aggregate(m.agg, matching, m.field, m.weight, m.q, m.order_by)
+            out[f"__c{j}__{m.alias}"] = _measure(query, m, matching, keys, node)
     return out
 
 
@@ -250,7 +288,7 @@ def with_unpivot(query: Query, data: Sequence[Record]) -> List[Record]:
         return list(data)
     label, value, key, members, drop_nulls = query.unpivot
     out = []
-    for member_label, source, order in members:
+    for member_label, source, order, *_own in members:
         for record in data:
             v = record.get(source)
             if v is None and drop_nulls:
@@ -273,7 +311,8 @@ def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], L
         passing[level] = {
             k
             for k, members in groups.items()
-            if all(_OPS[mf.op](_measures(query, members)[mf.measure], mf.value) for mf in level_filters)
+            if all(_OPS[mf.op](_measures(query, members, query.rows[:level])[mf.measure], mf.value)
+                   for mf in level_filters)
         }
     e = [r for r in e0 if all(_key(r, query.rows, lvl) in keys for lvl, keys in passing.items())]
     return e0, e
@@ -341,7 +380,8 @@ def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[R
     depth = len(query.rows)
     aliases = {m.alias for m in query.measures}
     leaves = sorted({_key(r, query.rows, depth) for r in e}, key=repr)
-    values = {c: _measures(query, [r for r in source if _key(r, query.rows, depth) == c]) for c in leaves}
+    values = {c: _measures(query, [r for r in source if _key(r, query.rows, depth) == c], query.rows)
+              for c in leaves}
 
     def sort_value(c: Tuple[Any, ...], entry: Tuple[Any, ...]) -> Any:
         f = entry[0]
@@ -350,8 +390,8 @@ def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[R
         member = entry[4] if len(entry) > 4 else None
         if f in aliases and member is not None:
             m = next(m for m in query.measures if m.alias == f)
-            v = aggregate(m.agg, [r for r in source if _key(r, query.rows, depth) == c
-                                  and tuple(r.get(k) for k in query.columns) == tuple(member)], m.field, m.weight, m.q, m.order_by)
+            v = _measure(query, m, [r for r in source if _key(r, query.rows, depth) == c
+                                    and tuple(r.get(k) for k in query.columns) == tuple(member)], query.rows, c)
         elif f in aliases:
             v = values[c][f]
         elif by is not None:
@@ -398,7 +438,8 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
         if depth > len(query.rows):
             return
         candidates = {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix}
-        values = {c: _measures(query, [r for r in totals_source if _key(r, query.rows, depth) == c])
+        values = {c: _measures(query, [r for r in totals_source if _key(r, query.rows, depth) == c],
+                               query.rows[:depth])
                   for c in candidates}
         member_keys: Dict[Any, Dict[Tuple[Any, ...], Any]] = {}
         for entry in query.sort:
@@ -410,9 +451,9 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
             if member is not None:
                 m = next(m for m in query.measures if m.alias == entry[0])
                 member_keys[("cell", entry[0], tuple(member))] = {
-                    c: aggregate(m.agg, [r for r in totals_source if _key(r, query.rows, depth) == c
-                                         and tuple(r.get(k) for k in query.columns) == tuple(member)],
-                                 m.field, m.weight, m.q, m.order_by)
+                    c: _measure(query, m, [r for r in totals_source if _key(r, query.rows, depth) == c
+                                           and tuple(r.get(k) for k in query.columns) == tuple(member)],
+                                query.rows[:depth], c)
                     for c in candidates}
         children = _order_siblings(query, depth, candidates, values, member_keys)
         for child in children:

@@ -22,8 +22,8 @@ def test_fresh_registry_mirrors_the_spec_exactly():
     r = reg.Registry(SPEC)
     assert r.version == RAW["version"] == 2
     assert r.names() == sorted(RAW["aggregations"]) == [
-        "avg", "count", "count_distinct", "first", "last", "max", "median", "min", "percentile", "stddev", "sum",
-        "variance", "weighted_avg"]
+        "array_agg", "avg", "count", "count_distinct", "first", "last", "max", "median", "min", "percentile",
+        "stddev", "sum", "variance", "weighted_avg"]
     for name, raw in RAW["aggregations"].items():
         e = r.get(name)
         assert (e.name, e.inputs, e.empty, e.merge, e.cost_class, e.sql, e.params) == (
@@ -109,9 +109,9 @@ def test_every_lowering_has_sql_semantics_with_nulls():
     got["count_star"] = lowering.LOWERINGS["count"](None, t, M)
     row = t.aggregate(**got).to_pyarrow().to_pylist()[0]
     approx = {k: row.pop(k) for k in ("stddev", "variance", "weighted_avg", "percentile")}
-    # first/last over w: complete (w, v) pairs are (1, 1), (0, 2), (3, 2)
+    # first/last/array_agg over w: complete (w, v) pairs are (1, 1), (0, 2), (3, 2)
     assert row == {"avg": 2.5, "count": 4, "count_distinct": 3, "max": 5, "median": 2.0,
-                   "min": 1, "sum": 10, "count_star": 5, "first": 2, "last": 2}
+                   "min": 1, "sum": 10, "count_star": 5, "first": 2, "last": 2, "array_agg": [2, 1, 2]}
     assert approx["variance"] == pytest.approx(3.0)  # sample variance of 1, 2, 2, 5
     assert approx["stddev"] == pytest.approx(3.0 ** 0.5)
     assert approx["percentile"] == pytest.approx(1.75)  # 25th of [1, 2, 2, 5], linear interpolation
@@ -146,6 +146,46 @@ def test_first_last_need_an_order_field():  # REQ-AGG-008: never an arbitrary re
             PivotQuery(dataset="t", rows=(), measures=(MeasureRef("m", agg, "v"),)).validate({"v": "integer"})
     with pytest.raises(IRValidationError, match="does not take an order field"):
         PivotQuery(dataset="t", rows=(), measures=(MeasureRef("m", "sum", "v", order_by="v"),)).validate({"v": "integer"})
+
+
+def test_array_agg_is_a_series_in_order_field_then_value_order():  # REQ-AGG-009
+    con = ibis.duckdb.connect()
+    point = pa.struct([("x", pa.string()), ("y", pa.float64())])
+    t = con.create_table("t", pa.table({
+        "v": pa.array([5, 3, 9, None, 4, 1], pa.int64()),
+        "o": pa.array([2, 2, None, 0, 7, 1], pa.int64()),
+        "p": pa.array([{"x": "d2", "y": 2.0}, {"x": "d1", "y": 9.0}, None, {"x": "d3", "y": 1.0},
+                       {"x": "d1", "y": 1.0}, {"x": "d0", "y": 5.0}], point)}))
+    by_value = types.SimpleNamespace(order_by=None)
+    row = t.aggregate(
+        ordered=lowering.LOWERINGS["array_agg"](t.v, t, types.SimpleNamespace(order_by="o")),
+        by_value=lowering.LOWERINGS["array_agg"](t.v, t, by_value),
+        points=lowering.LOWERINGS["array_agg"](t.p, t, by_value)).to_pyarrow().to_pylist()[0]
+    # (o, v): (1, 1), (2, 3), (2, 5), (7, 4); NULL v or NULL o never count; a tie orders by value
+    assert row["ordered"] == [1, 3, 5, 4]
+    assert row["by_value"] == [1, 3, 4, 5, 9]
+    # a struct orders by its fields in turn: x, then y
+    assert [(d["x"], d["y"]) for d in row["points"]] == [("d0", 5.0), ("d1", 1.0), ("d1", 9.0), ("d2", 2.0),
+                                                         ("d3", 1.0)]
+
+
+def test_array_agg_order_field_is_optional_and_a_series_is_never_compared():  # REQ-AGG-009
+    from pivot_engine.core.ir import (DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery,
+                                      SortKey, Unpivot, UnpivotMember)
+
+    schema = {"r": "string", "v": "integer", "o": "integer", "w": "integer"}
+    series = MeasureRef("s", "array_agg", "v")
+    PivotQuery(dataset="t", rows=("r",), measures=(series,)).validate(schema)
+    PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("s", "array_agg", "v", order_by="o"),)).validate(schema)
+    for extra, match in (({"measure_filters": (MeasureFilter(1, "s", ">", 1),)}, "measure filter on the series"),
+                         ({"sort": (SortKey("s"),)}, "sort on the series"),
+                         ({"derived": (DerivedMeasure("d", "rank", "s"),)}, "over a series")):
+        with pytest.raises(IRValidationError, match=match):
+            PivotQuery(dataset="t", rows=("r",), measures=(series,), **extra).validate(schema)
+    mixed = Unpivot("mn", "mv", "mk", (UnpivotMember("A", "v", 0, "array_agg"), UnpivotMember("B", "w", 1, "sum")))
+    with pytest.raises(IRValidationError, match="cannot mix series"):
+        PivotQuery(dataset="t", rows=("mn",), measures=(MeasureRef("mv", "member", "mv"),),
+                   unpivot=mixed).validate(schema)
 
 
 def test_sample_statistics_need_two_inputs_and_zero_weight_is_null():

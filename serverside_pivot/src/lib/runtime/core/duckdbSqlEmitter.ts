@@ -194,6 +194,11 @@ function aggregate(m: Measure, condition: string | null, columns: Record<string,
             const o = masked(m.orderBy);
             return `${m.agg.toUpperCase()}(${x} ORDER BY ${o} ASC, ${x} ASC) FILTER (WHERE (${x}) IS NOT NULL AND (${o}) IS NOT NULL)`;
         }
+        case 'array_agg': { // REQ-AGG-009: a series ordered by the order field (ties by value), else by value
+            if (!m.orderBy) return `ARRAY_AGG(${x} ORDER BY ${x} ASC) FILTER (WHERE (${x}) IS NOT NULL)`;
+            const o = masked(m.orderBy);
+            return `ARRAY_AGG(${x} ORDER BY ${o} ASC, ${x} ASC) FILTER (WHERE (${x}) IS NOT NULL AND (${o}) IS NOT NULL)`;
+        }
         default:
             throw new EmitterUnsupported(`aggregation ${m.agg}`);
     }
@@ -207,14 +212,37 @@ function memberCondition(columnsDims: string[], member: unknown[], columns: Reco
         .join(' AND ');
 }
 
-function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, aliases?: Set<string>): string[] {
+/** One measure at a level grouped by `keys`; a per-member axis value is level-aware (REQ-DIM-003). */
+function levelAggregate(query: PivotQuery, m: Measure, condition: string | null, columns: Record<string, ColumnInfo>,
+                        keys: string[]): string {
+    if (m.agg !== 'member') return aggregate(m, condition, columns);
+    const axis = query.unpivot;
+    if (!axis) throw new EmitterUnsupported('member aggregation without a measure axis');
+    const series = axis.members.some((member) => member.agg === 'array_agg');
+    const type = series ? `${columns[axis.value].sqlType}[]` : columns[axis.value].sqlType;
+    // Above the label: no value. An aggregate (not a literal), so a global aggregate keeps its one row.
+    if (!keys.includes(axis.label)) return `MIN(CAST(NULL AS ${type}))`;
+    const text: ColumnInfo = { family: 'string', sqlType: 'VARCHAR' };
+    const whens = axis.members.map((member) => {
+        const isMember = `${quoteIdent(axis.label)} = ${typedLiteral(member.label, text)}`;
+        const own: Measure = { alias: member.label, agg: String(member.agg), field: member.field, weight: member.weight,
+            q: member.q, orderBy: member.orderBy } as Measure;
+        const cond = condition ? `(${isMember}) AND (${condition})` : isMember;
+        return `WHEN BOOL_OR(${isMember}) THEN CAST(${aggregate(own, cond, columns)} AS ${type})`;
+    });
+    return `CASE ${whens.join(' ')} ELSE CAST(NULL AS ${type}) END`;
+}
+
+function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, aliases: Set<string> | undefined,
+                        keys: string[]): string[] {
     const out = query.measures
         .filter((m) => !aliases || aliases.has(m.alias))
-        .map((m) => `${aggregate(m, null, columns)} AS ${quoteIdent(m.alias)}`);
+        .map((m) => `${levelAggregate(query, m, null, columns, keys)} AS ${quoteIdent(m.alias)}`);
     if (!aliases) {
         (query.columnMembers || []).forEach((member, j) => {
             const cond = memberCondition(query.columns || [], member, columns);
-            query.measures.forEach((m) => out.push(`${aggregate(m, cond, columns)} AS ${quoteIdent(cellName(j, m.alias))}`));
+            query.measures.forEach((m) => out.push(
+                `${levelAggregate(query, m, cond, columns, keys)} AS ${quoteIdent(cellName(j, m.alias))}`));
         });
     }
     return out;
@@ -356,7 +384,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             return `${quoteIdent(f.measure)} ${f.op} ${literal(f.value, undefined)}`;
         });
         const name = `__mf${level}`;
-        ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases).join(', ')} FROM __e0 GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
+        ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases, keys).join(', ')} FROM __e0 GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
         semi.push(`EXISTS (SELECT 1 FROM ${name} g WHERE ${nullSafeJoin('e', 'g', keys)})`);
     });
     ctes.push(`__e AS (SELECT * FROM __e0 e${semi.length ? ` WHERE ${semi.join(' AND ')}` : ''})`);
@@ -378,7 +406,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             ctes.push(`__vp${level.depth} (${parentKeys.map((_k, i) => quoteIdent(`k${i}`)).join(', ')}) AS (VALUES ${tuples.join(', ')})`);
             restrictions.push(`EXISTS (SELECT 1 FROM __vp${level.depth} p WHERE ${parentKeys.map((k, i) => `a.${quoteIdent(k)} IS NOT DISTINCT FROM p.${quoteIdent(`k${i}`)}`).join(' AND ')})`);
         }
-        const grouped = `SELECT ${[...keys.map(quoteIdent), ...measureSelects(query, columns)].join(', ')} FROM ${source}${keys.length ? ` GROUP BY ${keys.map(quoteIdent).join(', ')}` : ''}`;
+        const grouped = `SELECT ${[...keys.map(quoteIdent), ...measureSelects(query, columns, undefined, keys)].join(', ')} FROM ${source}${keys.length ? ` GROUP BY ${keys.map(quoteIdent).join(', ')}` : ''}`;
         const select = [
             ...rows.map((k) => (keys.includes(k) ? `a.${quoteIdent(k)}` : `CAST(NULL AS ${columns[k].sqlType}) AS ${quoteIdent(k)}`)),
             ...value.map((v) => `a.${quoteIdent(v)}`),
@@ -422,7 +450,8 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
                 if (!m) throw new EmitterUnsupported(`cell sort on unknown measure ${s.field}`);
                 const name = quoteIdent(`__cell${i}_${n}`);
                 extra.push(`c${i}.${name} AS ${name}`);
-                return `${aggregate(m as Measure, memberCondition(query.columns || [], s.member as unknown[], columns), columns)} AS ${name}`;
+                const cond = memberCondition(query.columns || [], s.member as unknown[], columns);
+                return `${levelAggregate(query, m as Measure, cond, columns, rows.slice(0, i))} AS ${name}`;
             });
             joins.push(`LEFT JOIN (SELECT ${keys}, ${selects.join(', ')} FROM ${source} GROUP BY ${keys}) c${i} ON ${nullSafeJoin('t', `c${i}`, rows.slice(0, i))}`);
         }

@@ -624,3 +624,59 @@ def test_core_pivot_table_contract():
     assert pivot.column_names == ["region", "Q1_v_sum", "Q2_v_sum", "__RowTotal__v_sum"]
     assert pivot.to_pylist()[1] == {"region": "N", "Q1_v_sum": 1.0, "Q2_v_sum": 2.0, "__RowTotal__v_sum": 3.0}
     assert str(pivot.schema.field("Q1_v_sum").type) == "double"
+
+
+@pytest.mark.parametrize("rows", [["region", "desk", "Measure Name"], ["Measure Name", "region"]])
+def test_per_member_measure_axis_is_exact_below_the_label_and_blank_above(rows):
+    """REQ-DIM-003 (decided): each member keeps its own aggregation; no value above the label."""
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.runtime.service import PivotRuntimeService
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    val_configs = [{"field": "sales", "agg": "sum", "alias": "sales_sum"},
+                   {"field": "peak", "agg": "max", "alias": "peak_max"},
+                   {"field": "price", "agg": "weighted_avg", "alias": "px", "weightField": "qty"}]
+    previous = os.environ.get("PIVOT_CORE")
+    os.environ["PIVOT_CORE"] = "on"
+    try:
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+            "region": ["North", "North", "South", "South"], "desk": ["Rates", "Credit", "Rates", "Credit"],
+            "sales": [100.0, 50.0, 80.0, 20.0], "peak": [7.0, 5.0, 9.0, 4.0],
+            "price": [10.0, 20.0, 30.0, 40.0], "qty": [1.0, 3.0, 1.0, 1.0]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="t",
+            columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
+            filters={}, custom_dimensions=[],
+            measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount", "members": [
+                {"measureAlias": "sales_sum", "label": "Sales", "order": 0},
+                {"measureAlias": "peak_max", "label": "Peak", "order": 1},
+                {"measureAlias": "px", "label": "Price", "order": 2}]},
+            sorting=[{"id": "Measure Name", "desc": False, "sortKeyField": "__sortkey__Measure Name"},
+                     *({"id": r, "desc": False} for r in rows if r != "Measure Name")],
+            grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+            totals=True, row_totals=False, include_subtotals=True, version=2)
+        served = core_shadow.STATS["core_served_hierarchy"]
+        response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
+        assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    finally:
+        if previous is None:
+            os.environ.pop("PIVOT_CORE", None)
+        else:
+            os.environ["PIVOT_CORE"] = previous
+    got = {r["_path"]: r.get("Amount") for r in response.data}
+    if rows[0] == "region":
+        assert got["North"] is None and got["North|||Rates"] is None and got["__grand_total__"] is None
+        assert (got["North|||Rates|||Sales"], got["North|||Rates|||Peak"], got["North|||Rates|||Price"]) == (100.0, 7.0, 10.0)
+        assert (got["South|||Credit|||Sales"], got["South|||Credit|||Peak"]) == (20.0, 4.0)
+    else:
+        assert got["__grand_total__"] is None
+        assert (got["Sales"], got["Peak"]) == (250.0, 9.0)
+        assert got["Price"] == pytest.approx((10 * 1 + 20 * 3 + 30 * 1 + 40 * 1) / 6)
+        assert (got["Sales|||North"], got["Peak|||South"]) == (150.0, 9.0)
+        assert got["Price|||North"] == pytest.approx((10 * 1 + 20 * 3) / 4)

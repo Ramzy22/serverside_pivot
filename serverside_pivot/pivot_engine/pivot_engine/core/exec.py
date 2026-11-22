@@ -61,7 +61,9 @@ def canonical(query: PivotQuery) -> str:
                               for c in query.categories]
     if query.unpivot is not None:  # REQ-DIM-002
         u = query.unpivot
-        body["unpivot"] = [u.label, u.value, u.key, u.drop_nulls, [[m.label, m.field, m.order] for m in u.members]]
+        body["unpivot"] = [u.label, u.value, u.key, u.drop_nulls,
+                           [[m.label, m.field, m.order, *([m.agg, m.weight, m.q, m.order_by] if m.agg else [])]
+                            for m in u.members]]
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
 

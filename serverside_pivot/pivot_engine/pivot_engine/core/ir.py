@@ -200,6 +200,17 @@ class UnpivotMember:
     label: str  # the member's value in the label column
     field: str  # the source column whose value the member's records carry
     order: int  # the member's value in the key column (its display order)
+    # REQ-DIM-003: the member's own aggregation of ``field`` (all members or none)
+    agg: Optional[str] = None
+    weight: Optional[str] = None
+    q: Optional[float] = None
+    order_by: Optional[str] = None
+
+    def measure(self) -> MeasureRef:
+        return MeasureRef(self.label, str(self.agg), self.field, self.weight, self.q, self.order_by)
+
+
+MEMBER_AGG = "member"  # REQ-DIM-003: the value measure of a per-member measure axis
 
 
 _NUMERIC = frozenset({"integer", "floating", "decimal"})
@@ -224,6 +235,10 @@ class Unpivot:
     members: Tuple[UnpivotMember, ...]
     drop_nulls: bool = False
 
+    @property
+    def per_member(self) -> bool:
+        return any(m.agg is not None for m in self.members)
+
     def value_family(self, schema: Mapping[str, str]) -> str:
         families = {schema[m.field] for m in self.members}
         if families <= _NUMERIC:
@@ -241,6 +256,13 @@ class Unpivot:
         for m in self.members:
             if m.field not in schema:
                 raise IRValidationError(f"measure axis member {m.label!r} references unknown column {m.field!r}.")
+        if self.per_member:
+            if any(m.agg is None for m in self.members):
+                raise IRValidationError("a per-member measure axis needs an aggregation on every member.")
+            for m in self.members:  # each member is an ordinary measure of its source field
+                PivotQuery(dataset="__axis", rows=(), measures=(m.measure(),)).validate(schema)
+            if len({m.agg == "array_agg" for m in self.members}) > 1:  # one value column: one kind of value
+                raise IRValidationError("a measure axis cannot mix series (array_agg) and scalar members.")
         return {**schema, self.label: "string", self.value: self.value_family(schema), self.key: "integer"}
 
 
@@ -305,6 +327,13 @@ class PivotQuery:
         """Columns produced by aggregation: one per measure (the row total), then one per cell."""
         return [*(m.alias for m in self.measures), *(c[3] for c in self.cells())]
 
+    def series_measures(self) -> FrozenSet[str]:
+        """Aliases of list-valued measures (REQ-AGG-009), including a per-member axis of series."""
+        axis = self.unpivot
+        member_series = axis is not None and axis.per_member and all(m.agg == "array_agg" for m in axis.members)
+        return frozenset(m.alias for m in self.measures
+                         if m.agg == "array_agg" or (m.agg == MEMBER_AGG and member_series))
+
     def value_columns(self) -> List[str]:
         """Output value columns: measures, derived measures, then cells."""
         return [*(m.alias for m in self.measures), *(d.alias for d in self.derived), *(c[3] for c in self.cells())]
@@ -332,7 +361,16 @@ class PivotQuery:
         overlap = set(aliases) & set(self.rows)
         if overlap:
             raise IRValidationError(f"measure alias collides with a dimension: {sorted(overlap)}")
+        axis = self.unpivot
         for m in self.measures:
+            if axis is not None and axis.per_member and m.field == axis.value and m.agg != MEMBER_AGG:
+                raise IRValidationError(f"a per-member measure axis aggregates {m.field!r} by member ({MEMBER_AGG!r}).")
+            if m.agg == MEMBER_AGG:  # REQ-DIM-003: each member's own aggregation, NULL above the label
+                if axis is None or not axis.per_member or m.field != axis.value:
+                    raise IRValidationError(f"{MEMBER_AGG!r} aggregates the value of a per-member measure axis.")
+                if m.weight is not None or m.q is not None or m.order_by is not None:
+                    raise IRValidationError(f"{MEMBER_AGG!r} takes no parameters: the members carry them.")
+                continue
             try:
                 entry = REGISTRY.get(m.agg)
             except UnknownAggregationError as exc:
@@ -355,16 +393,21 @@ class PivotQuery:
                 need(m.weight, f"weight of measure {m.alias!r}")
                 if schema[m.weight] not in {"integer", "floating", "decimal"}:
                     raise IRValidationError(f"weight column {m.weight!r} must be numeric.")
-            if ("orderBy" in entry.params) != (m.order_by is not None):  # REQ-AGG-008: never an arbitrary record
-                need_order = "needs an order field" if "orderBy" in entry.params else "does not take an order field"
+            required = "orderBy" in entry.params and "orderBy" not in entry.optional_params
+            if (required and m.order_by is None) or ("orderBy" not in entry.params and m.order_by is not None):
+                # REQ-AGG-008: never an arbitrary record
+                need_order = "needs an order field" if required else "does not take an order field"
                 raise IRValidationError(f"{m.agg} {need_order}.")
             if m.order_by is not None:
                 need(m.order_by, f"order field of measure {m.alias!r}")
                 if schema[m.order_by] == "other":
                     raise IRValidationError(f"order field {m.order_by!r} is not orderable.")
+        series = self.series_measures()  # REQ-AGG-009: a series is shown, never compared or computed with
         for flt in self.filters:
             check_filter(flt, schema)
         for mf in self.measure_filters:
+            if mf.measure in series:
+                raise IRValidationError(f"measure filter on the series measure {mf.measure!r}.")
             if mf.measure not in aliases:
                 raise IRValidationError(f"measure filter references unknown measure {mf.measure!r}.")
             if not 1 <= mf.level <= len(self.rows):
@@ -374,6 +417,8 @@ class PivotQuery:
         if len({(s.field, s.member) for s in self.sort}) != len(self.sort):
             raise IRValidationError("each sort field (and column member) may appear once.")
         for s in self.sort:
+            if s.field in series:
+                raise IRValidationError(f"sort on the series measure {s.field!r}.")
             if s.field not in self.rows and s.field not in aliases:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
             if s.absolute and not _numeric_sort_target(s.field, self.rows, self.measures, schema):
@@ -423,6 +468,8 @@ class PivotQuery:
                 raise IRValidationError(f"unknown derived measure function {d.func!r}.")
             if d.of not in aliases:
                 raise IRValidationError(f"derived measure {d.alias!r} references unknown measure {d.of!r}.")
+            if d.of in series or d.of2 in series:
+                raise IRValidationError(f"derived measure {d.alias!r} over a series measure.")
             if (d.func == "ratio") != (d.of2 is not None):
                 verb = "requires" if d.func == "ratio" else "does not take"
                 raise IRValidationError(f"{d.func} {verb} a denominator.")
@@ -547,16 +594,25 @@ def measure_to_wire(m: MeasureRef) -> Dict[str, Any]:
     return out
 
 
+def _member_to_wire(m: UnpivotMember) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"label": m.label, "field": m.field, "order": m.order}
+    for key, value in (("agg", m.agg), ("weight", m.weight), ("q", m.q), ("orderBy", m.order_by)):
+        if value is not None:  # omitted when absent: existing wire forms are unchanged
+            out[key] = value
+    return out
+
+
 def unpivot_to_wire(u: Unpivot) -> Dict[str, Any]:
     return {"label": u.label, "value": u.value, "key": u.key, "dropNulls": u.drop_nulls,
-            "members": [{"label": m.label, "field": m.field, "order": m.order} for m in u.members]}
+            "members": [_member_to_wire(m) for m in u.members]}
 
 
 def unpivot_from_wire(obj: Any) -> Optional[Unpivot]:
     if obj is None:
         return None
     return Unpivot(str(obj["label"]), str(obj["value"]), str(obj["key"]),
-                   tuple(UnpivotMember(str(m["label"]), str(m["field"]), int(m["order"])) for m in obj["members"]),
+                   tuple(UnpivotMember(str(m["label"]), str(m["field"]), int(m["order"]), m.get("agg"), m.get("weight"),
+                                       m.get("q"), m.get("orderBy")) for m in obj["members"]),
                    bool(obj.get("dropNulls", False)))
 
 

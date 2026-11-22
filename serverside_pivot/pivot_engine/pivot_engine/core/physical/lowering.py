@@ -42,6 +42,14 @@ def _ordered(col: Any, t: Any, m: Any, last: bool) -> Any:
     return (col.last if last else col.first)(where=valid, order_by=[order, col])
 
 
+def _series(col: Any, t: Any, m: Any) -> Any:
+    """REQ-AGG-009: the values as a list in a defined order: the order field, ties by value, else by value."""
+    if m.order_by is None:
+        return col.collect(where=col.notnull(), order_by=[col])
+    order = t[m.order_by]
+    return col.collect(where=col.notnull() & order.notnull(), order_by=[order, col])
+
+
 # Every lowering ignores NULL inputs (SQL semantics) except count(*), matching
 # the registry's "nulls" rules.
 LOWERINGS: Dict[str, Lowering] = {
@@ -58,6 +66,7 @@ LOWERINGS: Dict[str, Lowering] = {
     "weighted_avg": _weighted_avg,
     "first": lambda col, t, m: _ordered(col, t, m, last=False),
     "last": lambda col, t, m: _ordered(col, t, m, last=True),
+    "array_agg": _series,
 }
 
 

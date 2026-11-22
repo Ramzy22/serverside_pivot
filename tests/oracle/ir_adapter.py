@@ -33,7 +33,8 @@ def to_oracle(query: Any) -> Query:
                     for c in getattr(query, "categories", ())],
         unpivot=None if getattr(query, "unpivot", None) is None else (
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
-            [(m.label, m.field, m.order) for m in query.unpivot.members], query.unpivot.drop_nulls),
+            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
+            query.unpivot.drop_nulls),
     )
 
 

@@ -346,6 +346,21 @@
               },
               "order": {
                 "type": "integer"
+              },
+              "agg": {
+                "type": "string",
+                "description": "REQ-DIM-003: the member's own aggregation (all members or none); the value measure is then agg 'member'."
+              },
+              "weight": {
+                "type": "string"
+              },
+              "q": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "orderBy": {
+                "type": "string"
               }
             }
           }

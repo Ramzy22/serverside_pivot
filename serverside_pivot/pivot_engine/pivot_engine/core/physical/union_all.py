@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 import ibis
 import pyarrow as pa
 
-from ..ir import CASE_FOLDING_OPS, STRING_OPS, Predicate, PredicateGroup
+from ..ir import CASE_FOLDING_OPS, MEMBER_AGG, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from ..registry import type_family
 from .lowering import lower as lower_measure
@@ -93,17 +93,39 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
     raise ValueError(f"unsupported operator {p.op!r}")
 
 
-def _measures(table: Any, plan: LogicalPlan, aliases: Sequence[str] = ()) -> Dict[str, Any]:
+def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any = None) -> Any:
+    """One measure at a level grouped by ``keys``; a per-member axis value is level-aware (REQ-DIM-003)."""
+    if m.agg != MEMBER_AGG:
+        return lower_measure(m, table, condition)
+    axis = plan.query.unpivot
+    assert axis is not None  # the IR admits MEMBER_AGG only with a per-member axis
+    dtype = table[axis.value].type()
+    if axis.members[0].agg == "array_agg":  # a series axis (REQ-AGG-009): one list type
+        dtype = ibis.expr.datatypes.Array(dtype)
+    if axis.label not in keys:  # above the label: the members' aggregations differ, no value
+        # A reduction (not a literal), so a global aggregate still yields its one row over no records.
+        first = lower_measure(axis.members[0].measure(), table, condition)
+        return ibis.ifelse(ibis.literal(False), first.cast(dtype), ibis.null().cast(dtype))
+    value = ibis.null().cast(dtype)
+    for member in reversed(axis.members):
+        is_member = table[axis.label] == ibis.literal(member.label, type="string")
+        cond = is_member if condition is None else (is_member & condition)
+        own = lower_measure(member.measure(), table, cond).cast(dtype)
+        value = ibis.ifelse(is_member.any(), own, value)  # the group holds one member
+    return value
+
+
+def _measures(table: Any, plan: LogicalPlan, aliases: Sequence[str] = (), keys: Sequence[str] = ()) -> Dict[str, Any]:
     """Row-total measures, then one conditional aggregate per pivot cell (REQ-PIV-001)."""
     wanted = set(aliases) if aliases else None
     out = {}
     for m in plan.query.measures:
         if wanted is None or m.alias in wanted:
-            out[m.alias] = lower_measure(m, table)
+            out[m.alias] = _lower(m, table, plan, keys)
     if wanted is None:
         schema = table.schema()
         for _j, member, m, name in plan.query.cells():
-            out[name] = lower_measure(m, table, _member_condition(table, schema, plan.query.columns, member))
+            out[name] = _lower(m, table, plan, keys, _member_condition(table, schema, plan.query.columns, member))
     return out
 
 
@@ -192,7 +214,7 @@ def _eligible(e0: Any, plan: LogicalPlan) -> Any:
     e = e0
     for level_no, filters in sorted(plan.filters_by_level.items()):
         keys = list(plan.rows[:level_no])
-        grouped = e0.group_by(keys).aggregate(**_measures(e0, plan, [f.measure for f in filters]))
+        grouped = e0.group_by(keys).aggregate(**_measures(e0, plan, [f.measure for f in filters], keys))
         cond = None
         for f in filters:
             term = _CMP[f.op](grouped[f.measure], f.value)
@@ -204,8 +226,8 @@ def _eligible(e0: Any, plan: LogicalPlan) -> Any:
 def _direct(source: Any, plan: LogicalPlan) -> LevelAggregate:
     def aggregate(keys: Sequence[str]) -> Any:
         if keys:
-            return source.group_by(list(keys)).aggregate(**_measures(source, plan))
-        return source.aggregate(**_measures(source, plan))
+            return source.group_by(list(keys)).aggregate(**_measures(source, plan, (), keys))
+        return source.aggregate(**_measures(source, plan, (), keys))
 
     return aggregate
 
@@ -421,7 +443,7 @@ def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, D
         for n, s, member in entries:
             names[(i, n)] = f"__cell{i}_{n}"
             condition = _member_condition(source, schema, q.columns, tuple(member))
-            aggregates[names[(i, n)]] = lower_measure(measures[s.field], source, condition)
+            aggregates[names[(i, n)]] = _lower(measures[s.field], source, plan, keys, condition)
         lookup = source.group_by(keys).aggregate(**aggregates)
         lookup = lookup.select(**{f"__canc{i}_{j}": lookup[k] for j, k in enumerate(keys)},
                                **{name: lookup[name] for name in aggregates})

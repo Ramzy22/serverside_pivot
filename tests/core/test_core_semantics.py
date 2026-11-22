@@ -86,7 +86,8 @@ def _oracle(records, query: PivotQuery):
                     for c in query.categories],
         unpivot=None if query.unpivot is None else (
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
-            [(m.label, m.field, m.order) for m in query.unpivot.members], query.unpivot.drop_nulls),
+            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
+            query.unpivot.drop_nulls),
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -128,7 +129,7 @@ RECORDS = st.lists(
     min_size=0, max_size=16,
 )
 AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "median",
-                       "stddev", "variance", "percentile", "weighted_avg", "first", "last"])
+                       "stddev", "variance", "percentile", "weighted_avg", "first", "last", "array_agg"])
 
 
 @st.composite
@@ -148,7 +149,9 @@ def queries(draw):
                            weight="w" if agg == "weighted_avg" else None,
                            q=draw(st.sampled_from([0.0, 0.25, 0.5, 0.9, 1.0])) if agg == "percentile" else None,
                            # REQ-AGG-008: an integer order with NULLs and ties, or a text order
-                           order_by=draw(st.sampled_from(["w", "k"])) if agg in {"first", "last"} else None),)
+                           order_by=draw(st.sampled_from(["w", "k"])) if agg in {"first", "last"} else (
+                               # REQ-AGG-009: a series ordered by a field (ties, NULL orders) or by value
+                               draw(st.sampled_from([None, "w", "k"])) if agg == "array_agg" else None)),)
     unpivot = None
     key_fields = ["w", "k", "n"] if categories else ["w", "k"]
     if draw(st.booleans()):  # REQ-DIM-002: the measure axis as a row level (members over v and w)
@@ -156,23 +159,35 @@ def queries(draw):
         labels = draw(st.lists(st.sampled_from(["V", "W", "", "x|y"]), min_size=len(fields), max_size=len(fields),
                                unique=True))
         orders = draw(st.lists(st.integers(-1, 2), min_size=len(fields), max_size=len(fields)))
-        unpivot = Unpivot("mn", "mv", "mk", tuple(UnpivotMember(lab, f, o) for lab, f, o in zip(labels, fields, orders)),
-                          drop_nulls=draw(st.booleans()))
+        per_member = draw(st.booleans())  # REQ-DIM-003: each member its own aggregation
+        series_axis = per_member and draw(st.booleans())  # every member a series, or none (one value column)
+        member_aggs = [("array_agg" if series_axis else draw(st.sampled_from(
+                           ["sum", "avg", "min", "max", "count", "first", "last"]))) if per_member
+                       else None for _ in fields]
+        unpivot = Unpivot("mn", "mv", "mk", tuple(
+            UnpivotMember(lab, f, o, a, order_by="k" if a in {"first", "last"} or (a == "array_agg" and o > 0) else None)
+            for lab, f, o, a in zip(labels, fields, orders, member_aggs)), drop_nulls=draw(st.booleans()))
         position = draw(st.integers(0, len(rows)))
         rows = rows[:position] + ("mn",) + rows[position:]
-        measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q,
-                               order_by=measures[0].order_by),)
+        if per_member:
+            agg, alias = "member", "m_member"
+            measures = (MeasureRef(alias, "member", "mv"),)
+        else:
+            measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q,
+                                   order_by=measures[0].order_by),)
         key_fields = key_fields + ["mk"]
+    series = agg == "array_agg" or (unpivot is not None and unpivot.per_member
+                                    and unpivot.members[0].agg == "array_agg")
     mfs = ()
-    if draw(st.booleans()):
+    if not series and draw(st.booleans()):
         mfs = (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from([">", "<=", "="])),
                              draw(st.integers(-5, 10))),)
     expanded = None
     if len(rows) == 2 and draw(st.booleans()):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
     sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
-                    SortKey(alias, desc=draw(st.booleans()),
-                            absolute=agg not in {"min", "max"} and draw(st.booleans())),
+                    *([] if series else [SortKey(alias, desc=draw(st.booleans()),
+                                                 absolute=agg not in {"min", "max"} and draw(st.booleans()))]),
                     # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
                     SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
                             by=draw(st.sampled_from(key_fields)))]
@@ -182,7 +197,7 @@ def queries(draw):
         window = Window(offset=draw(st.integers(0, 6)), limit=draw(st.integers(0, 6)))
     filters = tuple(draw(st.lists(FILTERS, max_size=2)))
     derived = ()
-    if draw(st.booleans()):  # REQ-AGG-005 / REQ-AGG-007
+    if not series and draw(st.booleans()):  # REQ-AGG-005 / REQ-AGG-007
         func = draw(st.sampled_from(["ratio", "percent_of_total", "rank", "dense_rank", "cumulative", "moving_avg"]))
         if draw(st.booleans()):  # several derived measures share one tree (mixed joins and windows)
             derived = (DerivedMeasure("pt", "percent_of_total", alias), DerivedMeasure("rk", "rank", alias))
@@ -198,7 +213,7 @@ def queries(draw):
     if draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
         columns = ("k",)
         members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
-        if draw(st.booleans()) and alias not in {k.field for k in sort}:
+        if not series and draw(st.booleans()) and alias not in {k.field for k in sort}:
             # REQ-SORT-004: a pivot cell, possibly outside the returned column window
             sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),)),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
@@ -253,6 +268,17 @@ def _table(records):
 @settings(max_examples=examples(150), deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(records=RECORDS, query=queries())
 def test_core_equals_oracle(records, query):
+    _assert_equal(_core(_con(_table(records)), query), _oracle(records, query))
+
+
+@pytest.mark.parametrize("sort", [(), (SortKey("m_member", member=("a",)),)])
+def test_per_member_axis_cell_without_records_takes_the_member_empty_rule(sort):
+    """REQ-DIM-003 (found by the property test): an empty pivot cell is the member's own aggregation over
+    no records (count 0, sum NULL), and a cell sort orders by it (NULLS LAST)."""
+    records = [{"r": "A", "c": "A", "k": "A", "v": None, "w": None}] * 3
+    axis = Unpivot("mn", "mv", "mk", (UnpivotMember("V", "v", 0, "sum"), UnpivotMember("W", "w", 0, "count")))
+    query = PivotQuery(dataset="t", rows=("mn", "r", "c"), measures=(MeasureRef("m_member", "member", "mv"),),
+                       sort=sort, columns=("k",), column_members=(("A",), ("a",)), unpivot=axis)
     _assert_equal(_core(_con(_table(records)), query), _oracle(records, query))
 
 

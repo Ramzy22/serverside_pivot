@@ -214,6 +214,27 @@
         "orderBy"
       ],
       "sql": "LAST({x} ORDER BY {o}, {x}) FILTER (WHERE {x} IS NOT NULL AND {o} IS NOT NULL): the value at the largest order; ties: the largest value"
+    },
+    "array_agg": {
+      "inputs": [
+        "any"
+      ],
+      "result": "list",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "holistic",
+      "state": [
+        "order",
+        "value"
+      ],
+      "costClass": "heavy-mergeable",
+      "params": [
+        "orderBy"
+      ],
+      "optionalParams": [
+        "orderBy"
+      ],
+      "sql": "ARRAY_AGG({x} ORDER BY {o}, {x}) FILTER (WHERE {x} IS NOT NULL AND {o} IS NOT NULL); without an order field ARRAY_AGG({x} ORDER BY {x}) FILTER (WHERE {x} IS NOT NULL): a series in a defined order, ties by value; NULL elements skipped; NULL when empty"
     }
   }
 }

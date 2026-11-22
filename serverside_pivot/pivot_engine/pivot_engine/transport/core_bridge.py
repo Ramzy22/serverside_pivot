@@ -25,7 +25,7 @@ from ..core.authority.verifier import verify_scoped
 from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Unpivot, UnpivotMember, Window,
+    MEMBER_AGG, Category, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Unpivot, UnpivotMember, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
@@ -43,6 +43,7 @@ _AGG = {
     "stddev": "stddev", "variance": "variance", "percentile": "percentile",
     "weighted_avg": "weighted_avg", "wavg": "weighted_avg", "weighted_mean": "weighted_avg",
     "first": "first", "last": "last",  # REQ-AGG-008: need an order field (the IR rejects one without)
+    "array_agg": "array_agg",  # REQ-AGG-009: a series ordered by its order field, else by value
 }
 _OPS = {
     "=": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">=", "in": "in", "not in": "not_in",
@@ -94,7 +95,7 @@ def _flatten_fields(f: Mapping[str, Any]) -> List[str]:
 
 def _dimension_filter(f: Mapping[str, Any], families: Mapping[str, str], reasons: List[str]) -> Any:
     if "conditions" in f:
-        op = str(f.get("op") or "AND").lower()
+        op = str(f.get("op") or f.get("operator") or "AND").lower()
         if op not in {"and", "or"}:
             reasons.append(f"filter group operator {op!r}")
             return None
@@ -288,10 +289,10 @@ def _axis_member_measure(member: Mapping[str, Any], source: str, agg: str, measu
 def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Optional[Dict[str, Any]]:
     """A legacy measure axis as an IR :class:`Unpivot`, or None when the spec has none.
 
-    Legacy serves one shape exactly by unpivoting (every member a plain
-    measure with one common aggregation of sum/avg/count/min/max): that shape
-    maps to the core.  The other legacy shapes (per-member aggregation
-    first, zero suppression, the axis on columns) are named reasons.
+    One common aggregation of sum/avg/count/min/max over plain measures is
+    an unpivot aggregated once (REQ-DIM-002).  Otherwise every member keeps
+    its own measure (REQ-DIM-003): exact at and below the label, NULL above
+    it.  Zero suppression and the axis on columns are named reasons.
     ``families`` gains the label, value and key columns.
     """
     config = getattr(spec, "measure_axis", None)
@@ -338,8 +339,24 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
                 and agg == str(getattr(m, "agg", None) or "sum").strip().lower()
                 and source == str(getattr(m, "field", None) or "").strip()
                 for _l, source, _o, agg, m in members)
-    if len(aggs) != 1 or not aggs <= _AXIS_AGGS or not plain:
-        reasons.append("measure axis with per-member aggregation")
+    uniform = len(aggs) == 1 and aggs <= _AXIS_AGGS and plain
+    own: List[Optional[MeasureRef]] = [None] * len(members)
+    if not uniform:  # REQ-DIM-003: each member keeps its own measure (legacy aggregates first, then unpivots)
+        for i, (text, source, _o, agg, m) in enumerate(members):
+            if m is not None and (getattr(m, "ratio_numerator", None) or getattr(m, "window_func", None)):
+                reasons.append("measure axis member is a derived measure")
+                continue
+            ref = _measure(m, reasons) if m is not None else (
+                MeasureRef(text, _AGG[agg], source) if agg in _AGG else None)
+            if ref is None:
+                if m is None:
+                    reasons.append(f"aggregation {agg!r}")
+                continue
+            if ref.field is None:
+                reasons.append("measure axis member counts records (no field to unpivot)")
+                continue
+            own[i] = ref
+            members[i] = (text, ref.field, members[i][2], agg, m)
     if config.placement != "rows":
         reasons.append(f"measure axis on {config.placement}")
     if config.suppress_zero_members:
@@ -353,8 +370,9 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
         reasons.append("measure axis repeated member label")
     if reasons:
         return None
-    unpivot = Unpivot(label, value, key, tuple(UnpivotMember(t, s, o) for t, s, o, _a, _m in members),
-                      drop_nulls=bool(config.suppress_empty_members))
+    unpivot = Unpivot(label, value, key, tuple(
+        UnpivotMember(t, s, o) if ref is None else UnpivotMember(t, s, o, ref.agg, ref.weight, ref.q, ref.order_by)
+        for (t, s, o, _a, _m), ref in zip(members, own, strict=True)), drop_nulls=bool(config.suppress_empty_members))
     families.update(unpivot.extend(families))
     rows = [str(r) for r in spec.rows or []]
     if label not in rows and not getattr(spec, "_measure_axis_exact_layout", False):
@@ -363,7 +381,7 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
     if label in rows and not any(isinstance(s, Mapping) and (s.get("field") == label or s.get("sortKeyField") == key)
                                  for s in sort):
         sort.append({"field": label, "order": "asc", "sortKeyField": key})  # members in their order
-    agg = _AGG[next(iter(aggs))]
+    agg = _AGG[next(iter(aggs))] if uniform else MEMBER_AGG
     return {"unpivot": unpivot, "rows": rows, "sort": sort,
             "columns": [str(c) for c in getattr(spec, "columns", None) or [] if str(c) != label],
             "measures": [MeasureRef(value, agg, value)]}
@@ -502,7 +520,9 @@ def _unknown_keys(f: Any, reasons: List[str]) -> None:
     if not isinstance(f, Mapping):
         reasons.append(f"filter {f!r}")
         return
-    extra = set(f) - _FILTER_KEYS
+    extra = set(f) - _FILTER_KEYS - ({"operator"} if "conditions" in f else set())  # a group's connective alias
+    if "op" in f and "operator" in f and str(f["op"]).lower() != str(f["operator"]).lower():
+        reasons.append("filter group with conflicting op and operator")
     if extra:
         reasons.append(f"filter keys {sorted(extra)}")
     for c in f.get("conditions") or []:
@@ -546,6 +566,8 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
     if getattr(spec, "group_allow_unbalanced", False):
         reasons.append("unbalanced hierarchy")
     axis = _measure_axis(spec, families, reasons)  # REQ-DIM-002
+    if axis is None and reasons and getattr(getattr(spec, "measure_axis", None), "placement", "none") != "none":
+        raise CoreUnsupported(reasons)  # the rest of the spec names the axis columns: only the axis reasons count
     columns = axis["columns"] if axis else [str(c) for c in getattr(spec, "columns", None) or []]
     cfg = getattr(spec, "pivot_config", None)
     if columns:
@@ -575,6 +597,10 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         absolute = bool(s.get("absoluteSort")) or sort_type in {"absolute", "abs", "absolute_value", "absolute-value"}
         semantic = s.get("semanticType") or s.get("semantic") or s.get("sortSemantic")
         key_field = s.get("sortKeyField")
+        axis_label = axis["unpivot"].label if axis else None
+        if (s.get("field") not in rows and key_field == f"__sortkey__{s.get('field')}"
+                and (s.get("field") == axis_label or (axis is None and s.get("field") not in families))):
+            continue  # the measure-axis level is not shown (axis off or label not a row): nothing to order
         if key_field and key_field in families and s.get("field") in rows:
             # REQ-SORT-003: members ordered by MIN(key) (legacy: a hidden sort key per member).
             if absolute or semantic or (sort_type and sort_type not in {"alphanumeric", "basic", "default", "natural"}):
