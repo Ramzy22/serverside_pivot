@@ -515,6 +515,35 @@ export class DuckDbWasmExecutor {
         return false;
     }
 
+    /**
+     * The DuckDB connection with ``table`` registered, initialising DuckDB-Wasm when it can run,
+     * or ``null`` when it cannot (no bundle, offline file origin, no Worker).
+     */
+    public async coreConnection(table: string): Promise<{ query: (sql: string) => Promise<unknown> } | null> {
+        if (!this.wasmReady && !(await this.tryInitializeWasm())) return null;
+        if (!this.dbConn || !(await this.ensureTableRegistered(table))) return null;
+        return this.dbConn;
+    }
+
+    /** Record a request answered by the semantic core (or the reason it was not). */
+    public recordCoreOutcome(outcome: { served: true; sql: string; executionMs: number } | { served: false; reason: string }): void {
+        if (outcome.served) {
+            this.telemetry = {
+                ...this.telemetry,
+                activeMode: 'client',
+                activeEngine: 'duckdb-wasm',
+                wasmReady: this.wasmReady,
+                lastQuerySql: outcome.sql,
+                lastExecutionMs: outcome.executionMs,
+                lastUpdatedAt: Date.now(),
+                coreServed: true,
+                coreFallbackReason: undefined,
+            };
+        } else {
+            this.telemetry = { ...this.telemetry, coreServed: false, coreFallbackReason: outcome.reason, lastUpdatedAt: Date.now() };
+        }
+    }
+
     public async execute(plan: LogicalPivotPlan): Promise<ClientExecutedDataset> {
         const startTime = typeof performance !== 'undefined' && typeof performance.now === 'function'
             ? performance.now()
@@ -664,6 +693,8 @@ export class DuckDbWasmExecutor {
             rowCount: allRows.length,
             networkRoundtrips: 0,
             lastUpdatedAt: Date.now(),
+            coreServed: this.telemetry.coreServed,
+            coreFallbackReason: this.telemetry.coreFallbackReason,
         };
 
         return {

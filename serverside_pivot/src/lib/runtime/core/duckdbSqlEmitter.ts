@@ -153,7 +153,7 @@ function predicate(f: Filter, columns: Record<string, ColumnInfo>): string {
 
 // ------------------------------------------------------------------ aggregation (registry lowerings)
 
-function aggregate(m: Measure, condition: string | null): string {
+function aggregate(m: Measure, condition: string | null, columns: Record<string, ColumnInfo>): string {
     const masked = (name: string) => (condition ? `CASE WHEN ${condition} THEN ${quoteIdent(name)} END` : quoteIdent(name));
     if (!m.field) {
         if (m.agg !== 'count') throw new EmitterUnsupported(`${m.agg} without a field`);
@@ -162,7 +162,8 @@ function aggregate(m: Measure, condition: string | null): string {
     const x = masked(m.field);
     const dbl = `CAST(${x} AS DOUBLE)`;
     switch (m.agg) {
-        case 'sum': return `SUM(${x})`;
+        // Typed as Ibis types it: an integer sum is BIGINT (DuckDB would widen it to HUGEINT).
+        case 'sum': return columns[m.field] && columns[m.field].family === 'integer' ? `CAST(SUM(${x}) AS BIGINT)` : `SUM(${x})`;
         case 'count': return `COUNT(${x})`;
         case 'avg': return `AVG(${x})`;
         case 'min': return `MIN(${x})`;
@@ -198,11 +199,11 @@ function memberCondition(columnsDims: string[], member: unknown[], columns: Reco
 function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, aliases?: Set<string>): string[] {
     const out = query.measures
         .filter((m) => !aliases || aliases.has(m.alias))
-        .map((m) => `${aggregate(m, null)} AS ${quoteIdent(m.alias)}`);
+        .map((m) => `${aggregate(m, null, columns)} AS ${quoteIdent(m.alias)}`);
     if (!aliases) {
         (query.columnMembers || []).forEach((member, j) => {
             const cond = memberCondition(query.columns || [], member, columns);
-            query.measures.forEach((m) => out.push(`${aggregate(m, cond)} AS ${quoteIdent(cellName(j, m.alias))}`));
+            query.measures.forEach((m) => out.push(`${aggregate(m, cond, columns)} AS ${quoteIdent(cellName(j, m.alias))}`));
         });
     }
     return out;
@@ -243,6 +244,17 @@ function frameBound(offset: number | null | undefined, isStart: boolean): string
 }
 
 // ------------------------------------------------------------------ the emitter
+
+/** Distinct column members over E0 (scope ∧ row filters), each dimension ordered NULLS LAST (as `exec.column_members`). */
+export function emitColumnMembersSql(query: PivotQuery, options: EmitOptions): string {
+    const dims = query.columns || [];
+    if (!dims.length) throw new EmitterUnsupported('column members without column dimensions');
+    dims.forEach((d) => { if (!options.columns[d]) throw new EmitterUnsupported(`unknown column ${d}`); });
+    const where = (query.filters || []).map((f) => predicate(f as Filter, options.columns));
+    const cols = dims.map(quoteIdent).join(', ');
+    const order = dims.map((d) => `(${quoteIdent(d)} IS NULL) ASC, ${quoteIdent(d)} ASC`).join(', ');
+    return `SELECT DISTINCT ${cols} FROM ${quoteIdent(options.table)}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order}`;
+}
 
 export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
     const { columns } = options;

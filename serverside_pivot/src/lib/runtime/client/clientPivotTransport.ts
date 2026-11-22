@@ -7,6 +7,7 @@ import {
     encodeBytesToUtf8,
 } from './clientResponsePostProcessor';
 import { ClientSqlPlanner } from './clientSqlPlanner';
+import { EmitterUnsupported, runClientCore } from '../core/clientCoreRuntime';
 import { ClientSubscriptionEngine } from './clientSubscriptionEngine';
 import { applyCustomDimensionsToDataset, DuckDbWasmExecutor } from './duckdbWasmExecutor';
 import type { BaselineDescriptor, StreamUpdateBatch } from '../streamingTypes';
@@ -287,8 +288,52 @@ export class ClientPivotTransport implements ClientPivotTransportInterface {
         }
 
         const plan = ClientSqlPlanner.compile(request, defaultTable);
+        if (plan.kind === 'data') {
+            const served = await this.serveDataFromCore(plan, options);
+            if (served) return served;
+        }
         const executed = await this.executor.execute(plan);
         return ClientResponsePostProcessor.buildResponse(plan, executed);
+    }
+
+    /**
+     * Answer a data request with the semantic core: the IR is emitted as DuckDB SQL and run on the
+     * DuckDB-Wasm connection. ``null`` (legacy path) only when DuckDB cannot run here or the request
+     * uses a feature the core does not express; the reason is in the telemetry.
+     */
+    private async serveDataFromCore(
+        plan: ReturnType<typeof ClientSqlPlanner.compile>,
+        options: RuntimeTransportRequestOptions
+    ): Promise<RuntimeResponseV1 | null> {
+        const conn = await this.executor.coreConnection(plan.table);
+        if (!conn) {
+            this.executor.recordCoreOutcome({ served: false, reason: 'duckdb unavailable' });
+            return null;
+        }
+        const started = Date.now();
+        try {
+            const result = await runClientCore(plan, conn, plan.table);
+            if (options.signal && options.signal.aborted) {
+                throw new DOMException('Request aborted', 'AbortError');
+            }
+            const executionMs = Math.max(0.05, Date.now() - started);
+            this.executor.recordCoreOutcome({ served: true, sql: result.sql, executionMs });
+            return ClientResponsePostProcessor.buildDataResponse(plan, {
+                filteredRows: [],
+                allRows: [],
+                availableFields: this.executor.getAvailableFields(),
+                colCombinations: result.colCombinations,
+                engineUsed: 'duckdb-wasm',
+                executionMs,
+                lastSql: result.sql,
+            }, { rows: result.rows, grandTotalRow: result.grandTotalRow });
+        } catch (err) {
+            if (err instanceof EmitterUnsupported) {
+                this.executor.recordCoreOutcome({ served: false, reason: err.message });
+                return null;
+            }
+            throw err;
+        }
     }
 
     public async queryDrillThrough(query: DrillThroughQuery): Promise<DrillThroughResult> {

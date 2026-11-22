@@ -1444,12 +1444,15 @@ export class ClientResponsePostProcessor {
 
     public static buildDataResponse(
         plan: LogicalPivotPlan,
-        executed: ClientExecutedDataset
+        executed: ClientExecutedDataset,
+        prebuilt?: { rows: Array<{ [key: string]: unknown }>; grandTotalRow: { [key: string]: unknown } | null }
     ): RuntimeResponseV1 {
         const formulaErrors: { [key: string]: string } = {};
 
         let built: { rows: Array<{ [key: string]: unknown }>; grandTotalRow: { [key: string]: unknown } | null };
-        if (plan.viewMode === 'tree') {
+        if (prebuilt) {
+            built = prebuilt; // rows from the semantic core (runtime/core/clientCoreRuntime.ts)
+        } else if (plan.viewMode === 'tree') {
             built = buildTreeVisibleRows(executed, plan, formulaErrors);
         } else if (plan.viewMode === 'report') {
             built = buildReportVisibleRows(executed, plan, formulaErrors);

@@ -31,6 +31,9 @@ export interface ClientEngineTelemetry {
     rowCount: number;
     networkRoundtrips: number;
     lastUpdatedAt: number;
+    /** 'core' when the semantic core (emitted SQL on DuckDB) answered; else why the legacy path did. */
+    coreServed?: boolean;
+    coreFallbackReason?: string;
 }
 
 export interface NormalizedValConfig {
