@@ -253,6 +253,31 @@ def _record(kind: str, summary: Mapping[str, Any], diffs: List[Dict[str, Any]]) 
         _LOG.warning("core shadow: unclassified %s difference for %s", kind, summary.get("table"))
 
 
+def record_unique_shadow(summary: Mapping[str, Any], legacy: Tuple[List[Any], int],
+                         core: Tuple[List[Any], int]) -> List[Dict[str, Any]]:
+    def norm(values: List[Any]) -> List[Any]:
+        return [None if isinstance(v, float) and math.isnan(v) else v for v in values]
+
+    diffs: List[Dict[str, Any]] = []
+    if legacy[1] != core[1]:
+        diffs.append({"kind": "unique_total", "legacy": legacy[1], "core": core[1]})
+    lv, cv = norm(list(legacy[0])), norm(list(core[0]))
+    if lv != cv:
+        same_set = sorted(map(repr, lv)) == sorted(map(repr, cv))
+        diffs.append({"kind": "unique_values", "legacy": lv[:20], "core": cv[:20], "order_only": same_set})
+    for d in diffs:
+        # Legacy leaves NULL placement to the backend and pandas turns NULL into NaN (F-NULL-NAN).
+        nan = any(isinstance(v, float) and math.isnan(v) for v in legacy[0])
+        d["class"] = "legacy:F-NULL-NAN" if nan else "unclassified"
+    _record("unique", summary, diffs)
+    return diffs
+
+
+def record_served(kind: str) -> None:
+    with _LOCK:
+        STATS[f"core_served_{kind}"] += 1
+
+
 def record_unsupported(reasons: Sequence[str]) -> None:
     with _LOCK:
         STATS["unsupported_requests"] += 1

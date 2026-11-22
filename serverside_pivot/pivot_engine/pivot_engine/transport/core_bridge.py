@@ -20,17 +20,17 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
-from ..core.exec import column_members, detail, execute, fingerprint
+from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    DerivedMeasure, DetailQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+    DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
 from ..core.registry import type_family
 
-__all__ = ["CoreUnsupported", "core_drill_through", "core_hierarchy_view", "legacy_column_key",
-           "spec_to_query"]
+__all__ = ["CoreUnsupported", "core_drill_through", "core_hierarchy_view", "core_unique_values",
+           "legacy_column_key", "spec_to_query"]
 
 GRAND_TOTAL_ID = "Grand Total"
 ALL_EXPANDED = "__ALL__"
@@ -597,3 +597,36 @@ def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: 
     )
     table, total = detail(query, lambda _name: relation)
     return {"rows": table.to_pylist(), "total_rows": total}
+
+
+# --------------------------------------------------------------------- filter options
+
+
+def core_unique_values(resolve: Callable[[str], Any], spec: Any, column_id: str, *, search: str, limit: int,
+                       offset: int) -> Tuple[List[Any], int]:
+    """The ``get_unique_values`` contract, answered by the core (REQ-DET-002)."""
+    relation = resolve(spec.table)
+    families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
+    reasons: List[str] = []
+    if getattr(spec, "custom_dimensions", None):
+        reasons.append("custom dimensions")
+    axis = getattr(spec, "measure_axis", None)
+    if axis is not None and getattr(axis, "placement", "none") != "none":
+        reasons.append("measure axis")
+    if column_id not in families:
+        reasons.append(f"unknown column {column_id!r}")
+    aliases = frozenset(str(m.alias) for m in spec.measures or [])
+    filters: List[Any] = []
+    for f in spec.filters or []:
+        _unknown_keys(f, reasons)
+        if set(_flatten_fields(f)) & aliases:
+            reasons.append("measure filter in filter options")
+            continue
+        mapped = _dimension_filter(f, families, reasons)
+        if mapped is not None:
+            filters.append(mapped)
+    if reasons:
+        raise CoreUnsupported(reasons)
+    query = DistinctQuery(str(spec.table), column_id, tuple(filters), str(search or "").strip() or None,
+                          Window(max(0, int(offset)), max(0, int(limit))))
+    return distinct_values(query, lambda _name: relation)

@@ -72,6 +72,7 @@ Definitions, for a request over dataset `D`:
 | Id | Requirement |
 |---|---|
 | REQ-DET-001 | Drill-through and detail list the E0 records whose path dimensions equal the node's typed path, with null-safe equality, so a NULL member selects the NULL group. Pages follow a total order: the requested sort keys (NULLS LAST), then every column ascending, so pages concatenate to the full list without overlap. Search is a case-insensitive substring over every column's text form and never matches NULL. |
+| REQ-DET-002 | Filter options are the distinct values of a column over E0, ordered by value with NULL last, and paged. Search matches a case-insensitive substring of the value's text and never matches NULL. NULL is returned as null, never NaN. |
 
 ## 4. NULL and identity (REQ-NULL, REQ-ID)
 

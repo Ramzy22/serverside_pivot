@@ -9,13 +9,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
-from .ir import DetailQuery, PivotQuery, PredicateGroup
+from .ir import DetailQuery, DistinctQuery, PivotQuery, PredicateGroup
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
@@ -137,3 +137,16 @@ def detail(query: DetailQuery, resolve: Resolver) -> Tuple[Any, int]:
     verify_scoped(page)
     verify_scoped(count)
     return page.to_pyarrow(), int(count.to_pyarrow().as_py())
+
+
+def distinct_values(query: DistinctQuery, resolve: Resolver) -> Tuple[List[Any], int]:
+    """(page of distinct values, total distinct values) for filter options."""
+    from .physical.detail import lower_distinct
+
+    relation = resolve(query.dataset)
+    schema = relation.schema()
+    query.validate({name: type_family(dtype) for name, dtype in schema.items()})
+    page, count = lower_distinct(query, relation)
+    verify_scoped(page)
+    verify_scoped(count)
+    return page.to_pyarrow().column(query.column).to_pylist(), int(count.to_pyarrow().as_py())

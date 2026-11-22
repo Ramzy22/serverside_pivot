@@ -323,3 +323,57 @@ def test_cache_is_not_shared_across_tenants():
     a_total = [r for r in _rows_from(first) if isinstance(r, dict)]
     b_total = [r for r in _rows_from(second) if isinstance(r, dict)]
     assert a_total != b_total or not a_total, "tenant B received tenant A's cached result"
+
+
+# --------------------------------------------------------------------------- through the core (M2 gate)
+
+
+@pytest.mark.parametrize("case", ["data", "drill", "drill_legacy_keys"])
+def test_core_serves_scoped_reads(case, monkeypatch):
+    """With PIVOT_CORE=on the core answers (not a legacy fallback) and stays scoped."""
+    from pivot_engine.runtime import core_shadow
+
+    monkeypatch.setenv("PIVOT_CORE", "on")
+    kind = PROTOCOL_KIND[case]
+    served = f"core_served_{'drill' if kind == 'drill' else 'hierarchy'}"
+    before = core_shadow.STATS[served]
+    overrides, payload, trigger_prop = READ_CASES[case]
+    adapter = _adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter)
+    principal = Principal()
+    grant = claims_authorizer().authorize(principal=principal, table=TABLE, operation="read")
+    state = _snake_state({**BASE_STATE, **overrides})
+    if kind == "drill":
+        state.drill_through = dict(payload)
+    context = PivotRequestContext(
+        table=TABLE, trigger_prop=trigger_prop, start_row=0, end_row=100, viewport_active=True,
+        needs_col_schema=True, include_grand_total=True, principal=principal, row_scope=grant,
+    )
+    outcome = asyncio.run(service.process_async(state, context))
+    assert core_shadow.STATS[served] > before, f"{case} was not served by the core"
+    assert _rows_from(outcome), f"{case}: the core returned nothing"
+    _assert_scoped_or_denied(f"core:{case}", outcome)
+
+
+@pytest.mark.parametrize("column", ["tenant", "region", "secret"])
+def test_core_serves_scoped_filter_options(column, monkeypatch):
+    """Filter options come from the core under PIVOT_CORE=on and expose only the grant's values."""
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest
+
+    monkeypatch.setenv("PIVOT_CORE", "on")
+    before = core_shadow.STATS["core_served_unique_values"]
+    adapter = _adapter()
+    principal = Principal()
+    grant = claims_authorizer().authorize(principal=principal, table=TABLE, operation="read")
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES, table=TABLE, columns=[{"id": column}], filters={},
+        sorting=[], grouping=["region"], aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 100, "offset": 0, "search": ""}, global_filter=column,
+    )
+    response = asyncio.run(adapter.handle_request(request, user=principal, row_scope=grant))
+    values = [d.get("value") for d in (response.data or [])]
+    assert core_shadow.STATS["core_served_unique_values"] > before
+    assert values, "the core returned no options"
+    found = leaks(response, tenant_values=values if column == "tenant" else ())
+    assert not found, f"core:filter_options:{column}: {found}"

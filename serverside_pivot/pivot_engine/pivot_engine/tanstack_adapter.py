@@ -1947,6 +1947,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_unsupported(exc.reasons)
             return await legacy()
         if mode == "on":
+            core_shadow.record_served("drill")
             return core_result
         legacy_result = await legacy()
         try:
@@ -2463,6 +2464,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_unsupported(exc.reasons)
             return await legacy()
         if mode == "on":
+            core_shadow.record_served("hierarchy")
             return core_view
         legacy_view = await legacy()
         try:
@@ -3685,6 +3687,45 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if user or row_scope is not None:
             spec = apply_rls_to_spec(spec, user, row_scope=row_scope)
 
+        routed = await self._unique_values_routed(
+            spec, column_id, search=str(search or ""), limit=spec.limit, offset=spec.offset
+        )
+        if routed is not None:
+            return routed
+        return await self._legacy_unique_values(spec, column_id, search)
+
+    async def _unique_values_routed(
+        self, spec: Any, column_id: str, *, search: str, limit: int, offset: int
+    ) -> Optional[tuple]:
+        """Filter options from the core when ``PIVOT_CORE`` is on (shadow compares); ``None`` = legacy."""
+        from .runtime import core_shadow
+        from .transport.core_bridge import CoreUnsupported, core_unique_values
+
+        mode = core_shadow.core_mode()
+        resolve = getattr(self.controller, "resolve_table", None)
+        if mode == "off" or resolve is None:
+            return None
+        try:
+            core_result = await run_in_executor_scoped(
+                asyncio.get_running_loop(),
+                None,
+                lambda: core_unique_values(resolve, spec, column_id, search=search, limit=limit, offset=offset),
+            )
+        except CoreUnsupported as exc:
+            core_shadow.record_unsupported(exc.reasons)
+            return None
+        if mode == "on":
+            core_shadow.record_served("unique_values")
+            return core_result
+        legacy_result = await self._legacy_unique_values(spec, column_id, search)
+        try:
+            core_shadow.record_unique_shadow({"table": getattr(spec, "table", None), "column": column_id},
+                                             legacy_result, core_result)
+        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
+            _adapter_logger.warning("core unique-values shadow comparison failed", exc_info=True)
+        return legacy_result
+
+    async def _legacy_unique_values(self, spec: Any, column_id: str, search: Any) -> tuple:
         # Use Ibis to get distinct values
         table = self.controller.planner._table_for_spec(
             self.controller.planner._prepare_measure_axis_spec(spec)

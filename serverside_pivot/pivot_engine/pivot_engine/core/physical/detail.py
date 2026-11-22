@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Any, List, Tuple
 
-from ..ir import DetailQuery
+from ..ir import DetailQuery, DistinctQuery
 from .union_all import _member_condition, filtered
 
-__all__ = ["lower_detail"]
+__all__ = ["lower_detail", "lower_distinct"]
 
 
 def _search(table: Any, needle: str) -> Any:
@@ -48,3 +48,16 @@ def lower_detail(query: DetailQuery, relation: Any) -> Tuple[Any, Any]:
         page = page.limit(query.window.limit, offset=query.window.offset)
     return page, table.count()
 
+
+
+def lower_distinct(query: DistinctQuery, relation: Any) -> Tuple[Any, Any]:
+    """(page of distinct values ordered by value, NULLS LAST; their count)."""
+    table = filtered(relation, query)
+    if query.search:
+        col = table[query.column]
+        table = table.filter(col.cast("string").lower().contains(query.search.lower()).fill_null(False))
+    values = table.select(query.column).distinct()
+    page = values.order_by([values[query.column].isnull().cast("int8"), values[query.column].asc()])
+    if query.window.limit is not None or query.window.offset:
+        page = page.limit(query.window.limit, offset=query.window.offset)
+    return page, values.count()

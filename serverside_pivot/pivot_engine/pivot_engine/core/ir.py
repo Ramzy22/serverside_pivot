@@ -429,3 +429,20 @@ class DetailQuery:
             if key.absolute and schema[key.field] not in {"integer", "floating", "decimal"}:
                 raise IRValidationError(f"absolute sort needs a numeric value, not {key.field!r}.")
         return self
+
+
+@dataclass(frozen=True)
+class DistinctQuery:
+    """The distinct values of one column over E0 (filter options), paged (REQ-DET-002)."""
+
+    dataset: str
+    column: str
+    filters: Tuple[Filter, ...] = ()
+    search: Optional[str] = None  # case-insensitive substring of the value's text; NULL never matches
+    window: Window = field(default_factory=Window)
+
+    def validate(self, schema: Mapping[str, str]) -> DistinctQuery:
+        DetailQuery(self.dataset, filters=self.filters, search=self.search, window=self.window).validate(schema)
+        if self.column not in schema:
+            raise IRValidationError(f"distinct column references unknown column {self.column!r}.")
+        return self

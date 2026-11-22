@@ -8,8 +8,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from pivot_engine.core.exec import detail
-from pivot_engine.core.ir import DetailQuery, IRValidationError, Predicate, SortKey, Window
+from pivot_engine.core.exec import detail, distinct_values
+from pivot_engine.core.ir import DetailQuery, DistinctQuery, IRValidationError, Predicate, SortKey, Window
 
 DIM = st.sampled_from(["A", "a", "B", "", "x|y", None])
 RECORDS = st.lists(st.fixed_dictionaries({"r": DIM, "c": DIM, "v": st.one_of(st.none(), st.integers(-5, 5))}),
@@ -76,3 +76,26 @@ def test_invalid_detail_queries(kw, message):
     with pytest.raises(IRValidationError, match="^" + message.replace("[", r"\[").replace("]", r"\]")
                        .replace("(", r"\(").replace(")", r"\)").replace(".", r"\.") + "$"):
         detail(DetailQuery("t", **kw), _con([{"r": "A", "c": "x", "v": 1}]).table)
+
+
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(RECORDS, st.sampled_from(["r", "c"]), st.sampled_from([None, "a", "|", ""]), st.integers(1, 3))
+def test_distinct_values_page_in_value_order(records, field, search, size):  # REQ-DET-002
+    con = _con(records)
+    pool = {r[field] for r in records if not search or (r[field] is not None and search.lower() in r[field].lower())}
+    expected = sorted((v for v in pool if v is not None)) + ([None] if None in pool else [])
+    got, offset = [], 0
+    while True:
+        page, total = distinct_values(DistinctQuery("t", field, search=search, window=Window(offset, size)), con.table)
+        got += page
+        offset += size
+        if offset >= total:
+            break
+    assert total == len(expected) and got == expected
+
+
+def test_distinct_values_respect_filters_and_validate():
+    con = _con([{"r": "A", "c": "x", "v": 1}, {"r": "B", "c": "y", "v": 5}])
+    assert distinct_values(DistinctQuery("t", "c", (Predicate("v", ">", 2),)), con.table) == (["y"], 1)
+    with pytest.raises(IRValidationError, match="distinct column references unknown column 'zz'."):
+        distinct_values(DistinctQuery("t", "zz"), con.table)
