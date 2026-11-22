@@ -37,6 +37,13 @@ from .column_layout import (
     catalog_from_pivot_values, resolve_column_layout,
 )
 
+
+# Row metadata (never a data column). _rowKey is the canonical typed identity (REQ-ID-001).
+ROW_META_KEYS = frozenset({
+    "_id", "_path", "_isTotal", "_level", "_expanded", "_parentPath", "_has_children", "_is_expanded",
+    "depth", "_depth", "uuid", "subRows", "_pathFields", "_rowKey",
+})
+
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _INITIAL_SCHEMA_WINDOW_CENTER_COLS = 24
@@ -1333,21 +1340,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 and discovered_center_ids is None):
             return self._finalize_windowed_response(tanstack_result)
 
-        row_meta_keys = {
-            "_id",
-            "_path",
-            "_isTotal",
-            "_level",
-            "_expanded",
-            "_parentPath",
-            "_has_children",
-            "_is_expanded",
-            "depth",
-            "_depth",
-            "uuid",
-            "subRows",
-            "_pathFields",
-        }
+        row_meta_keys = set(ROW_META_KEYS)
         pinned_ids = set(request.grouping or [])
         request_dimension_ids = {
             col.get("id")
@@ -2527,21 +2520,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                         "total_center_cols"
                     )
                 elif request.grouping:
-                    row_meta_keys = {
-                        "_id",
-                        "_path",
-                        "_isTotal",
-                        "_level",
-                        "_expanded",
-                        "_parentPath",
-                        "_has_children",
-                        "_is_expanded",
-                        "depth",
-                        "_depth",
-                        "uuid",
-                        "subRows",
-                        "_pathFields",
-                    }
+                    row_meta_keys = set(ROW_META_KEYS)
                     request_dimension_ids = {
                         col.get("id")
                         for col in (request.columns or [])

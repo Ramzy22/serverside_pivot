@@ -1,4 +1,5 @@
 import pytest
+from pivot_engine.tanstack_adapter import ROW_META_KEYS
 import asyncio
 import pyarrow as pa
 import sys
@@ -303,6 +304,55 @@ def create_test_data(adapter, rows=1000):
 
     table = pa.Table.from_pydict(data_source)
     adapter.controller.load_data_from_arrow("sales_data", table)
+
+
+# --- engine-neutral execution recorders ------------------------------------
+# These tests pin *how much work* a scroll does (window reuse, paged root
+# queries).  Under PIVOT_CORE=on the core serves the hierarchy view, so the
+# work is recorded at the core seam instead of the legacy controller.
+
+def _core_serving() -> bool:
+    return os.environ.get("PIVOT_CORE", "off").strip().lower() == "on"
+
+
+def record_hierarchy_windows(adapter, monkeypatch):
+    """(start_row, end_row) of every hierarchy-view execution, whichever engine serves."""
+    calls = []
+    if _core_serving():
+        from pivot_engine.transport import core_bridge
+
+        original = core_bridge.core_hierarchy_view
+
+        def recording(resolve, spec, target_paths, start_row, end_row, **kwargs):
+            calls.append((start_row, end_row))
+            return original(resolve, spec, target_paths, start_row, end_row, **kwargs)
+
+        monkeypatch.setattr(core_bridge, "core_hierarchy_view", recording)
+        return calls
+    original_run = adapter.controller.run_hierarchy_view
+
+    async def counting(*args, **kwargs):
+        calls.append((args[2], args[3]))
+        return await original_run(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting)
+    return calls
+
+
+def record_core_queries(monkeypatch):
+    """Every PivotQuery the core executes for a hierarchy view (rows, window offset, window limit)."""
+    from pivot_engine.transport import core_bridge
+
+    queries = []
+    original = core_bridge.execute
+
+    def recording(query, resolver, *args, **kwargs):
+        queries.append({"rows": list(query.rows), "offset": query.window.offset, "limit": query.window.limit})
+        return original(query, resolver, *args, **kwargs)
+
+    monkeypatch.setattr(core_bridge, "execute", recording)
+    return queries
+
 
 @pytest.fixture
 def adapter():
@@ -2234,11 +2284,7 @@ async def test_col_windowing_slices_to_requested_range(adapter):
 
     # Determine which IDs are in the window
     windowed_ids = {entry["id"] for entry in schema["columns"][col_start:col_end + 1]}
-    row_meta_keys = {
-        "_id", "_path", "_isTotal", "_level", "_expanded",
-        "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows",
-        "region",  # pinned / grouping col
-    }
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
 
     for row in windowed.data:
         for key in row:
@@ -2268,8 +2314,7 @@ async def test_col_windowing_first_column_only(adapter):
 
     first_col_id = schema["columns"][0]["id"]
     second_col_id = schema["columns"][1]["id"]
-    row_meta_keys = {"_id", "_path", "_isTotal", "_level", "_expanded",
-                     "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows", "region"}
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
 
     for row in windowed.data:
         assert second_col_id not in row, (
@@ -2541,10 +2586,7 @@ async def test_col_schema_total_center_cols_matches_full_response(adapter):
     )
     assert full.col_schema is not None
 
-    row_meta_keys = {
-        "_id", "_path", "_isTotal", "_level", "_expanded",
-        "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows", "region",
-    }
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
     observed_center_ids = set()
     for row in full.data:
         for k in row:
@@ -2585,10 +2627,7 @@ async def test_col_windowing_boundary_right_edge(adapter):
         needs_col_schema=False,
     )
 
-    row_meta_keys = {
-        "_id", "_path", "_isTotal", "_level", "_expanded",
-        "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows", "region",
-    }
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
     data_rows = [r for r in windowed.data if not r.get("_isTotal")]
     found = any(last_col_id in r for r in data_rows)
     assert found, f"Last center column '{last_col_id}' missing from right-edge window"
@@ -2646,10 +2685,7 @@ async def test_initial_schema_response_materializes_only_small_center_window(ada
     assert schema_resp.col_schema is not None
     assert schema_resp.col_schema["total_center_cols"] == 80
 
-    row_meta_keys = {
-        "_id", "_path", "_isTotal", "_level", "_expanded",
-        "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows", "region",
-    }
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
     observed_center_ids = {
         key
         for row in schema_resp.data
@@ -2704,14 +2740,7 @@ async def test_virtual_scroll_response_cache_reuses_identical_window(adapter, mo
     make_wide_table(adapter, center_cols=40)
     request = make_wide_request()
 
-    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
-    call_count = {"value": 0}
-
-    async def counting_run_hierarchy_view(*args, **kwargs):
-        call_count["value"] += 1
-        return await original_run_hierarchy_view(*args, **kwargs)
-
-    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+    calls = record_hierarchy_windows(adapter, monkeypatch)
 
     first = await adapter.handle_virtual_scroll_request(
         request, 0, 20, [], needs_col_schema=True, col_start=0, col_end=5
@@ -2720,7 +2749,7 @@ async def test_virtual_scroll_response_cache_reuses_identical_window(adapter, mo
         request, 0, 20, [], needs_col_schema=True, col_start=0, col_end=5
     )
 
-    assert call_count["value"] == 1
+    assert len(calls) == 1
     assert first.total_rows == second.total_rows
     assert first.data == second.data
 
@@ -2918,6 +2947,7 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
         return await original_run_pivot_async(spec, *args, **kwargs)
 
     monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
+    core_queries = record_core_queries(monkeypatch) if _core_serving() else None
 
     first = await adapter.handle_virtual_scroll_request(
         request,
@@ -2947,19 +2977,26 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
     assert deep.data[0]["row_id"] == 49900
     assert deep.data[-1]["row_id"] == 50099
 
-    assert any(
-        call["rows"] == ["row_id"]
-        and call["limit"] is None
-        and call["offset"] == 0
-        and call["force_refresh"] is False
-        and call["root_filter"] == {
-            "op": "in",
-            "value_len": 200,
-            "first_value": 49900,
-            "last_value": 50099,
-        }
-        for call in recorded_specs
-    ), "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
+    if core_queries is not None:
+        # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
+        # offset + 1 because the core orders the grand total first).
+        assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
+            "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
+        )
+    else:
+        assert any(
+            call["rows"] == ["row_id"]
+            and call["limit"] is None
+            and call["offset"] == 0
+            and call["force_refresh"] is False
+            and call["root_filter"] == {
+                "op": "in",
+                "value_len": 200,
+                "first_value": 49900,
+                "last_value": 50099,
+            }
+            for call in recorded_specs
+        ), "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
 
 
 @pytest.mark.asyncio
@@ -3057,6 +3094,7 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
         return await original_run_pivot_async(spec, *args, **kwargs)
 
     monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
+    core_queries = record_core_queries(monkeypatch) if _core_serving() else None
 
     response = await adapter.handle_virtual_scroll_request(
         request,
@@ -3084,26 +3122,37 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
     assert response.total_rows == 100001
     assert second_response.total_rows == 100001
     assert any(row.get("_isTotal") for row in response.data)
-    assert any(
-        call["rows"] == ["row_id"]
-        and call["limit"] is None
-        and call["offset"] == 0
-        and call["force_refresh"] is False
-        and call["root_filter"] == {
-            "op": "in",
-            "value_len": 200,
-            "first_value": 49900,
-            "last_value": 50099,
-        }
-        for call in recorded_specs
-    ), "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
-    assert any(
-        call["rows"] == []
-        and call["limit"] == 1
-        and call["force_refresh"] is True
-        for call in recorded_specs
-    ), "Grand total should be fetched separately instead of disabling the paged root path"
-    assert sum(1 for call in recorded_specs if call["rows"] == [] and call["limit"] == 1) == 1
+    if core_queries is not None:
+        # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
+        # offset + 1 because the core orders the grand total first).
+        assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
+            "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
+        )
+    else:
+        assert any(
+            call["rows"] == ["row_id"]
+            and call["limit"] is None
+            and call["offset"] == 0
+            and call["force_refresh"] is False
+            and call["root_filter"] == {
+                "op": "in",
+                "value_len": 200,
+                "first_value": 49900,
+                "last_value": 50099,
+            }
+            for call in recorded_specs
+        ), "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
+    if core_queries is not None:
+        # One grand-total query per request outside the first window (REQ-PAGE: the core orders it first).
+        assert sum(1 for q in core_queries if q["offset"] == 0 and q["limit"] == 1) == 2
+    else:
+        assert any(
+            call["rows"] == []
+            and call["limit"] == 1
+            and call["force_refresh"] is True
+            for call in recorded_specs
+        ), "Grand total should be fetched separately instead of disabling the paged root path"
+        assert sum(1 for call in recorded_specs if call["rows"] == [] and call["limit"] == 1) == 1
 
 
 def test_collapsed_root_cache_keys_ignore_materialized_pivot_window(adapter):
@@ -5203,14 +5252,7 @@ async def test_virtual_scroll_reuses_cached_adjacent_row_blocks(adapter, monkeyp
         totals=False,
     )
 
-    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
-    call_ranges = []
-
-    async def counting_run_hierarchy_view(*args, **kwargs):
-        call_ranges.append((args[2], args[3]))
-        return await original_run_hierarchy_view(*args, **kwargs)
-
-    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+    call_ranges = record_hierarchy_windows(adapter, monkeypatch)
 
     await adapter.handle_virtual_scroll_request(
         request, 0, 99, [], needs_col_schema=False, include_grand_total=False
@@ -5244,14 +5286,7 @@ async def test_virtual_scroll_fetches_only_missing_row_blocks_when_adjacent_bloc
         totals=False,
     )
 
-    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
-    call_ranges = []
-
-    async def counting_run_hierarchy_view(*args, **kwargs):
-        call_ranges.append((args[2], args[3]))
-        return await original_run_hierarchy_view(*args, **kwargs)
-
-    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+    call_ranges = record_hierarchy_windows(adapter, monkeypatch)
 
     await adapter.handle_virtual_scroll_request(
         request, 0, 99, [], needs_col_schema=False, include_grand_total=False

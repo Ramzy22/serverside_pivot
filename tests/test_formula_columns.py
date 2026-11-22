@@ -1,4 +1,5 @@
 import os
+from pivot_engine.tanstack_adapter import ROW_META_KEYS
 import sys
 
 import pyarrow as pa
@@ -1029,7 +1030,7 @@ async def test_pivot_formula_columns_follow_requested_measure_order_through_wind
         and row.get("region") == "North"
         and not row.get("_isTotal")
     )
-    row_meta_keys = {"region", "_id", "depth", "_path", "_isTotal"}
+    row_meta_keys = set(ROW_META_KEYS) | {"region"}
     first_window_ids = [key for key in north_row.keys() if key not in row_meta_keys]
 
     assert first_window_ids == expected_schema_ids[:3]

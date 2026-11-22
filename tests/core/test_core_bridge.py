@@ -143,13 +143,13 @@ def test_hierarchy_view_contract():
         ("", 2, 0, ["r"]), ("|||y", 2, 1, ["r", "c"]),
         ("__grand_total__", 15, 0, None),  # legacy places the grand total last in the flattened list
     ]
-    assert view["rows"][5]["r"] is None and view["rows"][5]["_key"] != view["rows"][6]["_key"]
+    assert view["rows"][5]["r"] is None and view["rows"][5]["_rowKey"] != view["rows"][6]["_rowKey"]
     gt = view["grand_total_row"]
     assert (gt["_id"], gt["_isTotal"], gt["_path"], gt["v_sum"], gt["r"]) == ("Grand Total", True, "__grand_total__", 15,
                                                                                None)
     assert view["total_rows"] == 8  # 7 nodes + the grand total
     assert [r["_path"] for r in view["grand_total_formula_source_rows"]] == ["A", "B", ""]
-    assert view["profile"] == {"engine": "core"}
+    assert view["profile"]["controller"]["engine"] == "core" and view["profile"]["controller"]["operation"] == "hierarchy_view"
 
 
 def test_without_totals_there_is_no_grand_total():

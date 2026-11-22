@@ -389,7 +389,7 @@ def _hierarchy_color_meta_keys(row_fields: Any, col_fields: Any) -> set:
     meta_keys = {
         "_id", "_path", "_isTotal", "depth", "_depth", "_level", "_expanded",
         "_parentPath", "_has_children", "_is_expanded", "subRows", "uuid",
-        "__virtualIndex",
+        "__virtualIndex", "_pathFields", "_rowKey",
     }
     for field in row_fields or []:
         meta_keys.add(field)

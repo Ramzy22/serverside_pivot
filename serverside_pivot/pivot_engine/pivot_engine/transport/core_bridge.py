@@ -15,6 +15,7 @@ display contract; ``_key`` carries the canonical typed identity
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
@@ -425,7 +426,7 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str
         out: Dict[str, Any] = {f: None for f in rows[:1]}
         out.update(values)
         out.update({"_id": GRAND_TOTAL_ID, "_isTotal": True, "_path": GRAND_TOTAL_DISPLAY_PATH, "depth": 0,
-                    "_key": record["key"], "_rowKey": "[]"})
+                    "_rowKey": "[]"})
         return out
     out = dict(record["dims"])
     out.update(values)
@@ -435,7 +436,6 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str
         "_path": CanonicalPathCodec.display_path(list(path)),
         "_pathFields": list(rows[: len(path)]),
         "depth": len(path) - 1,
-        "_key": record["key"],
     })
     row_key = _canonical_row_key(path)
     if row_key is not None:
@@ -472,6 +472,7 @@ def core_hierarchy_view(
     ``[start_row, end_row]`` window and ``total_rows`` its length;
     ``grand_total_row`` is returned only when requested and enabled.
     """
+    started = time.perf_counter()
     relation = resolve(spec.table)
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
@@ -509,7 +510,9 @@ def core_hierarchy_view(
         "grand_total_row": grand_total if include_grand_total_row else None,
         "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
-        "profile": {"engine": "core"},
+        # Same profile layer as the legacy controller, so profile consumers keep working.
+        "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
+                                   "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
     }
 
 
