@@ -75,7 +75,7 @@ def _oracle(records, query: PivotQuery):
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort_desc={s.field: s.desc for s in query.sort},
+        sort=[(s.field, s.desc) for s in query.sort],
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -135,7 +135,9 @@ def queries(draw):
     expanded = None
     if len(rows) == 2 and draw(st.booleans()):
         expanded = frozenset((v,) for v in draw(st.sets(DIM, max_size=3)))
-    sort = (SortKey(rows[0], desc=True),) if draw(st.booleans()) else ()
+    sort_choices = [SortKey(rows[0], desc=True), SortKey(rows[-1], desc=draw(st.booleans())),
+                    SortKey(alias, desc=draw(st.booleans()))]
+    sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique=True)))
     window = Window()
     if draw(st.booleans()):
         window = Window(offset=draw(st.integers(0, 6)), limit=draw(st.integers(0, 6)))
@@ -216,3 +218,22 @@ def test_invalid_queries_are_typed_errors(bad):  # REQ-AGG-001
     base = dict(dataset="t", rows=("r",), measures=(MeasureRef("m", "sum", "v"),))
     with pytest.raises(IRValidationError):
         execute(PivotQuery(**{**base, **bad}), _con(_table([{"r": "A", "c": "x", "v": 1}])).table)
+
+
+def test_measure_sort_orders_every_level_with_nulls_last():  # REQ-SORT-001
+    records = [{"r": "A", "c": "x", "v": 1, "w": 1}, {"r": "A", "c": "y", "v": 9, "w": 1},
+               {"r": "B", "c": "x", "v": 20, "w": 1}, {"r": "C", "c": "z", "v": None, "w": 1}]
+    q = PivotQuery(dataset="t", rows=("r", "c"), measures=(MeasureRef("s", "sum", "v"),),
+                   sort=(SortKey("s", desc=True),))
+    got = [p for p, _ in _core(_con(_table(records)), q)]
+    assert got == [(), ("B",), ("B", "x"), ("A",), ("A", "y"), ("A", "x"), ("C",), ("C", "z")]
+
+
+@pytest.mark.parametrize("agg, q, w, expected", [  # REQ-AGG-006
+    ("stddev", None, None, None), ("variance", None, None, None),
+    ("percentile", 0.5, None, 4.0), ("weighted_avg", None, "w", None),
+])
+def test_parametric_aggregations_on_a_single_input(agg, q, w, expected):
+    records = [{"r": "A", "c": "x", "v": 4, "w": 0}]
+    query = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("m", agg, "v", w, q),))
+    assert [v["m"] for _, v in _core(_con(_table(records)), query)] == [expected, expected]

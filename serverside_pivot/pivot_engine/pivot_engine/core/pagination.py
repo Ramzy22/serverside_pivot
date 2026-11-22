@@ -43,6 +43,7 @@ from .frame import ResultFrame
 from .ir import PivotQuery, Window
 from .logical import plan as logical_plan
 from .physical import TREES, choose
+from .physical.union_all import DEPTH
 from .registry import type_family
 
 __all__ = ["MODES", "CursorRejectedError", "MaterializationTooLargeError", "Page", "Pager"]
@@ -263,7 +264,8 @@ class Pager:
 
     def _slice(self, query: PivotQuery, handle: _Materialized, offset: int, limit: int) -> ResultFrame:
         t = handle.backend.table(handle.table)
-        page = t.filter((t[ROW] >= offset) & (t[ROW] < offset + limit)).order_by(ROW).drop(ROW)
+        columns = [*query.rows, *(m.alias for m in query.measures), DEPTH]
+        page = t.filter((t[ROW] >= offset) & (t[ROW] < offset + limit)).order_by(ROW).select(*columns)
         return ResultFrame(
             table=page.to_pyarrow(),
             rows=tuple(query.rows),

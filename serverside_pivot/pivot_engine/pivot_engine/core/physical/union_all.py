@@ -20,7 +20,7 @@ from ..ir import CASE_FOLDING_OPS, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from .lowering import lower as lower_measure
 
-__all__ = ["DEPTH", "LevelAggregate", "build", "lower", "tree", "tree_of"]
+__all__ = ["DEPTH", "LevelAggregate", "build", "lower", "output_columns", "tree", "tree_of"]
 
 # (keys) -> relation with ``keys`` + one column per measure alias.
 LevelAggregate = Callable[[Sequence[str]], Any]
@@ -184,19 +184,64 @@ def tree(
     union = parts[0]
     for part in parts[1:]:
         union = union.union(part, distinct=False)
+    union, ancestor = _with_ancestor_measures(union, parts, plan)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
-        present = (union[DEPTH] >= i).cast("int8")
-        is_null = union[k].isnull().cast("int8")
-        order += [present, is_null, union[k].desc() if plan.descending.get(k) else union[k].asc()]
+        order.append((union[DEPTH] >= i).cast("int8"))  # parent before its children
+        dimension_sorted = False
+        for field, desc, is_measure in plan.sort:
+            if is_measure:
+                value = union[ancestor[(i, field)]]
+            elif field == k:
+                value, dimension_sorted = union[k], True
+            else:
+                continue  # a dimension entry orders only its own level
+            order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
+        if not dimension_sorted:  # deterministic tie-break: the member value, ascending
+            order += [union[k].isnull().cast("int8"), union[k].asc()]
     return union, order
+
+
+def output_columns(plan: LogicalPlan) -> List[str]:
+    return [*plan.rows, *(m.alias for m in plan.query.measures), DEPTH]
+
+
+def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, str], str]]:
+    """Attach, for each level i, the sorted measures of the row's level-i ancestor (REQ-SORT-001)."""
+    measures = [field for field, _desc, is_measure in plan.sort if is_measure]
+    names: Dict[Tuple[int, str], str] = {}
+    if not measures:
+        return union, names
+    by_depth = {level.depth: part for level, part in zip(plan.levels, parts, strict=True)}
+    for i in range(1, len(plan.rows) + 1):
+        part = by_depth.get(i)
+        keys = list(plan.rows[:i])
+        if part is None:  # the level shows no node: nothing to order there
+            for alias in measures:
+                names[(i, alias)] = f"__sort{i}_{alias}"
+                union = union.mutate(**{names[(i, alias)]: ibis.null().cast(part_type(parts, alias))})
+            continue
+        renamed = {f"__anc{i}_{j}": part[k] for j, k in enumerate(keys)}
+        for alias in dict.fromkeys(measures):
+            names[(i, alias)] = f"__sort{i}_{alias}"
+            renamed[names[(i, alias)]] = part[alias]
+        ancestors = part.select(**renamed)
+        predicates = [union[k].identical_to(ancestors[f"__anc{i}_{j}"]) for j, k in enumerate(keys)]
+        joined = union.left_join(ancestors, predicates)
+        union = joined.select(*[joined[c] for c in union.columns],
+                              *[joined[names[(i, a)]] for a in dict.fromkeys(measures)])
+    return union, names
+
+
+def part_type(parts: List[Any], alias: str) -> Any:
+    return parts[-1].schema()[alias]
 
 
 def build(plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]) -> Any:
     """Ordered and windowed tree."""
     union, order = tree(plan, relation, level_aggregate)
     q = plan.query
-    ordered = union.order_by(order) if order else union
+    ordered = (union.order_by(order) if order else union).select(*output_columns(plan))
     if q.window.limit is not None or q.window.offset:
         ordered = ordered.limit(q.window.limit, offset=q.window.offset)
     return ordered

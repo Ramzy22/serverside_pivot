@@ -3,7 +3,7 @@ tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot
 This bypasses the REST API and provides direct integration with TanStack components
 """
 
-from typing import Dict, Any, List, Optional, Callable, Union, Set
+from typing import Awaitable, Dict, Any, List, Optional, Callable, Union, Set
 import asyncio
 import copy
 from functools import cmp_to_key
@@ -21,7 +21,7 @@ from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService, TransactionAdapterMixin
 from .types.pivot_spec import PivotSpec, Measure, MeasureAxisConfig
 from .security import User, apply_rls_to_spec
-from .core.authority.scope import row_scoped
+from .core.authority.scope import row_scoped, run_in_executor_scoped
 from .formula_mixin import FormulaEngineMixin
 from .hierarchy_rows import (
     build_visible_hierarchy_rows,
@@ -81,6 +81,20 @@ def _is_missing_value(value: Any) -> bool:
 
 def _is_grand_total_row(row: Any) -> bool:
     return is_hierarchy_grand_total(row)
+
+
+def _has_case_variant_siblings(rows: Any) -> bool:
+    seen: Dict[Any, Any] = {}
+    for row in rows:
+        fields = row.get("_pathFields") or []
+        path = tuple(row.get(f) for f in fields)
+        if not path or not isinstance(path[-1], str):
+            continue
+        key = (path[:-1], path[-1].lower())
+        if key in seen and seen[key] != path[-1]:
+            return True
+        seen[key] = path[-1]
+    return False
 
 
 class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
@@ -2350,6 +2364,59 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
     @row_scoped
+    async def _hierarchy_view_routed(
+        self,
+        pivot_spec: Any,
+        target_paths: Any,
+        start_row: int,
+        end_row: int,
+        *,
+        include_grand_total: bool,
+        layout_unsupported: bool,
+        legacy: Callable[[], Awaitable[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Serve the hierarchy view from the core, the legacy engines, or both (shadow).
+
+        See ``runtime/core_shadow.py``: ``PIVOT_CORE=off|shadow|on``.  Anything
+        the core cannot express is served by legacy, with the reason counted.
+        """
+        from .runtime import core_shadow
+        from .transport.core_bridge import CoreUnsupported, core_hierarchy_view
+
+        mode = core_shadow.core_mode()
+        if mode == "off":
+            return await legacy()
+        if layout_unsupported:
+            core_shadow.record_unsupported(["subtotal footer layout"])
+            return await legacy()
+        resolve = getattr(self.controller, "resolve_table", None)
+        if resolve is None:
+            core_shadow.record_unsupported(["controller without resolve_table"])
+            return await legacy()
+        cache = self.__dict__.setdefault("_core_total_rows_cache", {})
+        try:
+            core_view = await run_in_executor_scoped(
+                asyncio.get_running_loop(),
+                None,
+                lambda: core_hierarchy_view(
+                    resolve, pivot_spec, target_paths, start_row, end_row,
+                    include_grand_total_row=include_grand_total, total_cache=cache,
+                ),
+            )
+        except CoreUnsupported as exc:
+            core_shadow.record_unsupported(exc.reasons)
+            return await legacy()
+        if mode == "on":
+            return core_view
+        legacy_view = await legacy()
+        try:
+            summary = core_shadow.summarize_spec(pivot_spec)
+            summary["has_case_variants"] = _has_case_variant_siblings(core_view.get("rows") or [])
+            core_shadow.record_shadow(summary, legacy_view, core_view, summary["measures"])
+        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
+            _adapter_logger.warning("core shadow comparison failed", exc_info=True)
+        return legacy_view
+
     async def handle_virtual_scroll_request(
         self,
         request: TanStackRequest,
@@ -2982,26 +3049,36 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             target_paths = [["__ALL__"]]
 
         if hasattr(self.controller, "run_hierarchy_view"):
-            try:
-                hierarchy_view_started_at = time.perf_counter()
-                hierarchy_view = await self.controller.run_hierarchy_view(
-                    pivot_spec,
-                    target_paths,
-                    start_row,
-                    end_row,
-                    include_grand_total_row=include_grand_total,
-                    profiling=profiling,
-                    show_subtotal_footers=_hier_show_subtotal_footers,
-                    tabular_subtotals=_hier_tabular_subtotals,
-                )
-                hierarchy_view_finished_at = time.perf_counter()
-            except TypeError:
-                # Backward compatibility with older controller signatures.
-                hierarchy_view_started_at = time.perf_counter()
-                hierarchy_view = await self.controller.run_hierarchy_view(
-                    pivot_spec, target_paths, start_row, end_row
-                )
-                hierarchy_view_finished_at = time.perf_counter()
+
+            async def _legacy_hierarchy_view() -> Dict[str, Any]:
+                try:
+                    return await self.controller.run_hierarchy_view(
+                        pivot_spec,
+                        target_paths,
+                        start_row,
+                        end_row,
+                        include_grand_total_row=include_grand_total,
+                        profiling=profiling,
+                        show_subtotal_footers=_hier_show_subtotal_footers,
+                        tabular_subtotals=_hier_tabular_subtotals,
+                    )
+                except TypeError:
+                    # Backward compatibility with older controller signatures.
+                    return await self.controller.run_hierarchy_view(
+                        pivot_spec, target_paths, start_row, end_row
+                    )
+
+            hierarchy_view_started_at = time.perf_counter()
+            hierarchy_view = await self._hierarchy_view_routed(
+                pivot_spec,
+                target_paths,
+                start_row,
+                end_row,
+                include_grand_total=include_grand_total,
+                layout_unsupported=_hier_show_subtotal_footers or _hier_tabular_subtotals,
+                legacy=_legacy_hierarchy_view,
+            )
+            hierarchy_view_finished_at = time.perf_counter()
             convert_started_at = time.perf_counter()
             tanstack_result = self.convert_pivot_result_to_tanstack_format(
                 hierarchy_view.get("rows", []), request, version=request.version

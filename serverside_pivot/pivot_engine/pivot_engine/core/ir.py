@@ -88,7 +88,12 @@ class MeasureFilter:
 
 @dataclass(frozen=True)
 class SortKey:
-    """Sibling order for one row dimension. NULLS LAST in both directions (REQ-BACK-001)."""
+    """One entry of the sibling order (REQ-SORT-001).
+
+    ``field`` is a row dimension (orders its own level by value) or a measure
+    alias (orders siblings at every level by the node's value).  NULLS LAST in
+    both directions (REQ-BACK-001).
+    """
 
     field: str
     desc: bool = False
@@ -191,8 +196,8 @@ class PivotQuery:
             if mf.op not in _COMPARISON_OPS:
                 raise IRValidationError(f"unsupported measure filter operator {mf.op!r}.")
         for s in self.sort:
-            if s.field not in self.rows:
-                raise IRValidationError(f"sort key {s.field!r} is not a row dimension.")
+            if s.field not in self.rows and s.field not in aliases:
+                raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
         if self.window.offset < 0 or (self.window.limit is not None and self.window.limit < 0):

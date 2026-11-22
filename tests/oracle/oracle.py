@@ -171,7 +171,8 @@ class Query:
     scope: Mapping[str, Tuple[Any, ...]] = field(default_factory=dict)
     totals: str = "visible"  # REQ-TOT-003/004
     expanded: Optional[Iterable[Tuple[Any, ...]]] = None  # None = all expanded
-    sort_desc: Mapping[str, bool] = field(default_factory=dict)  # sibling order per dimension
+    sort_desc: Mapping[str, bool] = field(default_factory=dict)  # shorthand: dimension -> descending
+    sort: Sequence[Tuple[str, bool]] = ()  # REQ-SORT-001: (dimension or measure alias, descending), in precedence
 
 
 # ----------------------------------------------------------------- engine
@@ -228,6 +229,39 @@ class Row:
         return len(self.path)
 
 
+def _nulls_last(a: Any, b: Any, desc: bool) -> int:
+    if a is None or b is None:
+        return (a is None) - (b is None)  # NULL after any value, in both directions
+    if a == b:
+        return 0
+    return (-1 if a > b else 1) if desc else (-1 if a < b else 1)
+
+
+def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ...]],
+                    values: Mapping[Tuple[Any, ...], Mapping[str, Any]]) -> List[Tuple[Any, ...]]:
+    dim = query.rows[depth - 1]
+    entries = list(query.sort) or [(f, d) for f, d in query.sort_desc.items()]
+    aliases = {m.alias for m in query.measures}
+
+    def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
+        dim_sorted = False
+        for f, desc in entries:
+            if f in aliases:
+                c = _nulls_last(values[x][f], values[y][f], desc)
+            elif f == dim:
+                dim_sorted = True
+                c = _nulls_last(x[-1], y[-1], desc)
+            else:
+                continue
+            if c:
+                return c
+        return 0 if dim_sorted else _nulls_last(x[-1], y[-1], False)
+
+    import functools
+
+    return sorted(candidates, key=functools.cmp_to_key(compare))
+
+
 def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
     """Flattened visible tree in hierarchical order, grand total first."""
     e0, e = eligible_sets(query, data)
@@ -241,12 +275,11 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
         if depth > len(query.rows):
             return
         candidates = {_key(r, query.rows, depth) for r in e if _key(r, query.rows, depth - 1) == prefix}
-        non_null = sorted((k for k in candidates if k[-1] is not None), key=lambda k: k[-1],
-                          reverse=bool(query.sort_desc.get(query.rows[depth - 1])))
-        children = non_null + [k for k in candidates if k[-1] is None]  # NULLS LAST both ways
+        values = {c: _measures(query, [r for r in totals_source if _key(r, query.rows, depth) == c])
+                  for c in candidates}
+        children = _order_siblings(query, depth, candidates, values)
         for child in children:
-            members = [r for r in totals_source if _key(r, query.rows, depth) == child]
-            out.append(Row(child, _measures(query, members)))
+            out.append(Row(child, values[child]))
             if expanded is None or child in expanded:
                 visit(child)
 

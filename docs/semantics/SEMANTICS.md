@@ -50,6 +50,13 @@ Definitions, for a request over dataset `D`:
 | REQ-AGG-003 | `count_distinct` is exact by default. Approximate distinct is an explicit, labelled opt-in. |
 | REQ-AGG-004 | Decimal inputs keep exact decimal arithmetic. Integer sums do not overflow silently. They widen, or they error. |
 | REQ-AGG-005 | Window measures: `rank` is 1-based, ordered by the measure with ties sharing a rank, and partitioned by the parent node. Moving averages use exactly the declared frame. |
+| REQ-AGG-006 | `stddev` and `variance` are the sample statistics and are NULL with fewer than two inputs. `percentile` takes `q` in [0, 1] and interpolates linearly (QUANTILE_CONT). `weighted_avg` uses only complete (value, weight) pairs and is NULL when their total weight is 0. |
+
+## 3a. Order (REQ-SORT)
+
+| Id | Requirement |
+|---|---|
+| REQ-SORT-001 | Siblings are ordered by the sort entries in precedence order. A dimension entry orders only its own level by member value. A measure entry orders the siblings at every level by the node's own value. Ties, and levels without a dimension entry, fall back to the member value ascending. NULL sorts last in both directions, for members and for measure values. A parent always precedes its children. |
 
 ## 4. NULL and identity (REQ-NULL, REQ-ID)
 

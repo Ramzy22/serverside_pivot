@@ -36,7 +36,8 @@ class LogicalPlan:
     levels: Tuple[Level, ...]
     filters_by_level: Dict[int, Tuple[MeasureFilter, ...]]
     values_from: str  # "E" (visible) or "E0" (all_data)
-    descending: Dict[str, bool]
+    descending: Dict[str, bool]  # row dimension -> descending (its own level)
+    sort: Tuple[Tuple[str, bool, bool], ...] = ()  # (field, descending, is_measure) in precedence order
 
     @property
     def rows(self) -> Tuple[str, ...]:
@@ -70,5 +71,6 @@ def plan(query: PivotQuery) -> LogicalPlan:
         levels=levels,
         filters_by_level=by_level,
         values_from="E" if query.totals == "visible" else "E0",
-        descending={s.field: s.desc for s in query.sort},
+        descending={s.field: s.desc for s in query.sort if s.field in query.rows},
+        sort=tuple((s.field, s.desc, s.field not in query.rows) for s in query.sort),
     )
