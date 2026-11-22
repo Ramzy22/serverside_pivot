@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import math
 import pathlib
 
@@ -17,6 +18,8 @@ import pytest
 HERE = pathlib.Path(__file__).parent
 VECTORS = json.loads((HERE / "vectors.json").read_text(encoding="utf-8"))["vectors"]
 LEGACY = json.loads((HERE / "legacy_xfail.json").read_text(encoding="utf-8")).get("vectors", {})
+# With the semantic core serving (PIVOT_CORE=on) the legacy divergences are gone: the vectors must pass.
+CORE_SERVES = os.environ.get("PIVOT_CORE", "off").strip().lower() == "on"
 _ARROW = {"string": pa.string(), "int64": pa.int64(), "float64": pa.float64()}
 _OPS = {">": "gt", ">=": "gte", "<": "lt", "<=": "lte", "=": "eq", "!=": "ne"}
 
@@ -61,7 +64,7 @@ def _same(a, b):
 
 @pytest.mark.parametrize(
     "vector",
-    [pytest.param(v, id=v["id"], marks=[pytest.mark.xfail(reason=LEGACY[v["id"]], strict=True)] if v["id"] in LEGACY else [])
+    [pytest.param(v, id=v["id"], marks=[pytest.mark.xfail(condition=not CORE_SERVES, reason=LEGACY[v["id"]], strict=True)] if v["id"] in LEGACY else [])
      for v in VECTORS],
 )
 def test_python_engine_conforms(vector):

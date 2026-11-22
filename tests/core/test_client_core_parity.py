@@ -118,6 +118,7 @@ def _server(state, table: pa.Table):
 
     from pivot_engine.runtime import core_shadow
 
+    previous = os.environ.get("PIVOT_CORE")
     os.environ["PIVOT_CORE"] = "on"
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(TABLE, table)
@@ -130,7 +131,10 @@ def _server(state, table: pa.Table):
     try:
         out = asyncio.run(service.process_async(view, ctx))
     finally:
-        os.environ.pop("PIVOT_CORE", None)
+        if previous is None:
+            os.environ.pop("PIVOT_CORE", None)
+        else:
+            os.environ["PIVOT_CORE"] = previous
     return out, core_shadow.STATS["core_served_hierarchy"] > before
 
 
