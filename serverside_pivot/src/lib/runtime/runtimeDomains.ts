@@ -1,4 +1,5 @@
 import type React from 'react';
+import type { DiffConfig, StreamUpdateBatch, StreamingConfig } from './streamingTypes';
 
 import type { JsonObject, RuntimeCommandKind, RuntimeRequestV1, RuntimeResponseV1 } from './runtimeContract';
 import type { ViewportSubscriptionStore } from './useViewportSubscriptionStore';
@@ -96,9 +97,9 @@ export interface PivotRuntimeProps {
     activeReportId?: string;
     rowSelection?: 'single' | 'multiple' | boolean;
     selectedRows?: readonly string[];
-    streamingConfig?: PivotObject;
-    streamUpdates?: PivotObject;
-    diffConfig?: PivotObject;
+    streamingConfig?: StreamingConfig;
+    streamUpdates?: StreamUpdateBatch;
+    diffConfig?: DiffConfig;
 }
 
 export interface PivotRuntimeRow {
