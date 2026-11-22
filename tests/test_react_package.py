@@ -159,7 +159,9 @@ def test_react_workspace_dispatches_the_runtime_owned_initial_request_once():
     ).read_text(encoding="utf-8")
 
     assert "if (nextProps.runtimeRequest) dispatch(nextProps.runtimeRequest);" in source
-    assert "runtimeResponse: response" in source
+    # Responses are delivered in order through the response queue (runtime/responseQueue.ts).
+    assert "enqueueResponse(response);" in source
+    assert "runtimeResponse={queuedResponse ?? runtimeProps.runtimeResponse}" in source
     assert "bootstrap:" not in source
     assert "bootstrapRef" not in source
 
