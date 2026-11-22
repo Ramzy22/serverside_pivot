@@ -234,6 +234,7 @@ export function planToQuery(plan: LogicalPivotPlan, columns: Record<string, Colu
         }
     }
 
+    if (plan.expandedAmbiguous) throw new EmitterUnsupported('expanded path with an empty or NULL member (send rowKey)');
     let expanded: PivotQuery['expanded'];
     if (plan.expandedAll) {
         if (plan.collapsedPaths.length) throw new EmitterUnsupported('collapsed paths under expand-all');

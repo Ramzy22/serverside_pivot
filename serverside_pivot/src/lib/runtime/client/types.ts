@@ -113,6 +113,8 @@ export interface LogicalPivotPlan {
         columnOptions?: { [key: string]: { sortType?: string; sortKeyField?: string; absoluteSort?: boolean } };
     };
     expandedAll: boolean;
+    /** An expanded/collapsed display path has an empty member (NULL vs "" cannot be told apart). */
+    expandedAmbiguous?: boolean;
     expandedPaths: string[][];
     collapsedPaths: string[][];
     measureAxis: {

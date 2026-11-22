@@ -222,6 +222,9 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
     for p in paths:
         if not 1 <= len(p) < len(rows):
             continue  # a leaf or over-long path expands nothing
+        if any(v is None or v == "" for v in p):
+            # A display path cannot tell the NULL member from "" (F-EXPAND-EMPTY): not addressable.
+            raise CoreUnsupported(["expanded path with an empty or NULL member (send rowKey)"])
         out.add(tuple(_coerce(v, families[rows[i]]) for i, v in enumerate(p)))
     return frozenset(out)
 
@@ -422,7 +425,7 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str
         out: Dict[str, Any] = {f: None for f in rows[:1]}
         out.update(values)
         out.update({"_id": GRAND_TOTAL_ID, "_isTotal": True, "_path": GRAND_TOTAL_DISPLAY_PATH, "depth": 0,
-                    "_key": record["key"]})
+                    "_key": record["key"], "_rowKey": "[]"})
         return out
     out = dict(record["dims"])
     out.update(values)
@@ -434,7 +437,18 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str
         "depth": len(path) - 1,
         "_key": record["key"],
     })
+    row_key = _canonical_row_key(path)
+    if row_key is not None:
+        out["_rowKey"] = row_key
     return out
+
+
+def _canonical_row_key(path: Sequence[Any]) -> Optional[str]:
+    """The typed identity the frontend keys rows by (REQ-ID-001); None when a member type has no encoding."""
+    try:
+        return CanonicalPathCodec.encode(list(path))
+    except Exception:  # noqa: BLE001 - an unencodable member only loses the canonical key, never the row
+        return None
 
 
 def core_hierarchy_view(

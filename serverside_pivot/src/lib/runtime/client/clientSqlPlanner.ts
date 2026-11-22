@@ -259,6 +259,24 @@ function normalizeSorting(rawSorting: unknown, rawSortOptions: unknown): Normali
     return result;
 }
 
+/**
+ * True when an expanded or collapsed display path has an empty member: "A|||" cannot say whether
+ * it names the NULL or the "" child of A (the legacy parser drops the part and names A instead).
+ */
+function expandedHasEmptyMember(rawExpanded: unknown): boolean {
+    const hasEmpty = (parts: unknown[]) => parts.some((p) => p === null || p === undefined || String(p) === '');
+    const splitKey = (key: string) => (key.startsWith('__COLLAPSED__|||') ? key.slice('__COLLAPSED__|||'.length) : key).split('|||');
+    if (Array.isArray(rawExpanded)) {
+        return rawExpanded.some((entry) => (Array.isArray(entry)
+            ? hasEmpty(entry)
+            : entry !== '__ALL__' && entry !== '*' && hasEmpty(splitKey(String(entry)))));
+    }
+    if (rawExpanded && typeof rawExpanded === 'object') {
+        return Object.keys(rawExpanded as object).some((key) => key !== '__ALL__' && key !== '*' && hasEmpty(splitKey(key)));
+    }
+    return false;
+}
+
 function normalizeExpanded(rawExpanded: unknown): { expandedAll: boolean; expandedPaths: string[][]; collapsedPaths: string[][] } {
     if (rawExpanded === true) {
         return { expandedAll: true, expandedPaths: [], collapsedPaths: [] };
@@ -492,6 +510,7 @@ export class ClientSqlPlanner {
                 : {});
         const sorting = normalizeSorting(mergedState.sorting, sortOptionsRaw);
         const { expandedAll, expandedPaths, collapsedPaths } = normalizeExpanded(mergedState.expanded);
+        const expandedAmbiguous = expandedHasEmptyMember(mergedState.expanded);
 
         const rawMeasureAxis = (mergedState.measureAxis && typeof mergedState.measureAxis === 'object')
             ? (mergedState.measureAxis as { [key: string]: unknown })
@@ -584,6 +603,7 @@ export class ClientSqlPlanner {
                     : {},
             },
             expandedAll,
+            expandedAmbiguous,
             expandedPaths,
             collapsedPaths,
             measureAxis,

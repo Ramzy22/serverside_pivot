@@ -15,6 +15,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { ambiguousDisplayKeys } from './rowIdentity';
 import {
     decodeWireNumeric,
     type BaselineCellDiff,
@@ -98,6 +99,8 @@ export interface SubscriptionQueryContext {
  * row lifecycle badges, and toolbar control state.
  */
 export class ViewportSubscriptionStore {
+    /** Display keys of the last snapshot that name more than one canonical row. */
+    private ambiguousDisplay: Set<string> = new Set();
     private cellMap: Map<string, CellLiveMeta>;
     private rowLifecycleMap: Map<string, RowLifecycleKind>;
     private currentViewportRowKeys: Set<string>;
@@ -438,11 +441,16 @@ export class ViewportSubscriptionStore {
             const visibleKeys = new Set<string>();
             const nextChangedKeys = new Set<string>();
 
+            // A display path shared by several canonical rows (NULL vs "", a member containing
+            // the separator) identifies none of them: index those rows by canonical key only.
+            this.ambiguousDisplay = ambiguousDisplayKeys(rows as Array<Record<string, unknown>>);
             const ingestRow = (row: Record<string, unknown>) => {
                 const displayKey = String(row._path || row._id || row._canonicalPath || '');
-                const canonicalKey = String(row._canonicalPath || displayKey);
+                const canonicalKey = String(row._canonicalPath || row._rowKey || displayKey);
                 if (!displayKey && !canonicalKey) return;
-                const keysToIndex = Array.from(new Set([displayKey, canonicalKey].filter(Boolean)));
+                const keysToIndex = Array.from(new Set([displayKey, canonicalKey].filter(
+                    (k) => Boolean(k) && (k === canonicalKey || !this.ambiguousDisplay.has(k)),
+                )));
                 keysToIndex.forEach((k) => visibleKeys.add(k));
 
                 const rawLifecycle = row._lifecycle ?? row._diffStatus;
@@ -582,10 +590,11 @@ export class ViewportSubscriptionStore {
             const applyCellPatch = (patch: StreamCellPatch) => {
                 const rawP = patch as unknown as Record<string, unknown>;
                 const resolvedColId = patch.colId || (typeof rawP.columnId === 'string' ? rawP.columnId : '');
+                const patchCanonical = patch.rowKey || (typeof rawP.canonicalPath === 'string' ? rawP.canonicalPath : '');
                 const keysToIndex = Array.from(new Set([
                     patch.displayPath || (typeof rawP.rowId === 'string' ? rawP.rowId : ''),
-                    patch.rowKey || (typeof rawP.canonicalPath === 'string' ? rawP.canonicalPath : ''),
-                ].filter(Boolean)));
+                    patchCanonical,
+                ].filter((k) => Boolean(k) && (k === patchCanonical || !this.ambiguousDisplay.has(k)))));
                 if (keysToIndex.length === 0 || !resolvedColId) return;
 
                 keysToIndex.forEach((rk) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { rowIdentity } from '../runtime/rowIdentity';
 import React from 'react';
 import Icons from '../utils/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
@@ -514,13 +515,7 @@ export function useRenderHelpers({
                     && col.id !== '__row_number__'
                     && col.id !== '__row_checkbox__'
                 ) {
-                    const liveRowKey = String(
-                        rowData._canonicalPath
-                        || rowData._path
-                        || rowData._id
-                        || row.id
-                        || ''
-                    );
+                    const liveRowKey = String(rowIdentity(rowData) || row.id || '');
                     if (liveRowKey) {
                         const liveRowLabel = String(rowData._path || rowData._id || row.id || '').replace(/\|\|\|/g, ' › ');
                         const liveColLabel = typeof col.columnDef?.header === 'string' && col.columnDef.header.trim()

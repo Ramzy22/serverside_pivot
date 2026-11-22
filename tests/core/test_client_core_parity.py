@@ -277,3 +277,17 @@ def test_client_transport_dispose_releases_and_reinitialises(transport):
     reply = transport(rows, request, {"disposeBetween": True})
     assert "response" in reply, reply.get("error")
     assert reply["telemetry"]["coreServed"] is True and reply["telemetry"]["wasmReady"] is True
+
+
+def test_ambiguous_expansion_is_not_guessed(client):  # REQ-ID-001, F-EXPAND-EMPTY
+    """A display path with an empty member cannot say NULL or "": neither mode guesses."""
+    from pivot_engine.transport.core_bridge import CoreUnsupported, _expanded
+
+    table = _table([{"r": "A", "c": None, "k": "K1", "v": 1.0, "n": 1}, {"r": "A", "c": "", "k": "K1", "v": 2.0, "n": 1}])
+    for expanded in ({"A|||": True}, {"": True}, [["A", ""]]):
+        reply = client({"rowFields": ["r", "c", "k"], "colFields": [], "valConfigs": [{"field": "v", "agg": "sum"}],
+                        "sorting": [], "filters": {}, "expanded": expanded}, table)
+        assert "empty or NULL member" in reply.get("unsupported", ""), reply
+    with pytest.raises(CoreUnsupported, match="empty or NULL member"):
+        _expanded([["A", ""]], ["r", "c", "k"], {"r": "string", "c": "string", "k": "string"})
+    assert _expanded([["A"]], ["r", "c", "k"], {"r": "string", "c": "string", "k": "string"}) == frozenset({("A",)})

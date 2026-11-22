@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+import { canonicalRowKey } from './rowIdentity';
 
 import { GRAND_TOTAL_ROW_ID, isGrandTotalRow } from '../hooks/usePivotNormalization';
 
@@ -62,7 +63,8 @@ export function useRuntimeViewportTableData({
         nextData = nextData.filter(/** @param {any} [row] @returns {any} */ (row) => {
           if (!row) return false;
           if (isGrandTotalRow(row)) return true;
-          const candidates = [row._canonicalPath, row._path, row._id, row.id].filter(Boolean).map(String);
+          const canonical = canonicalRowKey(row);
+          const candidates = canonical ? [canonical] : [row._path, row._id, row.id].filter(Boolean).map(String);
           return candidates.some(/** @param {any} [k] @returns {any} */ (k) => liveSubscriptionStore.hasRowChanged(k));
         });
       }
@@ -75,7 +77,8 @@ export function useRuntimeViewportTableData({
       baseData = baseData.filter(/** @param {any} [row] @returns {any} */ (row) => {
         if (!row) return false;
         if (isGrandTotalRow(row)) return true;
-        const candidates = [row._canonicalPath, row._path, row._id, row.id].filter(Boolean).map(String);
+        const canonical = canonicalRowKey(row);
+          const candidates = canonical ? [canonical] : [row._path, row._id, row.id].filter(Boolean).map(String);
         return candidates.some(/** @param {any} [k] @returns {any} */ (k) => liveSubscriptionStore.hasRowChanged(k));
       });
     }
