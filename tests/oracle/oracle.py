@@ -302,6 +302,52 @@ def _min_or_none(values: Sequence[Any]) -> Any:
     return min(present) if present else None
 
 
+def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[Row]:
+    """REQ-LAYOUT-002: the leaves, ordered by the sort entries in precedence, then every row dimension
+    ascending (NULLS LAST throughout); the grand total last."""
+    depth = len(query.rows)
+    aliases = {m.alias for m in query.measures}
+    leaves = sorted({_key(r, query.rows, depth) for r in e}, key=repr)
+    values = {c: _measures(query, [r for r in source if _key(r, query.rows, depth) == c]) for c in leaves}
+
+    def sort_value(c: Tuple[Any, ...], entry: Tuple[Any, ...]) -> Any:
+        f = entry[0]
+        absolute = len(entry) > 2 and bool(entry[2])
+        by = entry[3] if len(entry) > 3 else None
+        member = entry[4] if len(entry) > 4 else None
+        if f in aliases and member is not None:
+            m = next(m for m in query.measures if m.alias == f)
+            v = aggregate(m.agg, [r for r in source if _key(r, query.rows, depth) == c
+                                  and tuple(r.get(k) for k in query.columns) == tuple(member)], m.field, m.weight, m.q)
+        elif f in aliases:
+            v = values[c][f]
+        elif by is not None:
+            level = list(query.rows).index(f) + 1
+            v = _min_or_none([r.get(by) for r in source if _key(r, query.rows, level) == c[:level]])
+        else:
+            v = c[list(query.rows).index(f)]
+        return None if v is None else (abs(v) if absolute else v)
+
+    def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
+        for entry in query.sort:
+            c = _nulls_last(sort_value(x, entry), sort_value(y, entry), bool(entry[1]))
+            if c:
+                return c
+        for i in range(depth):
+            c = _nulls_last(x[i], y[i], False)
+            if c:
+                return c
+        return 0
+
+    import functools
+
+    out = [Row(c, values[c]) for c in sorted(leaves, key=functools.cmp_to_key(compare))]
+    out.append(Row((), _measures(query, source)))
+    if query.derived:
+        _derive(query, out)
+    return out
+
+
 def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
     """Flattened visible tree in hierarchical order: grand total first, each group before its
     descendants; with ``subtotals="after"`` the reverse (post-order: grand total last)."""
@@ -309,6 +355,8 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
     totals_source = e if query.totals == "visible" else e0
     expanded = None if query.expanded is None else {tuple(p) for p in query.expanded}
 
+    if query.subtotals == "none" and query.rows:
+        return _flat(query, e, totals_source)
     post_order = query.subtotals == "after"
     out: List[Row] = []
 

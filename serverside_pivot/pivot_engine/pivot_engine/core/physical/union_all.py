@@ -230,6 +230,9 @@ def tree(
     union, ancestor = _with_ancestor_measures(union, parts, plan)
     union, member_key = _with_member_keys(union, source, plan)
     union, cell_sort = _with_cell_sorts(union, source, plan)
+    if q.subtotals == "none":
+        flat = _flat_order(union, plan, member_key, cell_sort)
+        return _with_derived(union, flat, plan) if q.derived else (union, flat)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
         below = (union[DEPTH] >= i).cast("int8")  # 1 for the descendants of a level-i group
@@ -329,6 +332,29 @@ def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> 
         union = joined.select(*[joined[c] for c in union.columns],
                               *[joined[names[(i, a)]] for a in dict.fromkeys(measures)])
     return union, names
+
+
+def _flat_order(union: Any, plan: LogicalPlan, member_key: Dict[str, str],
+                cell_sort: Dict[Tuple[int, int], str]) -> List[Any]:
+    """REQ-LAYOUT-002: leaves ordered by the sort entries in precedence, then every row dimension; grand total last."""
+    leaf = len(plan.rows)
+    order: List[Any] = [(union[DEPTH] == 0).cast("int8")]
+    for n, (field, desc, is_measure, absolute) in enumerate(plan.sort):
+        if is_measure and (leaf, n) in cell_sort:
+            value = union[cell_sort[(leaf, n)]]
+        elif field in member_key:
+            value = union[member_key[field]]
+        else:
+            value = union[field]
+        if absolute:
+            value = value.abs()
+        order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
+    ordered = {field for field, _d, is_measure, absolute in plan.sort
+               if not is_measure and not absolute and field not in member_key}
+    for k in plan.rows:
+        if k not in ordered:  # an entry already orders by this value: a tie-break adds nothing
+            order += [union[k].isnull().cast("int8"), union[k].asc()]
+    return order
 
 
 def _with_member_keys(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[str, str]]:

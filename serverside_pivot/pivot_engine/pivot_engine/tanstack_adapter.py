@@ -2419,6 +2419,31 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
     @row_scoped
+    async def _core_flat_view(self, pivot_spec: Any, start_row: int, end_row: int,
+                              include_grand_total: bool) -> Optional[Dict[str, Any]]:
+        """The flat tabular view from the core (``PIVOT_CORE=on``), or None for the legacy flat path."""
+        from .runtime import core_shadow
+        from .transport.core_bridge import CoreUnsupported, core_hierarchy_view
+
+        if core_shadow.core_mode() != "on":
+            return None
+        resolve = getattr(self.controller, "resolve_table", None)
+        if resolve is None:
+            return None
+        cache = self.__dict__.setdefault("_core_total_rows_cache", {})
+        try:
+            view = await run_in_executor_scoped(
+                asyncio.get_running_loop(), None,
+                lambda: core_hierarchy_view(resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
+                                            include_grand_total_row=include_grand_total, total_cache=cache,
+                                            flat=True),
+            )
+        except CoreUnsupported as exc:
+            core_shadow.record_unsupported(exc.reasons)
+            return None
+        core_shadow.record_served("hierarchy")
+        return view
+
     async def _hierarchy_view_routed(
         self,
         pivot_spec: Any,
@@ -2938,6 +2963,11 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             (_request_layout_mode == "tabular" and not _show_subtotal_footers)
             or (not _request_layout_mode and request.include_subtotals is False)
         )
+        # REQ-LAYOUT-002: the flat tabular layout is served by the core when it can
+        # express the request; the hierarchy branch below builds the response from its view.
+        _core_flat_view = await self._core_flat_view(pivot_spec, start_row, end_row, include_grand_total)             if _use_flat_path else None
+        if _core_flat_view is not None:
+            _use_flat_path = False
         if _use_flat_path:
             safe_start = max(int(start_row or 0), 0)
             safe_end = max(
@@ -3115,7 +3145,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     )
 
             hierarchy_view_started_at = time.perf_counter()
-            hierarchy_view = await self._hierarchy_view_routed(
+            hierarchy_view = _core_flat_view if _core_flat_view is not None else await self._hierarchy_view_routed(
                 pivot_spec,
                 target_paths,
                 start_row,

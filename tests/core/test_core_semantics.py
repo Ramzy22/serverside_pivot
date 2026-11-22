@@ -183,7 +183,7 @@ def queries(draw):
             # REQ-SORT-004: a pivot cell, possibly outside the returned column window
             sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),)),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
-                      totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after"])),
+                      totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after", "none"])),
                       expanded=expanded, window=window,
                       columns=columns, column_members=members, derived=derived, categories=categories)
 

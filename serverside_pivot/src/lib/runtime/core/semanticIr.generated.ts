@@ -54,9 +54,9 @@ export interface PivotQuery {
   }[];
   totals?: "visible" | "all_data";
   /**
-   * REQ-LAYOUT-001: a group row before its descendants (pre-order, default) or after them (post-order).
+   * REQ-LAYOUT-001: a group row before its descendants (pre-order, default) or after them (post-order). 'none' (REQ-LAYOUT-002): no group rows, the leaves as a flat table ordered by the sort entries.
    */
-  subtotals?: "before" | "after";
+  subtotals?: "before" | "after" | "none";
   expanded?: [unknown, ...unknown[]][] | null;
   window?: {
     offset?: number;

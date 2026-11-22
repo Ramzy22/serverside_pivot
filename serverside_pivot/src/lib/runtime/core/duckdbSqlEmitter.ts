@@ -223,6 +223,9 @@ function pathKey(path: unknown[]): string {
 }
 
 function levels(query: PivotQuery): Level[] {
+    if (query.subtotals === 'none') { // REQ-LAYOUT-002: the grand total and the leaves; expansion does not apply
+        return [...new Set([0, query.rows.length])].map((d) => ({ depth: d, keys: query.rows.slice(0, d), visibleParents: null }));
+    }
     const expanded = query.expanded === undefined || query.expanded === null ? null : query.expanded.map((p) => [...p]);
     const expandedKeys = expanded ? new Set(expanded.map(pathKey)) : null;
     const out: Level[] = [];
@@ -412,7 +415,22 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         tree = '__keyed';
     }
     const order: string[] = [];
-    rows.forEach((k, idx) => {
+    if (query.subtotals === 'none') { // REQ-LAYOUT-002: sort entries in precedence, then the row dimensions; grand total last
+        const leaf = rows.length;
+        order.push(`(CASE WHEN ${DEPTH} = 0 THEN 1 ELSE 0 END) ASC`);
+        const ordered = new Set<string>();
+        sort.forEach((s, n) => {
+            let expr: string;
+            if (!rows.includes(s.field) && Array.isArray(s.member)) expr = quoteIdent(`__cell${leaf}_${n}`);
+            else if (!rows.includes(s.field)) expr = quoteIdent(`__sort${leaf}_${s.field}`);
+            else if (typeof s.by === 'string') expr = quoteIdent(`__key${rows.indexOf(s.field) + 1}`);
+            else { expr = quoteIdent(s.field); if (!s.absolute) ordered.add(s.field); }
+            if (s.absolute) expr = `abs(${expr})`;
+            order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
+        });
+        rows.forEach((k) => { if (!ordered.has(k)) order.push(`(${quoteIdent(k)} IS NULL) ASC`, `${quoteIdent(k)} ASC`); });
+    }
+    if (query.subtotals !== 'none') rows.forEach((k, idx) => {
         const i = idx + 1;
         // REQ-LAYOUT-001: the group row before (pre-order) or after (post-order) its descendants.
         order.push(`(CASE WHEN ${DEPTH} >= ${i} THEN 1 ELSE 0 END) ${query.subtotals === 'after' ? 'DESC' : 'ASC'}`);

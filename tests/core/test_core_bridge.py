@@ -463,3 +463,47 @@ def test_column_pivot_sorts_are_core_served_and_match_legacy(field, desc):
     core = run("on")
     assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
     assert core == run("off")
+
+
+@pytest.mark.parametrize("totals", [False, True])
+@pytest.mark.parametrize("window", [(0, 99), (0, 1), (2, 4), (4, 9)])
+@pytest.mark.parametrize("sorting", [[], [{"id": "sales_sum", "desc": True}], [{"id": "country", "desc": True}]])
+def test_flat_tabular_layout_is_core_served_and_matches_legacy(totals, window, sorting):
+    """REQ-LAYOUT-002: tabular without subtotals = the leaves in sort order, grand total last."""
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    def run(mode):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
+                "region": ["North", "North", "South", "East", "East"], "country": ["USA", "Canada", "Brazil", "Japan", "Korea"],
+                "sales": [1.0, 2.0, 4.0, 8.0, 3.0]}))
+            request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA, table="s",
+                columns=[{"id": "region"}, {"id": "country"},
+                         {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+                filters={}, sorting=sorting, grouping=["region", "country"], aggregations=[],
+                pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=False,
+                layout_mode="tabular", show_subtotal_footers=False)
+            response = asyncio.run(adapter.handle_virtual_scroll_request(request, window[0], window[1], expanded_paths=[]))
+            return response.total_rows, [(r.get("_path"), bool(r.get("_isTotal")), r.get("sales_sum"), r.get("depth"),
+                                          bool(r.get("_has_children"))) for r in response.data]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = run("on")
+    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    legacy = run("off")
+    assert core == legacy, (core, legacy)

@@ -224,7 +224,8 @@ class PivotQuery:
     measure_filters: Tuple[MeasureFilter, ...] = ()
     sort: Tuple[SortKey, ...] = ()
     totals: str = "visible"  # REQ-TOT-003 / REQ-TOT-004
-    # REQ-LAYOUT-001: a group row "before" its descendants (pre-order) or "after" them (post-order).
+    # REQ-LAYOUT-001: a group row "before" its descendants (pre-order) or "after" them (post-order);
+    # REQ-LAYOUT-002: "none" = no group rows, a flat table of the leaves.
     subtotals: str = "before"
     expanded: Optional[FrozenSet[Tuple[Any, ...]]] = None  # None = everything expanded
     window: Window = field(default_factory=Window)
@@ -324,8 +325,8 @@ class PivotQuery:
                     raise IRValidationError(f"sort member {list(s.member)!r} does not match the column dimensions.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
-        if self.subtotals not in {"before", "after"}:
-            raise IRValidationError(f"subtotals must be 'before' or 'after', not {self.subtotals!r}.")
+        if self.subtotals not in {"before", "after", "none"}:
+            raise IRValidationError(f"subtotals must be 'before', 'after' or 'none', not {self.subtotals!r}.")
         if self.window.offset < 0 or (self.window.limit is not None and self.window.limit < 0):
             raise IRValidationError("window offset/limit must be non-negative.")
         if self.expanded is not None:

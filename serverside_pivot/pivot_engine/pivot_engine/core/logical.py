@@ -64,6 +64,8 @@ def plan(query: PivotQuery) -> LogicalPlan:
     )
     # A level with no expanded parent shows no node; pruning it is exact.
     levels = tuple(level for level in candidates if level.visible_parents != frozenset())
+    if query.subtotals == "none":  # REQ-LAYOUT-002: the grand total and the leaves; expansion does not apply
+        levels = tuple(Level(d, tuple(query.rows[:d]), None) for d in sorted({0, len(query.rows)}))
     by_level: Dict[int, Tuple[MeasureFilter, ...]] = {}
     for mf in query.measure_filters:
         by_level[mf.level] = by_level.get(mf.level, ()) + (mf,)

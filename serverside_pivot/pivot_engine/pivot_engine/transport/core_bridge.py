@@ -622,6 +622,7 @@ def core_hierarchy_view(
     total_cache: Optional[Dict[str, int]] = None,
     capture: Optional[Dict[str, Any]] = None,
     tabular_subtotals: bool = False,
+    flat: bool = False,
 ) -> Dict[str, Any]:
     """The ``run_hierarchy_view`` contract, answered by the core.
 
@@ -639,11 +640,12 @@ def core_hierarchy_view(
     """
     started = time.perf_counter()
     relation = resolve(spec.table)
-    if tabular_subtotals:
+    if tabular_subtotals or flat:
         target_paths = [["__ALL__"]]  # every group is open: collapse state does not apply to a flat layout
     cell_sorts: List[Tuple[int, str, str, bool]] = []
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row,
-                          subtotals="after" if tabular_subtotals else "before", cell_sorts=cell_sorts)
+                          subtotals="none" if flat else ("after" if tabular_subtotals else "before"),
+                          cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     query, keys = _resolve_members(query, spec, resolver, cell_sorts)
     if capture is not None:
@@ -655,9 +657,9 @@ def core_hierarchy_view(
         return _legacy_row(record, query, keys, totals_column)
 
     nodes = _visible_node_count(query, relation, total_cache) - 1
-    if tabular_subtotals:
+    if tabular_subtotals or flat:
         return _post_order_view(query, resolver, legacy, nodes, int(start_row), int(end_row), totals,
-                                include_grand_total_row, started)
+                                include_grand_total_row, started, flat=flat)
     grand_total = None
     if totals and int(start_row) == 0:  # the core orders the grand total first: one query serves both
         limit = None if query.window.limit is None else query.window.limit + 1
@@ -690,8 +692,8 @@ def core_hierarchy_view(
 
 def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: Callable[[Mapping[str, Any]], Dict[str, Any]],
                      nodes: int, start_row: int, end_row: int, totals: bool, include_grand_total_row: bool,
-                     started: float) -> Dict[str, Any]:
-    """Tabular subtotals: the core's post-order is the legacy list (grand total last, at index ``nodes``)."""
+                     started: float, *, flat: bool = False) -> Dict[str, Any]:
+    """Grand total last, at index ``nodes``: tabular subtotals (post-order) or the flat layout (leaves)."""
     depth = len(query.rows)
     grand_total = None
     rows: List[Dict[str, Any]] = []
@@ -700,7 +702,9 @@ def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: 
         if not record["path"]:
             grand_total = row
             continue
-        if len(record["path"]) < depth:
+        if flat:  # leaves of a flat table: nothing to expand
+            row.update({"_has_children": False, "_is_expanded": False, "_depth": row["depth"]})
+        elif len(record["path"]) < depth:
             row["_isTabularSubtotal"] = True
         rows.append(row)
     if totals and grand_total is None and include_grand_total_row:
@@ -719,7 +723,8 @@ def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: 
         "grand_total_row": grand_total if include_grand_total_row else None,
         "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
-        "profile": {"controller": {"operation": "hierarchy_view", "engine": "core", "layout": "tabular_subtotals",
+        "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
+                                   "layout": "flat" if flat else "tabular_subtotals",
                                    "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
     }
 
