@@ -99,3 +99,13 @@ def test_distinct_values_respect_filters_and_validate():
     assert distinct_values(DistinctQuery("t", "c", (Predicate("v", ">", 2),)), con.table) == (["y"], 1)
     with pytest.raises(IRValidationError, match="distinct column references unknown column 'zz'."):
         distinct_values(DistinctQuery("t", "zz"), con.table)
+
+
+def test_dataset_fingerprint_detects_any_committed_change():
+    from pivot_engine.core.exec import dataset_fingerprint
+
+    con = _con([{"r": "A", "c": "x", "v": 1}, {"r": None, "c": "y", "v": 5}])
+    before = dataset_fingerprint(con.table("t"))
+    assert dataset_fingerprint(con.table("t")) == before
+    con.raw_sql("UPDATE t SET v = 6 WHERE c = 'y'")
+    assert dataset_fingerprint(con.table("t")) != before

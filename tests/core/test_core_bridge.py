@@ -240,3 +240,26 @@ def test_absolute_sort_maps_and_orders_by_magnitude():  # REQ-SORT-002
     assert q.sort == (SortKey("v_sum", True, True),)
     q = spec_to_query(spec(sort=[{"field": "v_sum", "order": "desc", "absoluteSort": True}]), True, SCHEMA)
     assert q.sort == (SortKey("v_sum", True, True),)
+
+
+def _drill(mode, payload, monkeypatch):
+    import asyncio
+
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    monkeypatch.setenv("PIVOT_CORE", mode)
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("d", pa.table({"region": ["North", "North", "South"], "v": [1, 2, 3]}))
+    request = TanStackRequest(operation=TanStackOperation.GET_DATA, table="d", columns=[{"id": "v_sum", "aggregationField": "v",
+                              "aggregationFn": "sum"}], filters={}, sorting=[], grouping=["region"], aggregations=[])
+    result = asyncio.run(adapter.handle_drill_through(request, payload))
+    return result.get("total_rows", result.get("totalRows"))
+
+
+@pytest.mark.parametrize("mode", [
+    pytest.param("off", marks=pytest.mark.xfail(strict=True, reason="F-DRILL-FIELDS: legacy ignores rowFields")),
+    "on",
+])
+def test_legacy_drill_honours_row_fields(mode, monkeypatch):  # REQ-DET-001
+    assert _drill(mode, {"rowPath": "North", "rowFields": ["region"]}, monkeypatch) == 2
+    assert _drill(mode, {"row_path": "North", "row_fields": ["region"]}, monkeypatch) == 2

@@ -175,6 +175,7 @@ def record_shadow(spec_summary: Mapping[str, Any], legacy: Mapping[str, Any],
                           grand_total_requested=bool(spec_summary.get("include_grand_total", True)))
     for d in diffs:
         d["class"] = classify(d, spec_summary=spec_summary, core_rows=core.get("rows") or [], legacy=legacy)
+    _mark_skew(spec_summary, diffs)
     with _LOCK:
         STATS["shadow_requests"] += 1
         STATS["shadow_identical" if not diffs else "shadow_differing"] += 1
@@ -227,12 +228,21 @@ def record_drill_shadow(summary: Mapping[str, Any], legacy: Mapping[str, Any],
         # Unsorted legacy pages have no defined order, so a page can hold other records (F-DRILL-ORDER).
         unordered_page = d["kind"] == "drill_rows" and not summary.get("sorted") and not any(
             x["kind"] == "drill_total" for x in diffs)
-        d["class"] = "legacy:F-DRILL-ORDER" if unordered_page else "unclassified"
+        d["class"] = ("legacy:F-DRILL-FIELDS" if summary.get("row_fields_ignored")
+                      else "legacy:F-DRILL-ORDER" if unordered_page else "unclassified")
     _record("drill", summary, diffs)
     return diffs
 
 
+def _mark_skew(summary: Mapping[str, Any], diffs: List[Dict[str, Any]]) -> None:
+    """A write committed between the two reads: the pair is not comparable (never a verdict)."""
+    if summary.get("concurrent_write"):
+        for d in diffs:
+            d["class"] = "skew:concurrent-write"
+
+
 def _record(kind: str, summary: Mapping[str, Any], diffs: List[Dict[str, Any]]) -> None:
+    _mark_skew(summary, diffs)
     with _LOCK:
         STATS[f"{kind}_shadow_requests"] += 1
         STATS[f"{kind}_shadow_identical" if not diffs else f"{kind}_shadow_differing"] += 1

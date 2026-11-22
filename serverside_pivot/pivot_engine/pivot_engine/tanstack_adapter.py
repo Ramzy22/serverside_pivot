@@ -1934,6 +1934,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if resolve is None:
             core_shadow.record_unsupported(["controller without resolve_table"])
             return await legacy()
+        before = await self._shadow_fingerprint(mode, spec)
         try:
             core_result = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
@@ -1950,9 +1951,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_served("drill")
             return core_result
         legacy_result = await legacy()
+        after = await self._shadow_fingerprint(mode, spec)
         try:
             core_shadow.record_drill_shadow(
-                {"table": getattr(spec, "table", None), "sorted": bool(sort_col), "search": bool(text_filter)},
+                {"table": getattr(spec, "table", None), "sorted": bool(sort_col), "search": bool(text_filter),
+                 "concurrent_write": before != after,
+                 # Legacy reads only row_fields / pathFields; a rowFields-only payload loses its path.
+                 "row_fields_ignored": bool((drill_payload or {}).get("rowFields"))
+                 and not ((drill_payload or {}).get("row_fields") or (drill_payload or {}).get("pathFields"))},
                 legacy_result, core_result,
             )
         except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
@@ -2451,6 +2457,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             return await legacy()
         cache = self.__dict__.setdefault("_core_total_rows_cache", {})
         capture: Optional[Dict[str, Any]] = {} if mode == "shadow" and core_shadow.capture_enabled() else None
+        before = await self._shadow_fingerprint(mode, pivot_spec)
         try:
             core_view = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
@@ -2467,8 +2474,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_served("hierarchy")
             return core_view
         legacy_view = await legacy()
+        after = await self._shadow_fingerprint(mode, pivot_spec)
         try:
             summary = core_shadow.summarize_spec(pivot_spec)
+            summary["concurrent_write"] = before != after
             summary["has_case_variants"] = _has_case_variant_siblings(core_view.get("rows") or [])
             summary.update(totals=bool(getattr(pivot_spec, "totals", False)), include_grand_total=include_grand_total,
                            window=[start_row, end_row], expanded=repr(target_paths)[:200])
@@ -3694,6 +3703,20 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             return routed
         return await self._legacy_unique_values(spec, column_id, search)
 
+    async def _shadow_fingerprint(self, mode: str, spec: Any) -> Any:
+        """Fingerprint of the scoped dataset in shadow mode, so concurrent writes are detected (None otherwise)."""
+        if mode != "shadow":
+            return None
+        from .core.exec import dataset_fingerprint
+
+        resolve = getattr(self.controller, "resolve_table", None)
+        try:
+            return await run_in_executor_scoped(
+                asyncio.get_running_loop(), None, lambda: dataset_fingerprint(resolve(spec.table))
+            )
+        except Exception:  # noqa: BLE001 - an unreadable fingerprint only makes the pair incomparable
+            return object()
+
     async def _unique_values_routed(
         self, spec: Any, column_id: str, *, search: str, limit: int, offset: int
     ) -> Optional[tuple]:
@@ -3705,6 +3728,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         resolve = getattr(self.controller, "resolve_table", None)
         if mode == "off" or resolve is None:
             return None
+        before = await self._shadow_fingerprint(mode, spec)
         try:
             core_result = await run_in_executor_scoped(
                 asyncio.get_running_loop(),
@@ -3718,8 +3742,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             core_shadow.record_served("unique_values")
             return core_result
         legacy_result = await self._legacy_unique_values(spec, column_id, search)
+        after = await self._shadow_fingerprint(mode, spec)
         try:
-            core_shadow.record_unique_shadow({"table": getattr(spec, "table", None), "column": column_id},
+            core_shadow.record_unique_shadow({"table": getattr(spec, "table", None), "column": column_id,
+                                              "concurrent_write": before != after},
                                              legacy_result, core_result)
         except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
             _adapter_logger.warning("core unique-values shadow comparison failed", exc_info=True)

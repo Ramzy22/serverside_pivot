@@ -13,6 +13,8 @@ Entries without a capture keep their heuristic class.  Usage::
     python scripts/shadow_referee.py artifacts/shadow [--json out.json]
 
 Exit status 1 when any core bug, unclassified or unattributed diff remains.
+Pairs stamped ``skew:concurrent-write`` (a write committed between the two
+reads) are counted but never judged.
 """
 
 from __future__ import annotations
@@ -95,7 +97,7 @@ def main(argv: List[str]) -> int:
                 verdict = referee(entry["capture"]) if entry.get("capture", {}).get("data") else None
                 for diff in entry["diffs"]:
                     cls = diff.get("class", "unclassified")
-                    if verdict is not None:
+                    if verdict is not None and not cls.startswith("skew:"):
                         if verdict["agrees"]:
                             cls = attribute(diff, verdict)
                             if cls == "legacy:oracle-confirmed":

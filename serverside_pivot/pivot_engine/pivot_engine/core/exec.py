@@ -150,3 +150,18 @@ def distinct_values(query: DistinctQuery, resolve: Resolver) -> Tuple[List[Any],
     verify_scoped(page)
     verify_scoped(count)
     return page.to_pyarrow().column(query.column).to_pylist(), int(count.to_pyarrow().as_py())
+
+
+def dataset_fingerprint(relation: Any) -> Tuple[Any, ...]:
+    """(row count, per-column hash sums) of a relation: changes when its committed contents change.
+
+    Used to stamp a comparison of two reads (shadow mode) so a write landing
+    between them is detected instead of being mistaken for a semantic diff.
+    """
+    columns = list(relation.columns)
+    expr = relation.aggregate(
+        __n=relation.count(), **{f"__h{i}": (relation[c].hash() % 1000000007).sum() for i, c in enumerate(columns)}
+    )
+    verify_scoped(expr)
+    row = expr.to_pyarrow().to_pylist()[0]
+    return tuple(row[k] for k in ["__n", *(f"__h{i}" for i in range(len(columns)))])
