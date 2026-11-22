@@ -252,7 +252,10 @@ class Pager:
         unwindowed = replace(query, window=Window())
         unwindowed.validate({name: type_family(dtype) for name, dtype in schema.items()})
         plan = logical_plan(unwindowed)
-        union, order = TREES[strategy or choose(plan, schema)](plan, relation)
+        from .physical.union_all import prepared
+
+        relation = prepared(relation, unwindowed)  # the strategy chooser sees the category and axis columns
+        union, order = TREES[strategy or choose(plan, relation.schema())](plan, relation)
         numbered = union.mutate(**{ROW: ibis.row_number().over(order_by=order) if order else ibis.literal(0)})
         verify_scoped(numbered)
         backend = ibis.get_backend(numbered)
