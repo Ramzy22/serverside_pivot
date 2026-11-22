@@ -96,7 +96,7 @@ def test_expansion_paths_are_coerced_and_filtered():
      "filter on unknown field 'nope'"),
     (dict(having=[{"field": "v_sum"}]), "having"),
     (dict(group_allow_unbalanced=True), "unbalanced hierarchy"),
-    (dict(measure_axis=MeasureAxisConfig(placement="rows")), "measure axis"),
+    (dict(measure_axis=MeasureAxisConfig(placement="columns")), "measure axis on columns"),
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
     (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "v", "sortType": "tenor"}]),
      "custom member order with a sort type"),
@@ -507,3 +507,69 @@ def test_flat_tabular_layout_is_core_served_and_matches_legacy(totals, window, s
     assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
     legacy = run("off")
     assert core == legacy, (core, legacy)
+
+
+@pytest.mark.parametrize("subtotals", [True, False])
+@pytest.mark.parametrize("rows", [["region", "Measure Name", "desk"], ["Measure Name", "region"], ["region", "Measure Name"]])
+@pytest.mark.parametrize("agg", ["sum", "avg", "min", "count"])
+@pytest.mark.parametrize("variant", ["plain", "suppress_empty", "reversed_order", "label_desc"])
+def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subtotals):
+    """REQ-DIM-002: one common aggregation over plain measures = legacy's unpivot, exactly.
+
+    Every level carries a sort entry: with only the label sorted, legacy leaves the other
+    levels in engine order (F-AXIS-ORDER).  Legacy's flat layout reports the first member's
+    grand total (F-AXIS-FLAT-GT); the core's equals its (and legacy's) hierarchy grand total.
+    """
+    import asyncio
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import core_shadow
+    from pivot_engine.runtime.service import PivotRuntimeService
+    from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
+
+    val_configs = [{"field": "sales", "agg": agg, "alias": f"sales_{agg}"}, {"field": "cost", "agg": agg, "alias": f"cost_{agg}"}]
+    orders = (1, 0) if variant == "reversed_order" else (0, 1)
+    sort = [{"id": "Measure Name", "desc": variant == "label_desc", "sortKeyField": "__sortkey__Measure Name"},
+            *({"id": r, "desc": False} for r in rows if r != "Measure Name")]
+
+    def run(mode, include_subtotals):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+                "region": ["North", "North", "South", "South", "East"], "desk": ["Rates", "Credit", "Rates", "Credit", "Rates"],
+                "sales": [100.0, 50.0, 80.0, 20.0, 7.0], "cost": [40.0, None, 30.0, 5.0, None]}))
+            request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA, table="t",
+                columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
+                filters={}, custom_dimensions=[],
+                measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount",
+                              "suppressEmptyMembers": variant == "suppress_empty",
+                              "members": [{"measureAlias": f"sales_{agg}", "label": "Sales", "order": orders[0]},
+                                          {"measureAlias": f"cost_{agg}", "label": "Cost", "order": orders[1]}]},
+                sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+                totals=True, row_totals=False, include_subtotals=include_subtotals, version=2)
+            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
+            return response.total_rows, [(r.get("_path"), r.get("Amount"), r.get("depth")) for r in response.data]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    def split(view):
+        total_rows, data = view
+        return total_rows, [r for r in data if r[0] != "__grand_total__"], [r for r in data if r[0] == "__grand_total__"]
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = split(run("on", subtotals))
+    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    legacy = split(run("off", subtotals))
+    assert core[:2] == legacy[:2], (core, legacy)
+    if subtotals:
+        assert core[2] == legacy[2]
+    else:  # F-AXIS-FLAT-GT: the core's flat grand total is the hierarchy's
+        assert core[2] == split(run("off", True))[2], (core[2], legacy[2])

@@ -58,6 +58,9 @@ def canonical(query: PivotQuery) -> str:
         body["categories"] = [[c.name, [[_canonical_filter(r.when, scalar), CanonicalScalarCodec.encode(r.label)]
                                         for r in c.rules], CanonicalScalarCodec.encode(c.fallback)]
                               for c in query.categories]
+    if query.unpivot is not None:  # REQ-DIM-002
+        u = query.unpivot
+        body["unpivot"] = [u.label, u.value, u.key, u.drop_nulls, [[m.label, m.field, m.order] for m in u.members]]
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
 
@@ -79,11 +82,11 @@ def fingerprint(query: PivotQuery) -> str:
 
 def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> Any:
     """``strategy=None`` lets the physical planner choose."""
-    from .physical.union_all import with_categories
+    from .physical.union_all import prepared
 
     relation = resolve(query.dataset)
     query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
-    relation = with_categories(relation, query.categories)  # REQ-DIM-001: strategies see the category columns
+    relation = prepared(relation, query)  # REQ-DIM-001/002: strategies see the category and measure-axis columns
     schema = relation.schema()
     plan = logical_plan(query)
     expr = STRATEGIES[strategy or choose(plan, schema)](plan, relation)

@@ -18,6 +18,7 @@ import pyarrow as pa
 
 from ..ir import CASE_FOLDING_OPS, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
+from ..registry import type_family
 from .lowering import lower as lower_measure
 
 __all__ = ["DEPTH", "LevelAggregate", "build", "filtered", "lower", "output_columns", "tree", "tree_of"]
@@ -134,9 +135,38 @@ def with_categories(relation: Any, categories: Sequence[Any]) -> Any:
     return relation
 
 
-def filtered(relation: Any, query: Any) -> Any:
-    """E0 before measure filters: the scoped relation, with its categories, with the row filters applied."""
+def with_unpivot(relation: Any, unpivot: Any) -> Any:
+    """The measure axis (REQ-DIM-002): one record per member; idempotent (its columns are new)."""
+    if unpivot is None or unpivot.label in relation.columns:
+        return relation
+    schema = relation.schema()
+    family = unpivot.value_family({name: type_family(dtype) for name, dtype in schema.items()})
+    cast = "float64" if family == "floating" else ("string" if family == "string" else None)
+    branches = []
+    for m in unpivot.members:
+        value = relation[m.field] if cast is None else relation[m.field].cast(cast)
+        branch = relation.select(*[relation[c] for c in relation.columns],
+                                 ibis.literal(m.label, type="string").name(unpivot.label),
+                                 value.name(unpivot.value),
+                                 ibis.literal(m.order, type="int64").name(unpivot.key))
+        if unpivot.drop_nulls:
+            branch = branch.filter(branch[unpivot.value].notnull())
+        branches.append(branch)
+    out = branches[0]
+    for branch in branches[1:]:
+        out = out.union(branch, distinct=False)
+    return out
+
+
+def prepared(relation: Any, query: Any) -> Any:
+    """The relation the query sees: categories (REQ-DIM-001), then the measure axis (REQ-DIM-002)."""
     relation = with_categories(relation, getattr(query, "categories", ()))
+    return with_unpivot(relation, getattr(query, "unpivot", None))
+
+
+def filtered(relation: Any, query: Any) -> Any:
+    """E0 before measure filters: the prepared relation with the row filters applied."""
+    relation = prepared(relation, query)
     return relation.filter([_predicate(relation, p) for p in query.filters]) if query.filters else relation
 
 
@@ -213,7 +243,7 @@ def tree(
 ) -> Tuple[Any, List[Any]]:
     """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, and the order key."""
     q = plan.query
-    relation = with_categories(relation, q.categories)
+    relation = prepared(relation, q)
     schema = relation.schema()
     e0 = filtered(relation, q)
     e = _eligible(e0, plan)

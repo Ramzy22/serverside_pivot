@@ -24,7 +24,7 @@ from pivot_engine.core.exec import execute
 from pivot_engine.core.ir import from_wire, to_wire
 from pivot_engine.core.ir import (
     Category, CategoryRule, DerivedMeasure, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate,
-    PredicateGroup, SortKey, Window,
+    PredicateGroup, SortKey, Unpivot, UnpivotMember, Window,
 )
 
 from ..oracle.oracle import Measure as OMeasure
@@ -84,6 +84,9 @@ def _oracle(records, query: PivotQuery):
         derived=list(query.derived),
         categories=[(c.name, [(_to_oracle_filter(r.when), r.label) for r in c.rules], c.fallback)
                     for c in query.categories],
+        unpivot=None if query.unpivot is None else (
+            query.unpivot.label, query.unpivot.value, query.unpivot.key,
+            [(m.label, m.field, m.order) for m in query.unpivot.members], query.unpivot.drop_nulls),
     )
     rows = [(r.path, dict(r.values)) for r in oracle_pivot(oq, records)]
     end = None if query.window.limit is None else query.window.offset + query.window.limit
@@ -144,6 +147,19 @@ def queries(draw):
     measures = (MeasureRef(alias, agg, "v",
                            weight="w" if agg == "weighted_avg" else None,
                            q=draw(st.sampled_from([0.0, 0.25, 0.5, 0.9, 1.0])) if agg == "percentile" else None),)
+    unpivot = None
+    key_fields = ["w", "k", "n"] if categories else ["w", "k"]
+    if draw(st.booleans()):  # REQ-DIM-002: the measure axis as a row level (members over v and w)
+        fields = draw(st.lists(st.sampled_from(["v", "w"]), min_size=1, max_size=2, unique=True))
+        labels = draw(st.lists(st.sampled_from(["V", "W", "", "x|y"]), min_size=len(fields), max_size=len(fields),
+                               unique=True))
+        orders = draw(st.lists(st.integers(-1, 2), min_size=len(fields), max_size=len(fields)))
+        unpivot = Unpivot("mn", "mv", "mk", tuple(UnpivotMember(lab, f, o) for lab, f, o in zip(labels, fields, orders)),
+                          drop_nulls=draw(st.booleans()))
+        position = draw(st.integers(0, len(rows)))
+        rows = rows[:position] + ("mn",) + rows[position:]
+        measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q),)
+        key_fields = key_fields + ["mk"]
     mfs = ()
     if draw(st.booleans()):
         mfs = (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from([">", "<=", "="])),
@@ -156,7 +172,7 @@ def queries(draw):
                             absolute=agg not in {"min", "max"} and draw(st.booleans())),
                     # REQ-SORT-003: a member key (an integer and a string column, both with NULLs)
                     SortKey(rows[draw(st.integers(0, len(rows) - 1))], desc=draw(st.booleans()),
-                            by=draw(st.sampled_from(["w", "k", "n"] if categories else ["w", "k"])))]
+                            by=draw(st.sampled_from(key_fields)))]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
     window = Window()
     if draw(st.booleans()):
@@ -185,7 +201,8 @@ def queries(draw):
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after", "none"])),
                       expanded=expanded, window=window,
-                      columns=columns, column_members=members, derived=derived, categories=categories)
+                      columns=columns, column_members=members, derived=derived, categories=categories,
+                      unpivot=unpivot)
 
 
 NEEDLE = st.sampled_from(["a", "A", "", "|", "x_", "b"])

@@ -22,6 +22,8 @@ __all__ = [
     "Predicate",
     "PredicateGroup",
     "SortKey",
+    "Unpivot",
+    "UnpivotMember",
     "Window",
     "PREDICATE_OPS",
     "extend_schema",
@@ -193,6 +195,62 @@ def extend_schema(schema: Mapping[str, str], categories: Tuple[Category, ...]) -
 
 
 @dataclass(frozen=True)
+class UnpivotMember:
+    label: str  # the member's value in the label column
+    field: str  # the source column whose value the member's records carry
+    order: int  # the member's value in the key column (its display order)
+
+
+_NUMERIC = frozenset({"integer", "floating", "decimal"})
+
+
+@dataclass(frozen=True)
+class Unpivot:
+    """The measure axis (REQ-DIM-002): measures as members of a dimension.
+
+    Each record becomes one record per member, carrying every column plus
+    ``label`` (the member's label), ``value`` (the member's source value) and
+    ``key`` (the member's order); with ``drop_nulls`` a record whose value is
+    NULL is dropped.  Applied after the categories and before the row
+    filters, so the label is an ordinary dimension and ``value`` an ordinary
+    measure field.  Values share one type: floating when every source is
+    numeric, else the sources' common family, else text.
+    """
+
+    label: str
+    value: str
+    key: str
+    members: Tuple[UnpivotMember, ...]
+    drop_nulls: bool = False
+
+    def value_family(self, schema: Mapping[str, str]) -> str:
+        families = {schema[m.field] for m in self.members}
+        if families <= _NUMERIC:
+            return "floating"
+        return families.pop() if len(families) == 1 else "string"
+
+    def extend(self, schema: Mapping[str, str]) -> Dict[str, str]:
+        if not self.members:
+            raise IRValidationError("a measure axis needs at least one member.")
+        if len({m.label for m in self.members}) != len(self.members):
+            raise IRValidationError("measure axis member labels must be unique.")
+        names = [self.label, self.value, self.key]
+        if len(set(names)) != 3 or any(not n or n in schema for n in names):
+            raise IRValidationError(f"measure axis columns {names} are empty, repeated or collide with a column.")
+        for m in self.members:
+            if m.field not in schema:
+                raise IRValidationError(f"measure axis member {m.label!r} references unknown column {m.field!r}.")
+        return {**schema, self.label: "string", self.value: self.value_family(schema), self.key: "integer"}
+
+
+def relation_schema(schema: Mapping[str, str], categories: Tuple[Category, ...],
+                    unpivot: Optional[Unpivot]) -> Dict[str, str]:
+    """The schema the query sees: the dataset's, its categories, then the measure axis."""
+    out = extend_schema(schema, categories)
+    return out if unpivot is None else unpivot.extend(out)
+
+
+@dataclass(frozen=True)
 class DerivedMeasure:
     """A measure computed from base measures over the visible tree (REQ-AGG-005, REQ-AGG-007).
 
@@ -235,6 +293,7 @@ class PivotQuery:
     column_members: Tuple[Tuple[Any, ...], ...] = ()
     derived: Tuple[DerivedMeasure, ...] = ()
     categories: Tuple[Category, ...] = ()  # REQ-DIM-001: computed before filters, in order
+    unpivot: Optional[Unpivot] = None  # REQ-DIM-002: the measure axis, after the categories
 
     def cells(self) -> List[Tuple[int, Tuple[Any, ...], MeasureRef, str]]:
         """(member index, member, measure, output column) for every pivot cell."""
@@ -251,7 +310,7 @@ class PivotQuery:
 
     def validate(self, schema: Mapping[str, str]) -> PivotQuery:
         """``schema`` maps column -> type family ("string", "integer", "floating", "decimal", ...)."""
-        schema = extend_schema(schema, self.categories)
+        schema = relation_schema(schema, self.categories, self.unpivot)
         columns = set(schema)
 
         def need(name: Optional[str], what: str) -> None:
@@ -416,6 +475,7 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
             categories=categories_from_wire(obj.get("categories", ())),
+            unpivot=unpivot_from_wire(obj.get("unpivot")),
             expanded=None if expanded is None else frozenset(tuple(p) for p in expanded),
             window=Window(int(window.get("offset", 0)), window.get("limit")),
             columns=tuple(obj.get("columns", ())),
@@ -467,7 +527,22 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         out["subtotals"] = query.subtotals
     if query.categories:
         out["categories"] = categories_to_wire(query.categories)
+    if query.unpivot is not None:
+        out["unpivot"] = unpivot_to_wire(query.unpivot)
     return out
+
+
+def unpivot_to_wire(u: Unpivot) -> Dict[str, Any]:
+    return {"label": u.label, "value": u.value, "key": u.key, "dropNulls": u.drop_nulls,
+            "members": [{"label": m.label, "field": m.field, "order": m.order} for m in u.members]}
+
+
+def unpivot_from_wire(obj: Any) -> Optional[Unpivot]:
+    if obj is None:
+        return None
+    return Unpivot(str(obj["label"]), str(obj["value"]), str(obj["key"]),
+                   tuple(UnpivotMember(str(m["label"]), str(m["field"]), int(m["order"])) for m in obj["members"]),
+                   bool(obj.get("dropNulls", False)))
 
 
 def _freeze(value: Any) -> Any:

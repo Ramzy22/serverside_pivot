@@ -31,6 +31,9 @@ def to_oracle(query: Any) -> Query:
         derived=list(query.derived),
         categories=[(c.name, [(_filter(r.when), r.label) for r in c.rules], c.fallback)
                     for c in getattr(query, "categories", ())],
+        unpivot=None if getattr(query, "unpivot", None) is None else (
+            query.unpivot.label, query.unpivot.value, query.unpivot.key,
+            [(m.label, m.field, m.order) for m in query.unpivot.members], query.unpivot.drop_nulls),
     )
 
 

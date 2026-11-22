@@ -88,6 +88,30 @@ export interface PivotQuery {
     }[];
     fallback: string | number;
   }[];
+  /**
+   * REQ-DIM-002: the measure axis. Each record becomes one record per member, with the member's label, its source value and its order; applied after the categories, before the row filters.
+   */
+  unpivot?: {
+    label: string;
+    value: string;
+    key: string;
+    dropNulls?: boolean;
+    /**
+     * @minItems 1
+     */
+    members: [
+      {
+        label: string;
+        field: string;
+        order: number;
+      },
+      ...{
+        label: string;
+        field: string;
+        order: number;
+      }[]
+    ];
+  };
 }
 export interface Predicate {
   field: string;

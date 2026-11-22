@@ -183,6 +183,8 @@ class Query:
     derived: Sequence[Any] = ()  # objects with alias, func, of, of2, desc, frame, null_value (REQ-AGG-005/007)
     # REQ-DIM-001: (name, [(predicate, label), ...], fallback), evaluated in order on every record
     categories: Sequence[Tuple[str, Sequence[Tuple[Any, Any]], Any]] = ()
+    # REQ-DIM-002: (label, value, key, [(member label, field, order), ...], drop_nulls), after the categories
+    unpivot: Optional[Tuple[str, str, str, Sequence[Tuple[str, str, int]], bool]] = None
 
 
 # ----------------------------------------------------------------- engine
@@ -227,9 +229,25 @@ def with_categories(query: Query, data: Sequence[Record]) -> List[Record]:
     return out
 
 
+def with_unpivot(query: Query, data: Sequence[Record]) -> List[Record]:
+    """REQ-DIM-002: one record per (record, member); numeric values compare as floats."""
+    if query.unpivot is None:
+        return list(data)
+    label, value, key, members, drop_nulls = query.unpivot
+    out = []
+    for member_label, source, order in members:
+        for record in data:
+            v = record.get(source)
+            if v is None and drop_nulls:
+                continue
+            v = None if v is None else (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+            out.append({**record, label: member_label, value: v, key: order})
+    return out
+
+
 def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], List[Record]]:
     """Return (E0, E) per SEMANTICS §2."""
-    data = with_categories(query, data)
+    data = with_unpivot(query, with_categories(query, data))
     e0 = [r for r in data if in_scope(r, query.scope) and all(p(r) for p in query.filters)]
     passing: Dict[int, set] = {}
     for level in sorted({mf.level for mf in query.measure_filters}):

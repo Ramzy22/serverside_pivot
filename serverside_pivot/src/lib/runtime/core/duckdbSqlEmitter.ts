@@ -254,7 +254,7 @@ function frameBound(offset: number | null | undefined, isStart: boolean): string
 // ------------------------------------------------------------------ the emitter
 
 /** Distinct column members over E0 (scope ∧ row filters), each dimension ordered NULLS LAST (as `exec.column_members`). */
-// ------------------------------------------------------------------ categories (REQ-DIM-001)
+// ------------------------------------------------------------------ categories (REQ-DIM-001), measure axis (REQ-DIM-002)
 
 interface CategorySource {
     ctes: string[];
@@ -282,6 +282,30 @@ function withCategories(query: PivotQuery, options: EmitOptions): CategorySource
         relation = name;
         columns[c.name] = info;
     });
+    const axis = query.unpivot;
+    if (axis) { // REQ-DIM-002: the measure axis, one record per member, after the categories
+        const names = [axis.label, axis.value, axis.key];
+        if (new Set(names).size !== 3 || names.some((n) => !n || columns[n])) {
+            throw new EmitterUnsupported('measure axis columns collide with a column');
+        }
+        axis.members.forEach((m) => { if (!columns[m.field]) throw new EmitterUnsupported(`unknown column ${m.field}`); });
+        const families = new Set(axis.members.map((m) => columns[m.field].family));
+        const numeric = [...families].every((f) => f === 'integer' || f === 'floating' || f === 'decimal');
+        const valueInfo: ColumnInfo = numeric ? { family: 'floating', sqlType: 'DOUBLE' }
+            : (families.size === 1 ? columns[axis.members[0].field] : { family: 'string', sqlType: 'VARCHAR' });
+        const text: ColumnInfo = { family: 'string', sqlType: 'VARCHAR' };
+        const branches = axis.members.map((m) => {
+            const value = `CAST(${quoteIdent(m.field)} AS ${valueInfo.sqlType})`;
+            const where = axis.dropNulls ? ` WHERE ${quoteIdent(m.field)} IS NOT NULL` : '';
+            return `SELECT *, ${typedLiteral(m.label, text)} AS ${quoteIdent(axis.label)}, ${value} AS ${quoteIdent(axis.value)}, `
+                + `CAST(${m.order} AS BIGINT) AS ${quoteIdent(axis.key)} FROM ${relation}${where}`;
+        });
+        ctes.push(`__axis AS (${branches.join(' UNION ALL ')})`);
+        relation = '__axis';
+        columns[axis.label] = text;
+        columns[axis.value] = valueInfo;
+        columns[axis.key] = { family: 'integer', sqlType: 'BIGINT' };
+    }
     return { ctes, relation, columns };
 }
 
