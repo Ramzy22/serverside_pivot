@@ -100,12 +100,15 @@ class SortKey:
     both directions (REQ-BACK-001).  ``absolute`` orders a numeric value by its
     magnitude (REQ-SORT-002).  ``by`` (dimension entries only) orders the
     level's members by MIN(by) over each member's records (REQ-SORT-003).
+    ``member`` (measure entries only) orders by the node's value within one
+    column member, a pivot cell (REQ-SORT-004).
     """
 
     field: str
     desc: bool = False
     absolute: bool = False
     by: Optional[str] = None
+    member: Optional[Tuple[Any, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -300,8 +303,8 @@ class PivotQuery:
                 raise IRValidationError(f"measure filter level {mf.level} outside 1..{len(self.rows)}.")
             if mf.op not in _COMPARISON_OPS:
                 raise IRValidationError(f"unsupported measure filter operator {mf.op!r}.")
-        if len({s.field for s in self.sort}) != len(self.sort):
-            raise IRValidationError("each sort field may appear once.")
+        if len({(s.field, s.member) for s in self.sort}) != len(self.sort):
+            raise IRValidationError("each sort field (and column member) may appear once.")
         for s in self.sort:
             if s.field not in self.rows and s.field not in aliases:
                 raise IRValidationError(f"sort key {s.field!r} is neither a row dimension nor a measure.")
@@ -314,6 +317,11 @@ class PivotQuery:
                     raise IRValidationError(f"unknown member key column {s.by!r}.")
                 if s.absolute:
                     raise IRValidationError("a member key sort cannot be absolute.")
+            if s.member is not None:
+                if s.field not in aliases:
+                    raise IRValidationError(f"a column member sort orders a measure, not {s.field!r}.")
+                if len(s.member) != len(self.columns) or not self.columns:
+                    raise IRValidationError(f"sort member {list(s.member)!r} does not match the column dimensions.")
         if self.totals not in {"visible", "all_data"}:
             raise IRValidationError(f"totals must be 'visible' or 'all_data', not {self.totals!r}.")
         if self.subtotals not in {"before", "after"}:
@@ -401,7 +409,8 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             measure_filters=tuple(
                 MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
             ),
-            sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)), s.get("by"))
+            sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)), s.get("by"),
+                               None if s.get("member") is None else tuple(s["member"]))
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
@@ -440,7 +449,8 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         "filters": [filt(f) for f in query.filters],
         "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
                            for f in query.measure_filters],
-        "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute, **({"by": k.by} if k.by else {})}
+        "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute, **({"by": k.by} if k.by else {}),
+                  **({"member": list(k.member)} if k.member is not None else {})}
                  for k in query.sort],
         "totals": query.totals,
         "window": {"offset": query.window.offset, "limit": query.window.limit},

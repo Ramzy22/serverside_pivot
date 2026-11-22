@@ -377,6 +377,25 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         ctes.push(`__sorted AS (SELECT u.*, ${extra.join(', ')} FROM __tree u ${joins.join(' ')})`);
         tree = '__sorted';
     }
+    // REQ-SORT-004: a measure ordered within one column member gets the conditional value of each level-i ancestor.
+    const cellSorts = sort.map((s, n) => ({ s, n })).filter(({ s }) => Array.isArray(s.member));
+    if (cellSorts.length) {
+        const joins: string[] = [];
+        const extra: string[] = [];
+        for (let i = 1; i <= rows.length; i++) {
+            const keys = rows.slice(0, i).map(quoteIdent).join(', ');
+            const selects = cellSorts.map(({ s, n }) => {
+                const m = query.measures.find((x) => x.alias === s.field);
+                if (!m) throw new EmitterUnsupported(`cell sort on unknown measure ${s.field}`);
+                const name = quoteIdent(`__cell${i}_${n}`);
+                extra.push(`c${i}.${name} AS ${name}`);
+                return `${aggregate(m as Measure, memberCondition(query.columns || [], s.member as unknown[], columns), columns)} AS ${name}`;
+            });
+            joins.push(`LEFT JOIN (SELECT ${keys}, ${selects.join(', ')} FROM ${source} GROUP BY ${keys}) c${i} ON ${nullSafeJoin('t', `c${i}`, rows.slice(0, i))}`);
+        }
+        ctes.push(`__cells AS (SELECT t.*, ${extra.join(', ')} FROM ${tree} t ${joins.join(' ')})`);
+        tree = '__cells';
+    }
     // REQ-SORT-003: a dimension ordered by a member key gets MIN(key) over each level-i ancestor's records.
     const memberKeys = sort.filter((s) => rows.includes(s.field) && typeof s.by === 'string');
     if (memberKeys.length) {
@@ -398,9 +417,10 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
         // REQ-LAYOUT-001: the group row before (pre-order) or after (post-order) its descendants.
         order.push(`(CASE WHEN ${DEPTH} >= ${i} THEN 1 ELSE 0 END) ${query.subtotals === 'after' ? 'DESC' : 'ASC'}`);
         let dimensionSorted = false;
-        sort.forEach((s) => {
+        sort.forEach((s, n) => {
             let expr: string;
-            if (!rows.includes(s.field)) expr = quoteIdent(`__sort${i}_${s.field}`);
+            if (!rows.includes(s.field) && Array.isArray(s.member)) expr = quoteIdent(`__cell${i}_${n}`);
+            else if (!rows.includes(s.field)) expr = quoteIdent(`__sort${i}_${s.field}`);
             else if (s.field === k && typeof s.by === 'string') expr = quoteIdent(`__key${i}`); // ties: member value
             else if (s.field === k) { expr = quoteIdent(k); dimensionSorted = true; } else return;
             if (s.absolute) expr = `abs(${expr})`;

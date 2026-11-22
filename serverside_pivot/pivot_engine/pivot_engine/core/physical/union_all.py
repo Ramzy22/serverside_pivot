@@ -229,14 +229,17 @@ def tree(
         union = union.union(part, distinct=False)
     union, ancestor = _with_ancestor_measures(union, parts, plan)
     union, member_key = _with_member_keys(union, source, plan)
+    union, cell_sort = _with_cell_sorts(union, source, plan)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
         below = (union[DEPTH] >= i).cast("int8")  # 1 for the descendants of a level-i group
         # REQ-LAYOUT-001: the group row first (pre-order) or after its descendants (post-order).
         order.append(below if q.subtotals == "before" else below.desc())
         dimension_sorted = False
-        for field, desc, is_measure, absolute in plan.sort:
-            if is_measure:
+        for n, (field, desc, is_measure, absolute) in enumerate(plan.sort):
+            if is_measure and (i, n) in cell_sort:  # REQ-SORT-004: the ancestor's value in one column member
+                value = union[cell_sort[(i, n)]]
+            elif is_measure:
                 value = union[ancestor[(i, field)]]
             elif field == k and k in member_key:  # REQ-SORT-003: the member's key; ties by member value
                 value = union[member_key[k]]
@@ -340,6 +343,35 @@ def _with_member_keys(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, 
         predicates = [union[k].identical_to(lookup[f"__kanc{i}_{j}"]) for j, k in enumerate(keys)]
         joined = union.left_join(lookup, predicates)
         union = joined.select(*[joined[c] for c in union.columns], joined[name])
+    return union, names
+
+
+def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, int], str]]:
+    """Attach, per level i, a measure's value within one column member for each cell sort entry (REQ-SORT-004).
+
+    A conditional aggregate over the node's records, so a member outside the
+    returned column window orders exactly like one inside it.
+    """
+    names: Dict[Tuple[int, int], str] = {}
+    q = plan.query
+    entries = [(n, s, s.member) for n, s in enumerate(q.sort) if s.member is not None]
+    if not entries:
+        return union, names
+    schema = source.schema()
+    measures = {m.alias: m for m in q.measures}
+    for i in range(1, len(plan.rows) + 1):
+        keys = list(plan.rows[:i])
+        aggregates = {}
+        for n, s, member in entries:
+            names[(i, n)] = f"__cell{i}_{n}"
+            condition = _member_condition(source, schema, q.columns, tuple(member))
+            aggregates[names[(i, n)]] = lower_measure(measures[s.field], source, condition)
+        lookup = source.group_by(keys).aggregate(**aggregates)
+        lookup = lookup.select(**{f"__canc{i}_{j}": lookup[k] for j, k in enumerate(keys)},
+                               **{name: lookup[name] for name in aggregates})
+        predicates = [union[k].identical_to(lookup[f"__canc{i}_{j}"]) for j, k in enumerate(keys)]
+        joined = union.left_join(lookup, predicates)
+        union = joined.select(*[joined[c] for c in union.columns], *[joined[name] for name in aggregates])
     return union, names
 
 

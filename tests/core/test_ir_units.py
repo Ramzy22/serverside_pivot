@@ -182,7 +182,7 @@ def test_parametric_measures_valid_and_from_wire():
 
 
 @pytest.mark.parametrize("kw, message", [
-    (dict(sort=(SortKey("r"), SortKey("r", True))), "each sort field may appear once."),
+    (dict(sort=(SortKey("r"), SortKey("r", True))), "each sort field (and column member) may appear once."),
     (dict(columns=("c", "c")), "column dimensions must be unique."),
     (dict(columns=("zz",)), "column dimension references unknown column 'zz'."),
     (dict(columns=("r",)), "a dimension cannot be both a row and a column: ['r']"),

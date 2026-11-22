@@ -47,6 +47,10 @@ export interface PivotQuery {
      * REQ-SORT-003: order a row dimension's members by MIN of this column over each member's records.
      */
     by?: string;
+    /**
+     * REQ-SORT-004: order a measure by the node's value within this column member (a pivot cell).
+     */
+    member?: unknown[];
   }[];
   totals?: "visible" | "all_data";
   /**

@@ -89,8 +89,6 @@ def test_expansion_paths_are_coerced_and_filtered():
 
 @pytest.mark.parametrize("kw, reason", [
     (dict(columns=["c"]), "column pivot without pivot_config"),
-    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True), sort=[{"field": "v_sum"}]),
-     "sort by measure with column pivot"),
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True),
           filters=[{"field": "v_sum", "op": ">", "value": 1}]), "measure filter with column pivot"),
     (dict(rows=["r"], columns=["zz"], pivot_config=PivotConfig(enabled=True)), "unknown column fields ['zz']"),
@@ -425,3 +423,43 @@ def test_custom_dimension_keeps_a_null_member_below_a_category():
     assert [(r["_path"], r["s"]) for r in view["rows"]] == [
         ("Huge", 150.0), ("Huge|||West", 150.0), ("West-ish", 1.0), ("West-ish|||", 1.0)]
     assert view["rows"][-1]["region"] is None
+
+
+@pytest.mark.parametrize("field", ["pnl_sum", "__RowTotal__pnl_sum", "Q1_pnl_sum", "Q2_pnl_sum", "Q9_pnl_sum"])
+@pytest.mark.parametrize("desc", [False, True])
+def test_column_pivot_sorts_are_core_served_and_match_legacy(field, desc):
+    """REQ-SORT-004: row total and pivot-cell sorts (NULL last); a plain alias or an absent member is ignored."""
+    import os
+
+    import pyarrow as pa
+
+    from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, core_shadow
+    from pivot_engine.tanstack_adapter import create_tanstack_adapter
+
+    data = {"region": ["A", "A", "B", "B", "C", "C", "D"], "q": ["Q1", "Q2", "Q1", "Q2", "Q1", "Q2", "Q2"],
+            "pnl": [5.0, 1.0, 1.0, 9.0, 3.0, 3.0, 4.0]}
+
+    def run(mode):
+        previous = os.environ.get("PIVOT_CORE")
+        os.environ["PIVOT_CORE"] = mode
+        try:
+            adapter = create_tanstack_adapter(backend_uri=":memory:")
+            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict(data))
+            service = PivotRuntimeService(adapter_getter=lambda: adapter)
+            state = PivotViewState(row_fields=["region"], col_fields=["q"], val_configs=[{"field": "pnl", "agg": "sum"}],
+                                   sorting=[{"id": field, "desc": desc}], expanded={}, show_col_totals=False,
+                                   show_row_totals=True)
+            ctx = PivotRequestContext.from_frontend(table="t", trigger_prop="p.runtimeRequest", viewport={
+                "start": 0, "end": 50, "window_seq": 1, "state_epoch": 1, "session_id": "s", "client_instance": "c",
+                "intent": "structural"})
+            return [(r.get("region"), r.get("Q1_pnl_sum"), r.get("Q2_pnl_sum")) for r in (service.process(state, ctx).data or [])]
+        finally:
+            if previous is None:
+                os.environ.pop("PIVOT_CORE", None)
+            else:
+                os.environ["PIVOT_CORE"] = previous
+
+    served = core_shadow.STATS["core_served_hierarchy"]
+    core = run("on")
+    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    assert core == run("off")

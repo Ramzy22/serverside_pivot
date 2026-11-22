@@ -78,7 +78,7 @@ def _oracle(records, query: PivotQuery):
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute, s.by) for s in query.sort],
+        sort=[(s.field, s.desc, s.absolute, s.by, s.member) for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
         derived=list(query.derived),
@@ -179,6 +179,9 @@ def queries(draw):
     if draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
         columns = ("k",)
         members = tuple((v,) for v in draw(st.lists(DIM, max_size=3, unique=True)))
+        if draw(st.booleans()) and alias not in {k.field for k in sort}:
+            # REQ-SORT-004: a pivot cell, possibly outside the returned column window
+            sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(DIM),)),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])), subtotals=draw(st.sampled_from(["before", "after"])),
                       expanded=expanded, window=window,

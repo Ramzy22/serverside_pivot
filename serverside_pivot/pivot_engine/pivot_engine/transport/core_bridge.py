@@ -402,12 +402,20 @@ def _unknown_keys(f: Any, reasons: List[str]) -> None:
 
 
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
-                  end_row: Optional[int] = None, subtotals: str = "before") -> PivotQuery:
+                  end_row: Optional[int] = None, subtotals: str = "before",
+                  cell_sorts: Optional[List[Tuple[int, str, str, bool]]] = None) -> PivotQuery:
     """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
 
     The query's window addresses the legacy flattened list (nodes in tree
     order; the core orders the grand total first, hence the +1).  Column
     members are left empty: :func:`core_hierarchy_view` resolves them.
+
+    With a column pivot (REQ-SORT-004), ``__RowTotal__<alias>`` sorts by the
+    row total and ``<column key>_<alias>`` by that pivot cell; a cell sort
+    needs the typed member, so it is appended to ``cell_sorts`` as
+    (precedence, key, alias, desc) for :func:`_resolve_members` (without
+    ``cell_sorts`` it is unsupported).  A plain measure alias names no column
+    of a pivoted view and is ignored, as legacy does.
     """
     reasons: List[str] = []
     families = {name: type_family(dtype) for name, dtype in schema.items()}
@@ -480,7 +488,16 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         elif s.get("field") in rows or (s.get("field") in aliases and not columns):
             sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", absolute))
         elif s.get("field") in aliases:
-            reasons.append("sort by measure with column pivot")
+            continue  # a pivoted view shows no column for the plain measure: ignored, as legacy does
+        elif columns and str(s.get("field") or "").startswith("__RowTotal__")                 and str(s["field"])[len("__RowTotal__"):] in aliases:
+            sort.append(SortKey(str(s["field"])[len("__RowTotal__"):], str(s.get("order", "asc")).lower() == "desc",
+                                absolute))
+        elif columns and cell_sorts is not None and not absolute and any(
+                str(s.get("field") or "").endswith(f"_{a}") for a in aliases):
+            field_text = str(s["field"])
+            alias = max((a for a in aliases if field_text.endswith(f"_{a}")), key=len)
+            cell_sorts.append((len(sort), field_text[: -len(alias) - 1], alias,
+                               str(s.get("order", "asc")).lower() == "desc"))
         else:
             reasons.append(f"sort on {s.get('field')!r}")
 
@@ -517,8 +534,12 @@ def legacy_column_key(member: Sequence[Any]) -> str:
     return str(member[0]) if len(member) == 1 else "|".join(str(v) for v in member)
 
 
-def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any]) -> Tuple[PivotQuery, List[str]]:
-    """Bind the column window: every member, or the legacy-selected keys, in their order."""
+def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any],
+                     cell_sorts: Sequence[Tuple[int, str, str, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
+    """Bind the column window: every member, or the legacy-selected keys, in their order.
+
+    Deferred cell sorts are typed here; one naming no member is ignored, as legacy does.
+    """
     if not query.columns:
         return query, []
     members = column_members(query, resolver)
@@ -530,7 +551,13 @@ def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any
         by_key[key] = member
     wanted = getattr(spec.pivot_config, "materialized_column_values", None)
     keys = list(by_key) if wanted is None else [str(k) for k in wanted if str(k) in by_key]
-    return replace(query, column_members=tuple(by_key[k] for k in keys)), keys
+    sort = list(query.sort)
+    inserted = 0
+    for position, key, alias, desc in cell_sorts:
+        if key in by_key:
+            sort.insert(position + inserted, SortKey(alias, desc, member=by_key[key]))
+            inserted += 1
+    return replace(query, column_members=tuple(by_key[k] for k in keys), sort=tuple(sort)), keys
 
 
 # --------------------------------------------------------------------- frame -> legacy rows
@@ -614,10 +641,11 @@ def core_hierarchy_view(
     relation = resolve(spec.table)
     if tabular_subtotals:
         target_paths = [["__ALL__"]]  # every group is open: collapse state does not apply to a flat layout
+    cell_sorts: List[Tuple[int, str, str, bool]] = []
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row,
-                          subtotals="after" if tabular_subtotals else "before")
+                          subtotals="after" if tabular_subtotals else "before", cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
-    query, keys = _resolve_members(query, spec, resolver)
+    query, keys = _resolve_members(query, spec, resolver, cell_sorts)
     if capture is not None:
         _capture(capture, query, relation)
     totals = bool(getattr(spec, "totals", False))
