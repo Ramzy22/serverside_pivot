@@ -164,6 +164,8 @@ secrets.json
 *.json
 !pivot_engine/runtime/runtime-contract.schema.json
 !pivot_engine/runtime/runtime-response.schema.json
+# The semantic core's language-neutral spec (loaded at import; shared with the TS emitter).
+!pivot_engine/core/spec/*.json
 *.xlsx
 
 # DuckDB files

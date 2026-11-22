@@ -1,0 +1,183 @@
+{
+  "$comment": "Single definition of every aggregation (REQ-AGG-001). Consumed by pivot_engine.core.registry (Ibis lowering), the TS DuckDB-Wasm emitter (M3) and tests/oracle. 'empty' is the result over zero non-null inputs. 'merge' says how partial states combine: 'algebraic' = exact from mergeable state, 'holistic' = needs the records.",
+  "version": 2,
+  "aggregations": {
+    "sum": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "widened_numeric",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "sum",
+        "count"
+      ],
+      "costClass": "compact",
+      "sql": "SUM({x})"
+    },
+    "count": {
+      "inputs": [
+        "any",
+        "star"
+      ],
+      "result": "int64",
+      "nulls": "ignore",
+      "empty": 0,
+      "merge": "algebraic",
+      "state": [
+        "count"
+      ],
+      "costClass": "compact",
+      "sql": "COUNT({x})"
+    },
+    "avg": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64_or_decimal",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "sum",
+        "count"
+      ],
+      "costClass": "compact",
+      "sql": "AVG({x})"
+    },
+    "min": {
+      "inputs": [
+        "orderable"
+      ],
+      "result": "input",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "min"
+      ],
+      "retract": "recompute",
+      "costClass": "compact",
+      "sql": "MIN({x})"
+    },
+    "max": {
+      "inputs": [
+        "orderable"
+      ],
+      "result": "input",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "max"
+      ],
+      "retract": "recompute",
+      "costClass": "compact",
+      "sql": "MAX({x})"
+    },
+    "count_distinct": {
+      "inputs": [
+        "any"
+      ],
+      "result": "int64",
+      "nulls": "ignore",
+      "empty": 0,
+      "merge": "holistic",
+      "state": [
+        "value_set"
+      ],
+      "costClass": "heavy-mergeable",
+      "exact": true,
+      "sql": "COUNT(DISTINCT {x})"
+    },
+    "median": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "holistic",
+      "state": [
+        "multiset"
+      ],
+      "costClass": "heavy-mergeable",
+      "sql": "MEDIAN({x})"
+    },
+    "stddev": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "count",
+        "sum",
+        "sum_sq"
+      ],
+      "costClass": "compact",
+      "sample": true,
+      "minInputs": 2,
+      "sql": "STDDEV_SAMP({x})"
+    },
+    "variance": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "count",
+        "sum",
+        "sum_sq"
+      ],
+      "costClass": "compact",
+      "sample": true,
+      "minInputs": 2,
+      "sql": "VAR_SAMP({x})"
+    },
+    "percentile": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64",
+      "nulls": "ignore",
+      "empty": null,
+      "merge": "holistic",
+      "state": [
+        "multiset"
+      ],
+      "costClass": "heavy-mergeable",
+      "params": [
+        "q"
+      ],
+      "interpolation": "linear",
+      "sql": "QUANTILE_CONT({x}, {q})"
+    },
+    "weighted_avg": {
+      "inputs": [
+        "numeric"
+      ],
+      "result": "float64",
+      "nulls": "ignore_pairs",
+      "empty": null,
+      "merge": "algebraic",
+      "state": [
+        "sum_xw",
+        "sum_w"
+      ],
+      "costClass": "compact",
+      "params": [
+        "weight"
+      ],
+      "zeroWeight": null,
+      "sql": "SUM({x} * {w}) / NULLIF(SUM({w}), 0) over rows where {x} and {w} are not NULL"
+    }
+  }
+}

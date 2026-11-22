@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverside-pivot/spec/semantic-ir.schema.json",
+  "title": "PivotQuery",
+  "description": "Wire form of the semantic IR (pivot_engine.core.ir.PivotQuery). Shared by the Python core, the TS emitter (M3) and the conformance vectors. Aggregation names come from aggregation-registry.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rows",
+    "measures"
+  ],
+  "properties": {
+    "dataset": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "measures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alias",
+          "agg"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agg": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "weight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "q": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "filters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/filter"
+      }
+    },
+    "measureFilters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level",
+          "measure",
+          "op",
+          "value"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "measure": {
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "=",
+              "!=",
+              ">",
+              ">=",
+              "<",
+              "<="
+            ]
+          },
+          "value": {}
+        }
+      }
+    },
+    "sort": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "desc": {
+            "type": "boolean"
+          },
+          "absolute": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "totals": {
+      "enum": [
+        "visible",
+        "all_data"
+      ]
+    },
+    "expanded": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "array",
+        "minItems": 1
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "columnMembers": {
+      "type": "array",
+      "items": {
+        "type": "array"
+      }
+    },
+    "derived": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "alias",
+          "func",
+          "of"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "func": {
+            "enum": [
+              "ratio",
+              "percent_of_total",
+              "rank",
+              "dense_rank",
+              "cumulative",
+              "moving_avg"
+            ]
+          },
+          "of": {
+            "type": "string"
+          },
+          "of2": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "desc": {
+            "type": "boolean"
+          },
+          "frame": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "nullValue": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op"
+      ],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "op": {
+          "enum": [
+            "!=",
+            "<",
+            "<=",
+            "=",
+            ">",
+            ">=",
+            "between",
+            "contains",
+            "ends_with",
+            "in",
+            "is_not_null",
+            "is_null",
+            "not_contains",
+            "not_in",
+            "starts_with"
+          ]
+        },
+        "value": {},
+        "caseSensitive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "conditions"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "and",
+            "or"
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/filter"
+          }
+        }
+      }
+    },
+    "filter": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/predicate"
+        },
+        {
+          "$ref": "#/$defs/group"
+        }
+      ]
+    }
+  }
+}
