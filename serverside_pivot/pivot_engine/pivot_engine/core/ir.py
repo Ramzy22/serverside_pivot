@@ -8,7 +8,7 @@ fallback (REQ-AGG-001, F-SILENT).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, FrozenSet, Mapping, Optional, Tuple
+from typing import Any, FrozenSet, Mapping, Optional, Tuple, Union
 
 from .registry import REGISTRY, UnknownAggregationError
 
@@ -18,13 +18,21 @@ __all__ = [
     "MeasureRef",
     "PivotQuery",
     "Predicate",
+    "PredicateGroup",
     "SortKey",
     "Window",
     "PREDICATE_OPS",
     "from_wire",
 ]
 
-PREDICATE_OPS = frozenset({"=", "!=", ">", ">=", "<", "<=", "in", "not_in", "is_null", "is_not_null"})
+STRING_OPS = frozenset({"contains", "not_contains", "starts_with", "ends_with"})
+PREDICATE_OPS = frozenset(
+    {"=", "!=", ">", ">=", "<", "<=", "in", "not_in", "is_null", "is_not_null", "between"} | STRING_OPS
+)
+GROUP_OPS = frozenset({"and", "or"})
+# Operators where ``case_sensitive=False`` folds case (string columns only).
+# Membership stays exact: case variants are distinct groups (REQ-NULL-002, F-CASE).
+CASE_FOLDING_OPS = frozenset({"=", "!="}) | STRING_OPS
 _COMPARISON_OPS = frozenset({"=", "!=", ">", ">=", "<", "<="})
 
 
@@ -37,15 +45,35 @@ class MeasureRef:
     alias: str
     agg: str
     field: Optional[str]  # None only for count(*)
+    weight: Optional[str] = None  # weighted_avg
+    q: Optional[float] = None  # percentile, in [0, 1]
 
 
 @dataclass(frozen=True)
 class Predicate:
-    """Row predicate evaluated before aggregation (part of E0)."""
+    """Row predicate evaluated before aggregation (part of E0).
+
+    NULL rules (REQ-NULL-003): membership (``in`` / ``not_in``) is set
+    membership, so a ``None`` in the list selects the NULL group and
+    ``not_in`` keeps NULL rows unless ``None`` is listed; comparisons,
+    ``between`` and string operators never match NULL.
+    """
 
     field: str
     op: str
     value: Any = None
+    case_sensitive: bool = True  # honoured by CASE_FOLDING_OPS on string columns
+
+
+@dataclass(frozen=True)
+class PredicateGroup:
+    """``and`` / ``or`` over predicates or nested groups."""
+
+    op: str
+    items: Tuple[Filter, ...]
+
+
+Filter = Union[Predicate, PredicateGroup]
 
 
 @dataclass(frozen=True)
@@ -77,7 +105,7 @@ class PivotQuery:
     dataset: str
     rows: Tuple[str, ...]
     measures: Tuple[MeasureRef, ...]
-    filters: Tuple[Predicate, ...] = ()
+    filters: Tuple[Filter, ...] = ()  # combined with AND
     measure_filters: Tuple[MeasureFilter, ...] = ()
     sort: Tuple[SortKey, ...] = ()
     totals: str = "visible"  # REQ-TOT-003 / REQ-TOT-004
@@ -118,12 +146,43 @@ class PivotQuery:
                 need(m.field, f"measure {m.alias!r}")
                 if not entry.accepts(schema[m.field]):
                     raise IRValidationError(f"{m.agg} does not accept {schema[m.field]} column {m.field!r}.")
-        for p in self.filters:
-            need(p.field, "filter")
-            if p.op not in PREDICATE_OPS:
-                raise IRValidationError(f"unsupported filter operator {p.op!r}.")
-            if p.op in {"in", "not_in"} and not isinstance(p.value, (list, tuple, frozenset, set)):
-                raise IRValidationError(f"{p.op} requires a list value.")
+            if ("q" in entry.params) != (m.q is not None):
+                raise IRValidationError(f"{m.agg} {'requires' if 'q' in entry.params else 'does not take'} q.")
+            if m.q is not None and not (isinstance(m.q, (int, float)) and 0 <= m.q <= 1):
+                raise IRValidationError(f"percentile q must be within [0, 1], not {m.q!r}.")
+            if ("weight" in entry.params) != (m.weight is not None):
+                raise IRValidationError(
+                    f"{m.agg} {'requires' if 'weight' in entry.params else 'does not take'} a weight field.")
+            if m.weight is not None:
+                need(m.weight, f"weight of measure {m.alias!r}")
+                if schema[m.weight] not in {"integer", "floating", "decimal"}:
+                    raise IRValidationError(f"weight column {m.weight!r} must be numeric.")
+        def check(f: Any) -> None:
+            if isinstance(f, PredicateGroup):
+                if f.op not in GROUP_OPS:
+                    raise IRValidationError(f"unsupported filter group operator {f.op!r}.")
+                if not f.items:
+                    raise IRValidationError("a filter group needs at least one condition.")
+                for item in f.items:
+                    check(item)
+                return
+            if not isinstance(f, Predicate):
+                raise IRValidationError(f"filter {f!r} is not a predicate or group.")
+            need(f.field, "filter")
+            if f.op not in PREDICATE_OPS:
+                raise IRValidationError(f"unsupported filter operator {f.op!r}.")
+            if f.op in {"in", "not_in"} and not isinstance(f.value, (list, tuple, frozenset, set)):
+                raise IRValidationError(f"{f.op} requires a list value.")
+            if f.op == "between" and not (isinstance(f.value, (list, tuple)) and len(f.value) == 2):
+                raise IRValidationError("between requires [low, high].")
+            if f.op in STRING_OPS:
+                if schema[f.field] != "string":
+                    raise IRValidationError(f"{f.op} requires a string column, not {schema[f.field]} {f.field!r}.")
+                if not isinstance(f.value, str):
+                    raise IRValidationError(f"{f.op} requires a string value.")
+
+        for flt in self.filters:
+            check(flt)
         for mf in self.measure_filters:
             if mf.measure not in aliases:
                 raise IRValidationError(f"measure filter references unknown measure {mf.measure!r}.")
@@ -157,8 +216,10 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
         return PivotQuery(
             dataset=str(dataset or obj["dataset"]),
             rows=tuple(obj["rows"]),
-            measures=tuple(MeasureRef(m["alias"], m["agg"], m.get("field")) for m in obj["measures"]),
-            filters=tuple(Predicate(f["field"], f["op"], _freeze(f.get("value"))) for f in obj.get("filters", ())),
+            measures=tuple(
+                MeasureRef(m["alias"], m["agg"], m.get("field"), m.get("weight"), m.get("q")) for m in obj["measures"]
+            ),
+            filters=tuple(_filter_from_wire(f) for f in obj.get("filters", ())),
             measure_filters=tuple(
                 MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
             ),
@@ -173,3 +234,9 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
 
 def _freeze(value: Any) -> Any:
     return tuple(value) if isinstance(value, list) else value
+
+
+def _filter_from_wire(obj: Mapping[str, Any]) -> Filter:
+    if "conditions" in obj:
+        return PredicateGroup(str(obj["op"]).lower(), tuple(_filter_from_wire(c) for c in obj["conditions"]))
+    return Predicate(obj["field"], obj["op"], _freeze(obj.get("value")), bool(obj.get("caseSensitive", True)))

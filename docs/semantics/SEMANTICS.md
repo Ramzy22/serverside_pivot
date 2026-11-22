@@ -39,6 +39,7 @@ Definitions, for a request over dataset `D`:
 | REQ-TOT-004 | `totals = all_data`: subtotals and grand total are `agg(E₀ ∩ n)`. |
 | REQ-TOT-005 | Expansion state never changes eligibility or totals. It only changes which rows are materialized. |
 | REQ-TOT-006 | The grand total is the same on every page, on a cache hit, and with or without measure filters. |
+| REQ-TOT-007 | A measure filter that names no level (the UI's column filter on a measure) applies at the deepest row level; parents and the grand total are then visible totals (REQ-TOT-003). |
 
 ## 3. Aggregation (REQ-AGG)
 
@@ -56,6 +57,7 @@ Definitions, for a request over dataset `D`:
 |---|---|
 | REQ-NULL-001 | SQL NULL stays NULL end to end: JSON `null`, never `NaN`, `""`, `"null"` or `"Grand Total"`. |
 | REQ-NULL-002 | A NULL dimension value is its own group, distinct from the empty string and from the grand total. |
+| REQ-NULL-003 | Row filters: membership (`in`, `not_in`) is set membership, so a NULL in the list selects the NULL group and `not_in` keeps NULL rows unless NULL is listed. Comparisons, `between` and string operators never match NULL. Case folding (`caseSensitive: false`) applies to `=`, `!=` and string operators on string columns; membership is always exact, because case variants are distinct groups. |
 | REQ-ID-001 | A row's identity is `(dataset, presence_mask, [(field_id, typed value)…])`, encoded with `CanonicalPathCodec`. The grand total is the empty path, and a NULL member is a typed null token, distinct from `""`. Identity never comes from joining strings, so values containing `|`, `_` or `/` cannot collide. |
 | REQ-ID-002 | Absent (a rolled-up level) and NULL (a member whose value is NULL) are different identities. |
 

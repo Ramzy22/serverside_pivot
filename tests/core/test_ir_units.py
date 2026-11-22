@@ -7,10 +7,11 @@ import re
 import pytest
 
 from pivot_engine.core.ir import (
-    PREDICATE_OPS, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, SortKey, Window, from_wire,
+    PREDICATE_OPS, STRING_OPS, IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup,
+    SortKey, Window, from_wire,
 )
 
-SCHEMA = {"r": "string", "c": "string", "v": "integer", "f": "floating", "flag": "boolean"}
+SCHEMA = {"r": "string", "c": "string", "v": "integer", "f": "floating", "flag": "boolean", "w": "integer"}
 M = (MeasureRef("s", "sum", "v"),)
 
 
@@ -74,7 +75,12 @@ def test_each_rule_is_a_typed_error_with_its_message(kw, message):
     dict(window=Window(0, 0)),
     dict(window=Window(7, None)),
     dict(expanded=frozenset({("a",), (None,)})),
-    dict(filters=tuple(Predicate("v", op, [1] if op in {"in", "not_in"} else 1) for op in sorted(PREDICATE_OPS))),
+    dict(filters=tuple(
+        Predicate("r", op, "a") if op in STRING_OPS
+        else Predicate("v", op, [1] if op in {"in", "not_in"} else (1, 2) if op == "between" else 1)
+        for op in sorted(PREDICATE_OPS))),
+    dict(filters=(PredicateGroup("or", (Predicate("r", "=", "a", False),
+                                         PredicateGroup("and", (Predicate("v", ">", 1), Predicate("c", "is_null"))))),)),
     dict(filters=(Predicate("v", "in", (1, 2)), Predicate("v", "not_in", frozenset({3})), Predicate("v", "in", {4}))),
 ])
 def test_boundaries_that_are_valid(kw):
@@ -122,3 +128,52 @@ def test_from_wire_maps_every_section():
 def test_from_wire_structural_errors_are_typed(wire):
     with pytest.raises(IRValidationError, match="^malformed query: "):
         from_wire(wire)
+
+
+@pytest.mark.parametrize("flt, message", [
+    (Predicate("v", "contains", "a"), "contains requires a string column, not integer 'v'."),
+    (Predicate("r", "starts_with", 1), "starts_with requires a string value."),
+    (Predicate("v", "between", 1), "between requires [low, high]."),
+    (Predicate("v", "between", (1, 2, 3)), "between requires [low, high]."),
+    (PredicateGroup("xor", (Predicate("v", ">", 1),)), "unsupported filter group operator 'xor'."),
+    (PredicateGroup("and", ()), "a filter group needs at least one condition."),
+    (PredicateGroup("or", (Predicate("zz", ">", 1),)), "filter references unknown column 'zz'."),
+    ("v > 1", "filter 'v > 1' is not a predicate or group."),
+])
+def test_filter_rules(flt, message):
+    bad(message, filters=(flt,))
+
+
+def test_from_wire_parses_nested_groups_and_case_flags():
+    query = from_wire({"dataset": "d", "rows": ["r"], "measures": [{"alias": "s", "agg": "sum", "field": "v"}],
+                       "filters": [{"op": "OR", "conditions": [
+                           {"field": "r", "op": "contains", "value": "a", "caseSensitive": False},
+                           {"op": "and", "conditions": [{"field": "v", "op": "between", "value": [1, 3]}]}]}]})
+    assert query.filters == (PredicateGroup("or", (
+        Predicate("r", "contains", "a", False),
+        PredicateGroup("and", (Predicate("v", "between", (1, 3), True),)))),)
+    query.validate(SCHEMA)
+
+
+@pytest.mark.parametrize("measure, message", [
+    (MeasureRef("p", "percentile", "v"), "percentile requires q."),
+    (MeasureRef("p", "sum", "v", q=0.5), "sum does not take q."),
+    (MeasureRef("p", "percentile", "v", q=1.5), "percentile q must be within [0, 1], not 1.5."),
+    (MeasureRef("p", "percentile", "v", q=-0.1), "percentile q must be within [0, 1], not -0.1."),
+    (MeasureRef("p", "percentile", "v", q="0.5"), "percentile q must be within [0, 1], not '0.5'."),
+    (MeasureRef("p", "weighted_avg", "v"), "weighted_avg requires a weight field."),
+    (MeasureRef("p", "avg", "v", weight="w"), "avg does not take a weight field."),
+    (MeasureRef("p", "weighted_avg", "v", weight="zz"), "weight of measure 'p' references unknown column 'zz'."),
+    (MeasureRef("p", "weighted_avg", "v", weight="r"), "weight column 'r' must be numeric."),
+])
+def test_parametric_measure_rules(measure, message):
+    bad(message, measures=(measure,))
+
+
+def test_parametric_measures_valid_and_from_wire():
+    q(measures=(MeasureRef("p", "percentile", "v", q=0), MeasureRef("p1", "percentile", "f", q=1),
+                MeasureRef("w", "weighted_avg", "v", weight="f"))).validate(SCHEMA)
+    query = from_wire({"dataset": "d", "rows": [], "measures": [
+        {"alias": "p", "agg": "percentile", "field": "v", "q": 0.9},
+        {"alias": "w", "agg": "weighted_avg", "field": "v", "weight": "w"}]})
+    assert query.measures == (MeasureRef("p", "percentile", "v", None, 0.9), MeasureRef("w", "weighted_avg", "v", "w"))

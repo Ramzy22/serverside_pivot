@@ -16,9 +16,9 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 import ibis
 import pyarrow as pa
 
-from ..ir import Predicate
+from ..ir import CASE_FOLDING_OPS, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
-from ..registry import REGISTRY
+from .lowering import lower as lower_measure
 
 __all__ = ["DEPTH", "LevelAggregate", "build", "lower", "tree", "tree_of"]
 
@@ -36,20 +36,52 @@ _CMP = {
 }
 
 
-def _predicate(table: Any, p: Predicate) -> Any:
+def _predicate(table: Any, p: Any) -> Any:
+    if isinstance(p, PredicateGroup):
+        terms = [_predicate(table, item) for item in p.items]
+        out = terms[0]
+        for term in terms[1:]:
+            out = (out & term) if p.op == "and" else (out | term)
+        return out
+    return _leaf_predicate(table, p)
+
+
+def _leaf_predicate(table: Any, p: Predicate) -> Any:
     col = table[p.field]
+    if p.op in STRING_OPS:
+        text, needle = (col, p.value) if p.case_sensitive else (col.lower(), p.value.lower())
+        if p.op == "contains":
+            hit = text.contains(needle)
+        elif p.op == "not_contains":
+            hit = ~text.contains(needle)
+        elif p.op == "starts_with":
+            hit = text.startswith(needle)
+        else:
+            hit = text.endswith(needle)
+        return col.notnull() & hit.fill_null(False)  # never matches NULL
+    if p.op == "between":
+        low, high = p.value
+        if low is None or high is None:
+            return ibis.literal(False)
+        return col.notnull() & (col >= low) & (col <= high)
     if p.op in _CMP:
         if p.value is None:  # SQL: comparison with NULL is never true
             return ibis.literal(False)
-        return _CMP[p.op](col, p.value)
+        if (not p.case_sensitive and p.op in CASE_FOLDING_OPS and isinstance(p.value, str)
+                and col.type().is_string()):
+            return col.notnull() & _CMP[p.op](col.lower(), p.value.lower())
+        return col.notnull() & _CMP[p.op](col, p.value)
     if p.op == "in":
         values = [v for v in p.value if v is not None]
         term = col.isin(values) if values else ibis.literal(False)
         return (term | col.isnull()) if any(v is None for v in p.value) else term
-    if p.op == "not_in":
+    if p.op == "not_in":  # set semantics (REQ-NULL-003): NULL stays unless listed
         values = [v for v in p.value if v is not None]
-        term = col.notin(values) if values else col.notnull()
-        return term & col.notnull() if any(v is None for v in p.value) else term
+        null_listed = any(v is None for v in p.value)
+        if not values:
+            return col.notnull() if null_listed else ibis.literal(True)
+        outside = col.notin(values).fill_null(False)
+        return (outside & col.notnull()) if null_listed else (outside | col.isnull())
     if p.op == "is_null":
         return col.isnull()
     if p.op == "is_not_null":
@@ -62,8 +94,7 @@ def _measures(table: Any, plan: LogicalPlan, aliases: Sequence[str] = ()) -> Dic
     out = {}
     for m in plan.query.measures:
         if wanted is None or m.alias in wanted:
-            entry = REGISTRY.get(m.agg)
-            out[m.alias] = entry.lower(None if m.field is None else table[m.field], table)
+            out[m.alias] = lower_measure(m, table)
     return out
 
 

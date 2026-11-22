@@ -15,7 +15,7 @@ from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
-from .ir import PivotQuery
+from .ir import PivotQuery, PredicateGroup
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
@@ -37,8 +37,8 @@ def canonical(query: PivotQuery) -> str:
     body = {
         "dataset": query.dataset,
         "rows": list(query.rows),
-        "measures": [[m.alias, m.agg, m.field] for m in query.measures],
-        "filters": [[p.field, p.op, scalar(p.value)] for p in query.filters],
+        "measures": [[m.alias, m.agg, m.field, m.weight, m.q] for m in query.measures],
+        "filters": [_canonical_filter(f, scalar) for f in query.filters],
         "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],
         "sort": [[k.field, k.desc] for k in query.sort],
         "totals": query.totals,
@@ -47,6 +47,12 @@ def canonical(query: PivotQuery) -> str:
         "window": [query.window.offset, query.window.limit],
     }
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_filter(f: Any, scalar: Callable[[Any], Any]) -> Any:
+    if isinstance(f, PredicateGroup):
+        return [f.op, [_canonical_filter(item, scalar) for item in f.items]]
+    return [f.field, f.op, scalar(f.value), f.case_sensitive]
 
 
 def scope_fingerprint(dataset: str) -> str:

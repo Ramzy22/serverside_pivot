@@ -55,5 +55,16 @@ def test_malformed_wire_is_a_typed_error(bad):
 def test_schema_operator_enums_match_the_ir():
     from pivot_engine.core.ir import PREDICATE_OPS
 
-    filt = SCHEMA["properties"]["filters"]["items"]["properties"]["op"]["enum"]
+    filt = SCHEMA["$defs"]["predicate"]["properties"]["op"]["enum"]
     assert set(filt) == set(PREDICATE_OPS)
+    assert SCHEMA["$defs"]["group"]["properties"]["op"]["enum"] == ["and", "or"]
+
+
+def test_nested_filter_groups_validate_against_the_schema():
+    wire = {"rows": ["r"], "measures": [{"alias": "s", "agg": "sum", "field": "v"}],
+            "filters": [{"op": "or", "conditions": [
+                {"field": "r", "op": "contains", "value": "a", "caseSensitive": False},
+                {"op": "and", "conditions": [{"field": "v", "op": "between", "value": [1, 3]}]}]}]}
+    jsonschema.validate(wire, SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**wire, "filters": [{"op": "xor", "conditions": []}]}, SCHEMA)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import types
 
 import ibis
 import ibis.expr.datatypes as dt
@@ -11,6 +12,7 @@ import pyarrow as pa
 import pytest
 
 from pivot_engine.core import registry as reg
+from pivot_engine.core.physical import lowering
 
 SPEC = pathlib.Path(reg.__file__).parent / "spec" / "aggregation-registry.json"
 RAW = json.loads(SPEC.read_text(encoding="utf-8"))
@@ -18,13 +20,18 @@ RAW = json.loads(SPEC.read_text(encoding="utf-8"))
 
 def test_fresh_registry_mirrors_the_spec_exactly():
     r = reg.Registry(SPEC)
-    assert r.version == RAW["version"] == 1
-    assert r.names() == sorted(RAW["aggregations"]) == ["avg", "count", "count_distinct", "max", "median", "min", "sum"]
+    assert r.version == RAW["version"] == 2
+    assert r.names() == sorted(RAW["aggregations"]) == [
+        "avg", "count", "count_distinct", "max", "median", "min", "percentile", "stddev", "sum", "variance",
+        "weighted_avg"]
     for name, raw in RAW["aggregations"].items():
         e = r.get(name)
-        assert (e.name, e.inputs, e.empty, e.merge, e.cost_class, e.sql) == (
-            name, frozenset(raw["inputs"]), raw["empty"], raw["merge"], raw["costClass"], raw["sql"])
-        assert e.lower is reg._LOWERINGS[name]
+        assert (e.name, e.inputs, e.empty, e.merge, e.cost_class, e.sql, e.params) == (
+            name, frozenset(raw["inputs"]), raw["empty"], raw["merge"], raw["costClass"], raw["sql"],
+            frozenset(raw.get("params", ())))
+        assert name in lowering.LOWERINGS
+    assert r.get("percentile").params == {"q"} and r.get("weighted_avg").params == {"weight"}
+    assert r.get("sum").params == frozenset()
 
 
 def test_module_registry_is_built_from_the_packaged_spec():
@@ -41,13 +48,22 @@ def _write(tmp_path, aggregations):
 def test_spec_without_a_lowering_is_drift(tmp_path):
     aggs = dict(RAW["aggregations"], mode=RAW["aggregations"]["sum"])
     with pytest.raises(RuntimeError, match=r"drift: spec-only=\['mode'\] lowering-only=\[\]"):
-        reg.Registry(_write(tmp_path, aggs))
+        lowering.check_drift(reg.Registry(_write(tmp_path, aggs)))
 
 
 def test_lowering_without_a_spec_entry_is_drift(tmp_path):
     aggs = {k: v for k, v in RAW["aggregations"].items() if k != "median"}
     with pytest.raises(RuntimeError, match=r"drift: spec-only=\[\] lowering-only=\['median'\]"):
-        reg.Registry(_write(tmp_path, aggs))
+        lowering.check_drift(reg.Registry(_write(tmp_path, aggs)))
+    lowering.check_drift(reg.REGISTRY)  # the shipped pair agrees
+
+
+def test_lower_rejects_an_unknown_aggregation():
+    con = ibis.duckdb.connect()
+    t = con.create_table("t", pa.table({"v": [1]}))
+    with pytest.raises(reg.UnknownAggregationError):
+        lowering.lower(types.SimpleNamespace(agg="summ", field="v"), t)
+    assert lowering.lower(types.SimpleNamespace(agg="count", field=None), t).to_pyarrow().as_py() == 1
 
 
 def test_version_is_read_from_the_spec(tmp_path):
@@ -65,6 +81,8 @@ def test_unknown_aggregation_is_a_typed_error_naming_it():
     ("avg", "boolean", False), ("min", "string", True), ("max", "date", True), ("min", "other", False),
     ("count", "other", True), ("count", "string", True), ("count_distinct", "timestamp", True),
     ("median", "integer", True), ("median", "string", False), ("count", "star", False),
+    ("stddev", "decimal", True), ("variance", "string", False), ("percentile", "floating", True),
+    ("weighted_avg", "integer", True), ("weighted_avg", "boolean", False),
 ])
 def test_accepts_matrix(name, family, ok):
     assert reg.REGISTRY.get(name).accepts(family) is ok
@@ -80,19 +98,37 @@ def test_type_family(dtype, family):
     assert reg.type_family(dtype) == family
 
 
+M = types.SimpleNamespace(weight="w", q=0.25)
+
+
 def test_every_lowering_has_sql_semantics_with_nulls():
     con = ibis.duckdb.connect()
-    t = con.create_table("t", pa.table({"v": pa.array([1, 2, 2, None, 5], pa.int64())}))
-    got = {name: reg.REGISTRY.get(name).lower(t.v, t) for name in reg.REGISTRY.names()}
-    got["count_star"] = reg.REGISTRY.get("count").lower(None, t)
+    t = con.create_table("t", pa.table({"v": pa.array([1, 2, 2, None, 5], pa.int64()),
+                                        "w": pa.array([1, 0, 3, 2, None], pa.int64())}))
+    got = {name: lowering.LOWERINGS[name](t.v, t, M) for name in reg.REGISTRY.names()}
+    got["count_star"] = lowering.LOWERINGS["count"](None, t, M)
     row = t.aggregate(**got).to_pyarrow().to_pylist()[0]
+    approx = {k: row.pop(k) for k in ("stddev", "variance", "weighted_avg", "percentile")}
     assert row == {"avg": 2.5, "count": 4, "count_distinct": 3, "max": 5, "median": 2.0,
                    "min": 1, "sum": 10, "count_star": 5}
+    assert approx["variance"] == pytest.approx(3.0)  # sample variance of 1, 2, 2, 5
+    assert approx["stddev"] == pytest.approx(3.0 ** 0.5)
+    assert approx["percentile"] == pytest.approx(1.75)  # 25th of [1, 2, 2, 5], linear interpolation
+    assert approx["weighted_avg"] == pytest.approx((1 * 1 + 2 * 0 + 2 * 3) / 4)  # (5, None) and (None, 2) drop
 
 
 def test_lowerings_over_only_nulls_match_the_registry_empty_rule():
     con = ibis.duckdb.connect()
-    t = con.create_table("t", pa.table({"v": pa.array([None, None], pa.int64())}))
-    row = t.aggregate(**{n: reg.REGISTRY.get(n).lower(t.v, t) for n in reg.REGISTRY.names()}).to_pyarrow().to_pylist()[0]
+    t = con.create_table("t", pa.table({"v": pa.array([None, None], pa.int64()), "w": pa.array([1, 1], pa.int64())}))
+    row = t.aggregate(**{n: lowering.LOWERINGS[n](t.v, t, M) for n in reg.REGISTRY.names()}).to_pyarrow()
+    row = row.to_pylist()[0]
     for name in reg.REGISTRY.names():
         assert row[name] == reg.REGISTRY.get(name).empty, name
+
+
+def test_sample_statistics_need_two_inputs_and_zero_weight_is_null():
+    con = ibis.duckdb.connect()
+    t = con.create_table("t", pa.table({"v": pa.array([7], pa.int64()), "w": pa.array([0], pa.int64())}))
+    row = t.aggregate(**{n: lowering.LOWERINGS[n](t.v, t, M)
+                         for n in ("stddev", "variance", "weighted_avg", "percentile")}).to_pyarrow().to_pylist()[0]
+    assert row == {"stddev": None, "variance": None, "weighted_avg": None, "percentile": 7.0}

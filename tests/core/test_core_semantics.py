@@ -2,6 +2,8 @@
 
 Unlike the legacy engine, the core has no expected failures: every vector and
 every generated case must match (REQ-TOT-*, REQ-NULL-*, REQ-AGG-*, REQ-PAGE-001).
+Generated filters (nested groups, NULL in value lists, case folding) cover
+REQ-NULL-003.
 """
 
 from __future__ import annotations
@@ -19,10 +21,14 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from pivot_engine.core.exec import execute
-from pivot_engine.core.ir import IRValidationError, MeasureFilter, MeasureRef, PivotQuery, SortKey, Window
+from pivot_engine.core.ir import (
+    IRValidationError, MeasureFilter, MeasureRef, PivotQuery, Predicate, PredicateGroup, SortKey, Window,
+)
 
 from ..oracle.oracle import Measure as OMeasure
 from ..oracle.oracle import MeasureFilter as OMeasureFilter
+from ..oracle.oracle import Pred as OPred
+from ..oracle.oracle import PredGroup as OPredGroup
 from ..oracle.oracle import Query as OQuery
 from ..oracle.oracle import pivot as oracle_pivot
 
@@ -55,10 +61,17 @@ def _core(con, query):
     return [(r["path"], r["values"]) for r in execute(query, con.table).records()]
 
 
+def _to_oracle_filter(f):
+    if isinstance(f, PredicateGroup):
+        return OPredGroup(f.op, tuple(_to_oracle_filter(i) for i in f.items))
+    return OPred(f.field, f.op, f.value, f.case_sensitive)
+
+
 def _oracle(records, query: PivotQuery):
     oq = OQuery(
+        filters=[_to_oracle_filter(f) for f in query.filters],
         rows=list(query.rows),
-        measures=[OMeasure(m.alias, m.agg, m.field) for m in query.measures],
+        measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q) for m in query.measures],
         measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
         totals=query.totals,
         expanded=None if query.expanded is None else list(query.expanded),
@@ -99,10 +112,12 @@ def test_core_conforms_to_every_vector(vector):
 
 DIM = st.sampled_from(["A", "a", "B", "", "x|y", "x_y", None])
 RECORDS = st.lists(
-    st.fixed_dictionaries({"r": DIM, "c": DIM, "v": st.one_of(st.none(), st.integers(-20, 20))}),
+    st.fixed_dictionaries({"r": DIM, "c": DIM, "v": st.one_of(st.none(), st.integers(-20, 20)),
+                           "w": st.one_of(st.none(), st.integers(0, 4))}),
     min_size=0, max_size=16,
 )
-AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "median"])
+AGG = st.sampled_from(["sum", "avg", "min", "max", "count", "count_distinct", "median",
+                       "stddev", "variance", "percentile", "weighted_avg"])
 
 
 @st.composite
@@ -110,7 +125,9 @@ def queries(draw):
     rows = tuple(draw(st.sampled_from([("r",), ("r", "c"), ("c", "r")])))
     agg = draw(AGG)
     alias = f"m_{agg}"
-    measures = (MeasureRef(alias, agg, "v"),)
+    measures = (MeasureRef(alias, agg, "v",
+                           weight="w" if agg == "weighted_avg" else None,
+                           q=draw(st.sampled_from([0.0, 0.25, 0.5, 0.9, 1.0])) if agg == "percentile" else None),)
     mfs = ()
     if draw(st.booleans()):
         mfs = (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from([">", "<=", "="])),
@@ -122,8 +139,41 @@ def queries(draw):
     window = Window()
     if draw(st.booleans()):
         window = Window(offset=draw(st.integers(0, 6)), limit=draw(st.integers(0, 6)))
-    return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort,
+    filters = tuple(draw(st.lists(FILTERS, max_size=2)))
+    return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])), expanded=expanded, window=window)
+
+
+NEEDLE = st.sampled_from(["a", "A", "", "|", "x_", "b"])
+
+
+@st.composite
+def leaf_filters(draw):
+    kind = draw(st.sampled_from(["str_cmp", "str_op", "member", "num", "null", "between"]))
+    field = draw(st.sampled_from(["r", "c"]))
+    case = draw(st.booleans())
+    if kind == "str_cmp":
+        return Predicate(field, draw(st.sampled_from(["=", "!="])), draw(NEEDLE), case)
+    if kind == "str_op":
+        op = draw(st.sampled_from(["contains", "not_contains", "starts_with", "ends_with"]))
+        return Predicate(field, op, draw(NEEDLE), case)
+    if kind == "member":
+        values = tuple(draw(st.lists(DIM, max_size=3)))
+        return Predicate(field, draw(st.sampled_from(["in", "not_in"])), values, case)
+    if kind == "num":
+        return Predicate("v", draw(st.sampled_from(["=", "!=", ">", ">=", "<", "<="])), draw(st.integers(-5, 5)))
+    if kind == "null":
+        return Predicate(draw(st.sampled_from(["r", "c", "v"])), draw(st.sampled_from(["is_null", "is_not_null"])))
+    low = draw(st.integers(-10, 10))
+    return Predicate("v", "between", (low, low + draw(st.integers(0, 10))))
+
+
+FILTERS = st.recursive(
+    leaf_filters(),
+    lambda children: st.builds(PredicateGroup, st.sampled_from(["and", "or"]),
+                               st.lists(children, min_size=1, max_size=3).map(tuple)),
+    max_leaves=4,
+)
 
 
 def _table(records):
@@ -131,6 +181,7 @@ def _table(records):
         "r": pa.array([x["r"] for x in records], pa.string()),
         "c": pa.array([x["c"] for x in records], pa.string()),
         "v": pa.array([x["v"] for x in records], pa.int64()),
+        "w": pa.array([x.get("w") for x in records], pa.int64()),
     })
 
 
