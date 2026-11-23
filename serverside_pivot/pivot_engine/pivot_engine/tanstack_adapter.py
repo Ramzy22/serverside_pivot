@@ -2452,6 +2452,26 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         core_shadow.record_served("hierarchy")
         return view
 
+    async def hierarchy_view(
+        self,
+        pivot_spec: Any,
+        expanded_paths: Any,
+        start_row: int = 0,
+        end_row: Optional[int] = None,
+        *,
+        include_grand_total: bool = False,
+    ) -> Dict[str, Any]:
+        """The ``run_hierarchy_view`` contract for a scoped spec: the core, or legacy where it declines."""
+        target_paths = [["__ALL__"]] if expanded_paths is True else (expanded_paths or [])
+
+        async def _legacy_view() -> Dict[str, Any]:
+            return await self.controller.run_hierarchy_view(
+                pivot_spec, target_paths, start_row, end_row, include_grand_total_row=include_grand_total)
+
+        return await self._hierarchy_view_routed(
+            pivot_spec, target_paths, start_row, end_row,
+            include_grand_total=include_grand_total, legacy=_legacy_view)
+
     async def _hierarchy_view_routed(
         self,
         pivot_spec: Any,

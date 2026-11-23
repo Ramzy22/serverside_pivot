@@ -460,34 +460,3 @@ def test_materialization_job_status_hides_forbidden_or_foreign_job_metadata(job)
     assert response.status_code == 404
     assert "secret" not in response.text
     assert "hierarchy" not in response.text
-
-
-def test_materialization_job_status_allows_the_owner_after_dataset_authorization():
-    controller = MagicMock(spec=ScalablePivotController)
-    controller.get_materialization_status.return_value = {
-        "status": "completed",
-        "table": "sales",
-        "owner": "viewer-a",
-        "hierarchy_name": "sales-hierarchy",
-    }
-    api = CompletePivotAPI(
-        controller,
-        dataset_authorizer=RuntimeDatasetAuthorizer(
-            {
-                "sales": {
-                    "roles": {"viewer"},
-                    "operations": {"read"},
-                    "rowSecurity": {"mode": "global"},
-                }
-            }
-        ),
-    )
-
-    async def current_user():
-        return User(id="viewer-a", username="viewer-a", role="viewer", attributes={})
-
-    _override_complete_api_user(api, current_user)
-    response = TestClient(api.get_app()).get("/pivot/jobs/my-job")
-
-    assert response.status_code == 200
-    assert response.json()["data"]["hierarchy_name"] == "sales-hierarchy"

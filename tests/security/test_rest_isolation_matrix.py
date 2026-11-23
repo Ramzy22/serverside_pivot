@@ -50,7 +50,6 @@ CASES = {
     ("POST", "/pivot/hierarchical"): [HIER],
     ("POST", "/pivot/virtual-scroll"): [{**HIER, "start_row": 0, "end_row": 100}],
     ("POST", "/pivot/progressive-load"): [HIER],
-    ("POST", "/pivot/materialized-hierarchy"): [SPEC],
     ("POST", "/pivot/pruned-hierarchical"): [HIER],
     ("POST", "/pivot/intelligent-prefetch"): [HIER],
     ("POST", "/pivot/streaming-aggregation"): [SPEC],
@@ -60,9 +59,7 @@ CASES = {
 EXEMPT = {
     ("GET", "/health"): "no dataset access",
     ("GET", "/admin/dashboard"): "static HTML, no dataset rows",
-    ("GET", "/pivot/jobs/{job_id}"): "owner-bound job lookup; covered by test_runtime_dataset_authorization",
     ("GET", "/pivot/schema/{table_name}"): "column metadata only (names/types), authorized per dataset",
-    ("POST", "/pivot/expansion-state"): "stores expansion paths, returns no dataset rows",
     ("POST", "/pivot/cdc/setup"): "write/admin boundary; covered by CDC authorization tests",
     ("POST", "/pivot/cdc/push-setup"): "write/admin boundary; covered by CDC authorization tests",
     ("POST", "/pivot/cdc/push/{table_name}"): "write boundary; scope-checked per row image",

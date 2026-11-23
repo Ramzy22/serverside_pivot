@@ -316,7 +316,12 @@ def test_pivot_controller_exposes_single_awaitable_hierarchical_api():
     assert inspect.iscoroutinefunction(PivotController.run_hierarchical_pivot)
     assert len(re.findall(r"^\s+async def run_hierarchical_pivot\(", source, flags=re.MULTILINE)) == 1
     assert "return self.tree_manager.run_hierarchical_pivot(" not in source
-    assert "result = await self.controller.run_hierarchical_pivot(spec_dict)" in api_source
+    # REST hierarchy routes are answered by the core hierarchy view, never the legacy loaders.
+    assert "await self.tanstack_adapter.hierarchy_view(" in api_source
+    for legacy_loader in ("run_hierarchical_pivot", "run_virtual_scroll_hierarchical", "run_pruned_hierarchical_pivot",
+                          "run_intelligent_prefetch", "run_progressive_hierarchical_load",
+                          "run_hierarchical_pivot_batch_load", "run_materialized_hierarchy"):
+        assert f"self.controller.{legacy_loader}(" not in api_source
 
 
 def test_mutation_cache_invalidation_is_table_scoped_and_preserves_unrelated_entries():

@@ -418,203 +418,42 @@ class CompletePivotAPI:
         
         @self.app.post("/pivot/hierarchical")
         async def hierarchical_endpoint(request: HierarchicalRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                # Update spec_dict with RLS changes
-                spec_dict = pivot_spec.to_dict()
-                
-                # Use controller's hierarchical method
-                result = await self.controller.run_hierarchical_pivot(spec_dict)
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
+            """The visible tree for the expanded paths (the core hierarchy view, REQ-TOT/REQ-PAGE)."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, 0, None)
+
         @self.app.post("/pivot/virtual-scroll")
         async def virtual_scroll_endpoint(request: VirtualScrollRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                # Use controller's virtual scroll method
-                result = self.controller.run_virtual_scroll_hierarchical(
-                    pivot_spec, 
-                    request.start_row, 
-                    request.end_row, 
-                    request.expanded_paths
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result,
-                    metadata={
-                        "start_row": request.start_row,
-                        "end_row": request.end_row,
-                        "range_size": request.end_row - request.start_row
-                    }
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
+            """An inclusive [start_row, end_row] window of the visible tree."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, request.start_row, request.end_row)
+
         @self.app.post("/pivot/progressive-load")
         async def progressive_load_endpoint(request: ProgressiveLoadRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                result = self.controller.run_progressive_hierarchical_load(
-                    pivot_spec,
-                    request.expanded_paths,
-                    request.user_preferences
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
-        @self.app.post("/pivot/materialized-hierarchy")
-        async def materialized_hierarchy_endpoint(request: PivotSpecRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.table)
-            try:
-                spec_dict = request.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                # Await the async method
-                result = await self.controller.run_materialized_hierarchy(
-                    pivot_spec,
-                    job_owner=str(user.id),
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
+            """The visible tree (a loading strategy is no longer a separate engine: same answer as /pivot/hierarchical)."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, 0, None)
 
-        @self.app.get("/pivot/jobs/{job_id}")
-        async def job_status_endpoint(job_id: str, user: User = Depends(get_current_user)):
-            try:
-                result = self.controller.get_materialization_status(job_id)
-                if not isinstance(result, dict) or result.get("status") in {None, "unknown"}:
-                    raise HTTPException(status_code=404, detail="Job not found.")
-
-                table_name = str(result.get("table") or "").strip()
-                owner = str(result.get("owner") or "").strip()
-                is_admin = str(getattr(user, "role", "") or "").strip().lower() == "admin"
-                if not table_name or (not is_admin and owner != str(user.id)):
-                    # Do not reveal whether another principal's job exists.
-                    raise HTTPException(status_code=404, detail="Job not found.")
-                try:
-                    self.dataset_authorizer.authorize(
-                        principal=user,
-                        table=table_name,
-                        operation="read",
-                    )
-                except RuntimeDatasetAuthorizationError as exc:
-                    raise HTTPException(status_code=404, detail="Job not found.") from exc
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except HTTPException:
-                raise
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
         @self.app.post("/pivot/pruned-hierarchical")
         async def pruned_hierarchical_endpoint(request: HierarchicalRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                result = self.controller.run_pruned_hierarchical_pivot(
-                    pivot_spec,
-                    request.expanded_paths,
-                    request.user_preferences or {}
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
+            """The visible tree (same answer as /pivot/hierarchical)."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, 0, None)
+
         @self.app.post("/pivot/intelligent-prefetch")
         async def intelligent_prefetch_endpoint(request: HierarchicalRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                # Mock session for demo - in real app, this would come from auth
-                user_session = {"user_id": user.id, "session_data": {}}
-                
-                result = await self.controller.run_intelligent_prefetch(
-                    pivot_spec,
-                    user_session,
-                    request.expanded_paths
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
+            """The visible tree (same answer as /pivot/hierarchical)."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, 0, None)
+
         @self.app.post("/pivot/streaming-aggregation")
         async def streaming_aggregation_endpoint(request: PivotSpecRequest, user: User = Depends(get_current_user)):
+            """The aggregate of the spec (same answer as /pivot)."""
             row_scope = self._authorize_dataset(user, request.table)
             try:
-                spec_dict = request.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                result = await self.controller.run_streaming_aggregation(pivot_spec)
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
+                pivot_spec = self._apply_row_scope(PivotSpec.from_dict(request.model_dump()), user, row_scope)
+                result = await self.controller.run_pivot_async(pivot_spec, return_format="dict")
+                return APIResponse(status="success", data=result)
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
+
         @self.app.post("/pivot/cdc/setup")
         async def cdc_setup_endpoint(request: CDCSetupRequest, user: User = Depends(require_admin)):
             self._authorize_dataset(user, request.table_name, "cdc")
@@ -727,69 +566,36 @@ class CompletePivotAPI:
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
-        @self.app.post("/pivot/expansion-state")
-        async def expansion_state_endpoint(
-            spec_hash: str,
-            path: List[str],
-            table: Optional[str] = Query(default=None),
-            expand: bool = True,
-            user: User = Depends(get_current_user),
-        ):
-            table_name = str(table or "").strip()
-            if not table_name:
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.")
-            row_scope = self._authorize_dataset(user, table_name)
-            try:
-                scope_values = getattr(row_scope, "field_values", {})
-                scope_identity = {
-                    "table": table_name,
-                    "subject": str(getattr(row_scope, "subject", "") or ""),
-                    "fields": {
-                        str(field): list(values)
-                        for field, values in getattr(scope_values, "items", lambda: [])()
-                    },
-                    "spec": str(spec_hash or ""),
-                }
-                scoped_spec_hash = hashlib.sha256(
-                    json.dumps(scope_identity, sort_keys=True, default=str).encode("utf-8")
-                ).hexdigest()
-                result = self.controller.toggle_expansion(scoped_spec_hash, path)
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-        
         @self.app.post("/pivot/batch-load")
         async def batch_load_endpoint(request: HierarchicalRequest, user: User = Depends(get_current_user)):
-            row_scope = self._authorize_dataset(user, request.spec.table)
-            try:
-                spec_dict = request.spec.model_dump()
-                pivot_spec = PivotSpec.from_dict(spec_dict)
-                pivot_spec = self._apply_row_scope(pivot_spec, user, row_scope)
-                
-                # Convert back to dict
-                spec_dict = pivot_spec.to_dict()
-                
-                result = await self.controller.run_hierarchical_pivot_batch_load(
-                    spec_dict,
-                    request.expanded_paths,
-                    max_levels=3
-                )
-                
-                return APIResponse(
-                    status="success",
-                    data=result
-                )
-            except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
-                raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except Exception as e:
-                raise HTTPException(status_code=500, detail="Internal server error.") from e
-    
+            """The visible tree (same answer as /pivot/hierarchical)."""
+            return await self._hierarchy_response(request.spec, user, request.expanded_paths, 0, None)
+
+    async def _hierarchy_response(self, spec_model: Any, user: User, expanded_paths: Any,
+                                  start_row: int, end_row: Optional[int]) -> "APIResponse":
+        """A hierarchy endpoint's answer: the core hierarchy view of the scoped spec.
+
+        ``rows`` is the inclusive [start_row, end_row] window of the visible
+        tree (pre-order, grand total first when ``totals``), ``total_rows``
+        its full length.
+        """
+        row_scope = self._authorize_dataset(user, spec_model.table)
+        try:
+            pivot_spec = self._apply_row_scope(PivotSpec.from_dict(spec_model.model_dump()), user, row_scope)
+            view = await self.tanstack_adapter.hierarchy_view(
+                pivot_spec, expanded_paths or [], start_row, end_row,
+                include_grand_total=bool(pivot_spec.totals),
+            )
+            data = {"rows": view.get("rows", []), "total_rows": view.get("total_rows"),
+                    "grand_total_row": view.get("grand_total_row")}
+            metadata = None if end_row is None else {
+                "start_row": start_row, "end_row": end_row, "range_size": end_row - start_row}
+            return APIResponse(status="success", data=data, metadata=metadata)
+        except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
+            raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Internal server error.") from e
+
     def get_app(self):
         """Get the FastAPI application instance"""
         return self.app
