@@ -188,6 +188,7 @@ class MeasureFilter:
     measure: str  # measure alias
     op: str
     value: Any
+    cells: bool = False  # REQ-DIM-006: grouped by the level's path and every column dimension
 
 
 @dataclass(frozen=True)
@@ -322,18 +323,27 @@ def _measure(query: Query, m: Measure, records: Sequence[Record], keys: Sequence
     name = node[list(keys).index(label)] if node is not None else (records[0][label] if records else None)
     if name is None:
         return None
-    member = next(x for x in members if x[0] == name)  # the node holds one member
-    _l, source, _o, agg, weight, q, order_by = member
+    member = next((x for x in members if x[0] == name), None)  # the node holds one member
+    if member is None:  # a cell for a label that names no member holds no records
+        return None
+    _l, source, _o, agg, weight, q, order_by, *rest = member
+    if agg == "formula":  # REQ-DIM-007: the formula on the member's records (they are the node's)
+        by_alias = {x.alias: x for x in query.measures}
+        result = _formula(rest[0], lambda alias: _measure(query, by_alias[alias], records, keys, node))
+        return None if result is None or not math.isfinite(result) else result
     return aggregate(agg, records, source, weight, q, order_by)
 
 
 def _measures(query: Query, records: Sequence[Record], keys: Sequence[str] = ()) -> Dict[str, Any]:
-    node = tuple(records[0].get(k) for k in keys) if records else None  # every record of a node shares its path
+    # every record of a node shares its path; an empty grand total's path is ()
+    node = tuple(records[0].get(k) for k in keys) if records else (() if not keys else None)
     out = {m.alias: _measure(query, m, records, keys, node) for m in query.measures}
+    cell_keys = tuple(keys) + tuple(query.columns)  # a cell fixes its column members (REQ-DIM-006)
     for j, member in enumerate(query.column_members):
         matching = [r for r in records if tuple(r.get(c) for c in query.columns) == tuple(member)]
+        cell_node = None if node is None else node + tuple(member)
         for m in query.measures:
-            out[f"__c{j}__{m.alias}"] = _measure(query, m, matching, keys, node)
+            out[f"__c{j}__{m.alias}"] = _measure(query, m, matching, cell_keys, cell_node)
     return out
 
 
@@ -356,8 +366,8 @@ def with_unpivot(query: Query, data: Sequence[Record]) -> List[Record]:
     out = []
     for member_label, source, order, *_own in members:
         for record in data:
-            v = record.get(source)
-            if v is None and drop_nulls:
+            v = None if source is None else record.get(source)  # REQ-DIM-007: a formula member has no source
+            if v is None and drop_nulls and source is not None:
                 continue
             v = None if v is None else (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
             out.append({**record, label: member_label, value: v, key: order})
@@ -396,22 +406,25 @@ def eligible_sets(query: Query, data: Sequence[Record]) -> Tuple[List[Record], L
     e0 = [r for r in data if in_scope(r, query.scope) and all(p(r) for p in query.filters)]
     passing: Dict[int, set] = {}
     ragged = query.ragged is not None
-    for level in sorted({mf.level for mf in query.measure_filters}):
+    def group_key(r: Record, level: int, cells: bool) -> Tuple[Any, ...]:
+        return _key(r, query.rows, level) + (tuple(r.get(c) for c in query.columns) if cells else ())
+
+    for level, cells in sorted({(mf.level, mf.cells) for mf in query.measure_filters}):
+        keys = list(query.rows[:level]) + (list(query.columns) if cells else [])
         groups: Dict[Tuple[Any, ...], List[Record]] = {}
         for r in e0:
             if ragged and r.get(query.rows[level - 1]) is None:
                 continue  # REQ-DIM-005: no node at this level: not filtered by it
-            groups.setdefault(_key(r, query.rows, level), []).append(r)
-        level_filters = [mf for mf in query.measure_filters if mf.level == level]
-        passing[level] = {
+            groups.setdefault(group_key(r, level, cells), []).append(r)
+        level_filters = [mf for mf in query.measure_filters if mf.level == level and mf.cells == cells]
+        passing[(level, cells)] = {
             k
             for k, members in groups.items()
-            if all(_OPS[mf.op](_measures(query, members, query.rows[:level])[mf.measure], mf.value)
-                   for mf in level_filters)
+            if all(_OPS[mf.op](_measures(query, members, keys)[mf.measure], mf.value) for mf in level_filters)
         }
-    e = [r for r in e0 if all(_key(r, query.rows, lvl) in keys
+    e = [r for r in e0 if all(group_key(r, lvl, cells) in keys
                               or (ragged and r.get(query.rows[lvl - 1]) is None)
-                              for lvl, keys in passing.items())]
+                              for (lvl, cells), keys in passing.items())]
     return e0, e
 
 
@@ -425,9 +438,10 @@ class Row:
         return len(self.path)
 
 
-def _nulls_last(a: Any, b: Any, desc: bool) -> int:
+def _nulls_last(a: Any, b: Any, desc: bool, nulls_first: bool = False) -> int:
     if a is None or b is None:
-        return (a is None) - (b is None)  # NULL after any value, in both directions
+        first = (a is None) - (b is None)  # NULL after any value, in both directions
+        return -first if nulls_first else first  # REQ-SORT-006: or before any value
     if a == b:
         return 0
     return (-1 if a > b else 1) if desc else (-1 if a < b else 1)
@@ -437,24 +451,25 @@ def _order_siblings(query: Query, depth: int, candidates: Iterable[Tuple[Any, ..
                     values: Mapping[Tuple[Any, ...], Mapping[str, Any]],
                     member_keys: Optional[Mapping[str, Mapping[Tuple[Any, ...], Any]]] = None) -> List[Tuple[Any, ...]]:
     dim = query.rows[depth - 1]
-    entries = [(e[0], e[1], len(e) > 2 and bool(e[2]), e[3] if len(e) > 3 else None, e[4] if len(e) > 4 else None)
-               for e in query.sort] or [(f, d, False, None, None) for f, d in query.sort_desc.items()]
+    entries = [(e[0], e[1], len(e) > 2 and bool(e[2]), e[3] if len(e) > 3 else None, e[4] if len(e) > 4 else None,
+                len(e) > 5 and bool(e[5]))
+               for e in query.sort] or [(f, d, False, None, None, False) for f, d in query.sort_desc.items()]
     aliases = {m.alias for m in query.measures}
 
     def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
         dim_sorted = False
-        for f, desc, absolute, by, member in entries:
+        for f, desc, absolute, by, member, nf in entries:
             mag = (lambda v: None if v is None else abs(v)) if absolute else (lambda v: v)
             if f in aliases and member is not None:  # REQ-SORT-004: the node's value in one column member
                 cell = (member_keys or {})[("cell", f, tuple(member))]
-                c = _nulls_last(mag(cell[x]), mag(cell[y]), desc)
+                c = _nulls_last(mag(cell[x]), mag(cell[y]), desc, nf)
             elif f in aliases:
-                c = _nulls_last(mag(values[x][f]), mag(values[y][f]), desc)
+                c = _nulls_last(mag(values[x][f]), mag(values[y][f]), desc, nf)
             elif f == dim and by is not None:  # REQ-SORT-003: the member's key, then the member value
-                c = _nulls_last((member_keys or {})[by][x], (member_keys or {})[by][y], desc)
+                c = _nulls_last((member_keys or {})[by][x], (member_keys or {})[by][y], desc, nf)
             elif f == dim:
                 dim_sorted = True
-                c = _nulls_last(mag(x[-1]), mag(y[-1]), desc)
+                c = _nulls_last(mag(x[-1]), mag(y[-1]), desc, nf)
             else:
                 continue
             if c:
@@ -533,7 +548,7 @@ def _flat(query: Query, e: Sequence[Record], source: Sequence[Record]) -> List[R
 
     def compare(x: Tuple[Any, ...], y: Tuple[Any, ...]) -> int:
         for entry in query.sort:
-            c = _nulls_last(sort_value(x, entry), sort_value(y, entry), bool(entry[1]))
+            c = _nulls_last(sort_value(x, entry), sort_value(y, entry), bool(entry[1]), len(entry) > 5 and bool(entry[5]))
             if c:
                 return c
         for i in range(depth):
@@ -585,7 +600,7 @@ def pivot(query: Query, data: Sequence[Record]) -> List[Row]:
                 member_keys[("cell", entry[0], tuple(member))] = {
                     c: _measure(query, m, [r for r in totals_source if _key(r, query.rows, depth) == c
                                            and tuple(r.get(k) for k in query.columns) == tuple(member)],
-                                query.rows[:depth], c)
+                                (*query.rows[:depth], *query.columns), c + tuple(member))
                     for c in candidates}
         children = _order_siblings(query, depth, candidates, values, member_keys)
         for child in children:

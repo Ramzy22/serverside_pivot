@@ -216,8 +216,8 @@ type FormulaExpr = { op: string; args: unknown[] };
 
 /** REQ-AGG-010: a formula over the node's own aggregates; a NULL input or an undefined result is NULL. */
 function formulaSql(query: PivotQuery, e: FormulaExpr, condition: string | null, columns: Record<string, ColumnInfo>,
-                    keys: string[]): string {
-    const sub = (x: unknown) => formulaSql(query, x as FormulaExpr, condition, columns, keys);
+                    keys: string[], cell: unknown[] | null = null): string {
+    const sub = (x: unknown) => formulaSql(query, x as FormulaExpr, condition, columns, keys, cell);
     const a = e.args;
     switch (e.op) {
         case 'null': return 'CAST(NULL AS DOUBLE)';
@@ -225,7 +225,7 @@ function formulaSql(query: PivotQuery, e: FormulaExpr, condition: string | null,
         case 'ref': {
             const m = query.measures.find((x) => x.alias === a[0]);
             if (!m) throw new EmitterUnsupported(`formula over unknown measure ${String(a[0])}`);
-            return `CAST(${levelAggregate(query, m as Measure, condition, columns, keys)} AS DOUBLE)`;
+            return `CAST(${levelAggregate(query, m as Measure, condition, columns, keys, cell)} AS DOUBLE)`;
         }
         case 'round': return `ROUND(${sub(a[0])}, ${Number(a[1])})`;
         case 'pow': {
@@ -251,10 +251,11 @@ function formulaSql(query: PivotQuery, e: FormulaExpr, condition: string | null,
 }
 
 /** One measure at a level grouped by `keys`; a per-member axis value is level-aware (REQ-DIM-003). */
+// ``cell``: the column member of a pivot cell (``condition`` selects it); it fixes a column label's member.
 function levelAggregate(query: PivotQuery, m: Measure, condition: string | null, columns: Record<string, ColumnInfo>,
-                        keys: string[]): string {
+                        keys: string[], cell: unknown[] | null = null): string {
     if (m.agg === 'formula') {
-        const value = formulaSql(query, (m as unknown as { expr: FormulaExpr }).expr, condition, columns, keys);
+        const value = formulaSql(query, (m as unknown as { expr: FormulaExpr }).expr, condition, columns, keys, cell);
         return `(CASE WHEN isnan(${value}) OR isinf(${value}) THEN NULL ELSE ${value} END)`;
     }
     if (m.agg !== 'member') return aggregate(m, condition, columns);
@@ -262,17 +263,30 @@ function levelAggregate(query: PivotQuery, m: Measure, condition: string | null,
     if (!axis) throw new EmitterUnsupported('member aggregation without a measure axis');
     const series = axis.members.some((member) => member.agg === 'array_agg');
     const type = series ? `${columns[axis.value].sqlType}[]` : columns[axis.value].sqlType;
+    // REQ-DIM-006: a cell fixes the member when the label is a column dimension.
+    const labelColumn = (query.columns || []).indexOf(axis.label);
+    const fixed = cell !== null && labelColumn >= 0 ? cell[labelColumn] : undefined;
+    if (fixed !== undefined) keys = [...keys, axis.label];
     // Above the label: no value. An aggregate (not a literal), so a global aggregate keeps its one row.
     if (!keys.includes(axis.label)) return `MIN(CAST(NULL AS ${type}))`;
     const text: ColumnInfo = { family: 'string', sqlType: 'VARCHAR' };
-    const whens = axis.members.map((member) => {
+    const chosen = fixed === undefined ? axis.members : axis.members.filter((member) => member.label === fixed);
+    if (fixed !== undefined && !chosen.length) return `MIN(CAST(NULL AS ${type}))`;  // a label naming no member
+    const whens = chosen.map((member) => {
         const isMember = `${quoteIdent(axis.label)} = ${typedLiteral(member.label, text)}`;
         const own: Measure = { alias: member.label, agg: String(member.agg), field: member.field, weight: member.weight,
             q: member.q, orderBy: member.orderBy } as Measure;
         const cond = condition ? `(${isMember}) AND (${condition})` : isMember;
-        return `WHEN BOOL_OR(${isMember}) THEN CAST(${aggregate(own, cond, columns)} AS ${type})`;
+        if (member.agg === 'formula') {  // REQ-DIM-007: the formula on the member's records
+            const f = formulaSql(query, (member as unknown as { expr: FormulaExpr }).expr, cond, columns, keys, cell);
+            return [isMember, `CAST((CASE WHEN isnan(${f}) OR isinf(${f}) THEN NULL ELSE ${f} END) AS ${type})`];
+        }
+        return [isMember, `CAST(${aggregate(own, cond, columns)} AS ${type})`];
     });
-    return `CASE ${whens.join(' ')} ELSE CAST(NULL AS ${type}) END`;
+    // a fixed member: an empty cell is the member's own aggregation over no records
+    if (fixed !== undefined) return whens[0][1];
+    // the node holds one member
+    return `CASE ${whens.map(([isMember, own]) => `WHEN BOOL_OR(${isMember}) THEN ${own}`).join(' ')} ELSE CAST(NULL AS ${type}) END`;
 }
 
 // REQ-SORT-005 (as core/physical/union_all.tenor_days): tenor, else ISO date, else month-year; else NULL.
@@ -305,8 +319,8 @@ function measureSelects(query: PivotQuery, columns: Record<string, ColumnInfo>, 
     if (!aliases) {
         (query.columnMembers || []).forEach((member, j) => {
             const cond = memberCondition(query.columns || [], member, columns);
-            query.measures.forEach((m) => out.push(
-                `${levelAggregate(query, m, cond, columns, keys)} AS ${quoteIdent(cellName(j, m.alias))}`));
+            query.measures.forEach((m) => out.push(  // a cell fixes its column members (REQ-DIM-006)
+                `${levelAggregate(query, m, cond, columns, keys, member as unknown[])} AS ${quoteIdent(cellName(j, m.alias))}`));
         });
     }
     return out;
@@ -386,15 +400,18 @@ function withCategories(query: PivotQuery, options: EmitOptions): CategorySource
         if (new Set(names).size !== 3 || names.some((n) => !n || columns[n])) {
             throw new EmitterUnsupported('measure axis columns collide with a column');
         }
-        axis.members.forEach((m) => { if (!columns[m.field]) throw new EmitterUnsupported(`unknown column ${m.field}`); });
-        const families = new Set(axis.members.map((m) => columns[m.field].family));
+        // REQ-DIM-007: a formula member (no field) carries the records and a NULL value.
+        const sourced = axis.members.filter((m) => m.field !== null && m.field !== undefined);
+        sourced.forEach((m) => { if (!columns[m.field as string]) throw new EmitterUnsupported(`unknown column ${m.field}`); });
+        const families = new Set(sourced.map((m) => columns[m.field as string].family));
         const numeric = [...families].every((f) => f === 'integer' || f === 'floating' || f === 'decimal');
         const valueInfo: ColumnInfo = numeric ? { family: 'floating', sqlType: 'DOUBLE' }
-            : (families.size === 1 ? columns[axis.members[0].field] : { family: 'string', sqlType: 'VARCHAR' });
+            : (families.size === 1 ? columns[sourced[0].field as string] : { family: 'string', sqlType: 'VARCHAR' });
         const text: ColumnInfo = { family: 'string', sqlType: 'VARCHAR' };
         const branches = axis.members.map((m) => {
-            const value = `CAST(${quoteIdent(m.field)} AS ${valueInfo.sqlType})`;
-            const where = axis.dropNulls ? ` WHERE ${quoteIdent(m.field)} IS NOT NULL` : '';
+            const formula = m.field === null || m.field === undefined;
+            const value = formula ? `CAST(NULL AS ${valueInfo.sqlType})` : `CAST(${quoteIdent(m.field as string)} AS ${valueInfo.sqlType})`;
+            const where = axis.dropNulls && !formula ? ` WHERE ${quoteIdent(m.field as string)} IS NOT NULL` : '';
             return `SELECT *, ${typedLiteral(m.label, text)} AS ${quoteIdent(axis.label)}, ${value} AS ${quoteIdent(axis.value)}, `
                 + `CAST(${m.order} AS BIGINT) AS ${quoteIdent(axis.key)} FROM ${relation}${where}`;
         });
@@ -469,23 +486,31 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
     ctes.push(`__e0 AS (SELECT * FROM ${catSource.relation}${where.length ? ` WHERE ${where.join(' AND ')}` : ''})`);
 
     // E: records whose group passes at every filtered level (REQ-TOT-001), groups evaluated on E0.
-    const byLevel = new Map<number, NonNullable<PivotQuery['measureFilters']>>();
+    // A filter group is a level and a grain: the level's path, or (cells, REQ-DIM-006) the path and every column.
+    const byLevel = new Map<string, NonNullable<PivotQuery['measureFilters']>>();
     for (const mf of query.measureFilters || []) {
-        byLevel.set(mf.level, [...(byLevel.get(mf.level) || []), mf]);
+        const group = `${mf.level}:${(mf as { cells?: boolean }).cells ? 1 : 0}`;
+        byLevel.set(group, [...(byLevel.get(group) || []), mf]);
     }
     const semi: string[] = [];
-    [...byLevel.keys()].sort((a, b) => a - b).forEach((level) => {
-        const filters = byLevel.get(level)!;
-        const keys = rows.slice(0, level);
+    [...byLevel.keys()].sort((a, b) => {
+        const [la, ca] = a.split(':').map(Number);
+        const [lb, cb] = b.split(':').map(Number);
+        return la - lb || ca - cb;
+    }).forEach((group) => {
+        const filters = byLevel.get(group)!;
+        const [level, cellGrain] = group.split(':').map(Number);
+        const rowKeys = rows.slice(0, level);
+        const keys = cellGrain ? [...rowKeys, ...(query.columns || [])] : rowKeys;
         const aliases = new Set(filters.map((f) => f.measure));
         const conds = filters.map((f) => {
             if (!COMPARISONS.has(f.op)) throw new EmitterUnsupported(`measure filter ${f.op}`);
             if (f.value === null || f.value === undefined) return 'FALSE';
             return `${quoteIdent(f.measure)} ${f.op} ${literal(f.value, undefined)}`;
         });
-        const name = `__mf${level}`;
+        const name = `__mf${level}${cellGrain ? 'c' : ''}`;
         // REQ-DIM-005: in a ragged hierarchy only records with a node at this level are filtered by it.
-        const last = quoteIdent(keys[keys.length - 1]);
+        const last = quoteIdent(rowKeys[rowKeys.length - 1]);
         const groups = query.ragged ? `(SELECT * FROM __e0 WHERE ${last} IS NOT NULL)` : '__e0';
         ctes.push(`${name} AS (SELECT * FROM (SELECT ${keys.map(quoteIdent).join(', ')}, ${measureSelects(query, columns, aliases, keys).join(', ')} FROM ${groups} GROUP BY ${keys.map(quoteIdent).join(', ')}) WHERE ${conds.join(' AND ')})`);
         const exists = `EXISTS (SELECT 1 FROM ${name} g WHERE ${nullSafeJoin('e', 'g', keys)})`;
@@ -556,7 +581,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
                 const name = quoteIdent(`__cell${i}_${n}`);
                 extra.push(`c${i}.${name} AS ${name}`);
                 const cond = memberCondition(query.columns || [], s.member as unknown[], columns);
-                return `${levelAggregate(query, m as Measure, cond, columns, rows.slice(0, i))} AS ${name}`;
+                return `${levelAggregate(query, m as Measure, cond, columns, rows.slice(0, i), s.member as unknown[])} AS ${name}`;
             });
             joins.push(`LEFT JOIN (SELECT ${keys}, ${selects.join(', ')} FROM ${source} GROUP BY ${keys}) c${i} ON ${nullSafeJoin('t', `c${i}`, rows.slice(0, i))}`);
         }
@@ -597,7 +622,7 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             else if (typeof s.by === 'string' || typeof s.semantic === 'string') expr = quoteIdent(`__key${rows.indexOf(s.field) + 1}`);
             else { expr = quoteIdent(s.field); if (!s.absolute) ordered.add(s.field); }
             if (s.absolute) expr = `abs(${expr})`;
-            order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
+            order.push(`(${expr} IS NULL) ${s.nullsFirst ? 'DESC' : 'ASC'}`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
         });
         rows.forEach((k) => { if (!ordered.has(k)) order.push(`(${quoteIdent(k)} IS NULL) ASC`, `${quoteIdent(k)} ASC`); });
     }
@@ -613,7 +638,8 @@ export function emitPivotSql(query: PivotQuery, options: EmitOptions): string {
             else if (s.field === k && (typeof s.by === 'string' || typeof s.semantic === 'string')) expr = quoteIdent(`__key${i}`); // ties: member value
             else if (s.field === k) { expr = quoteIdent(k); dimensionSorted = true; } else return;
             if (s.absolute) expr = `abs(${expr})`;
-            order.push(`(${expr} IS NULL) ASC`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
+            // REQ-SORT-006: NULLS FIRST puts the entry's NULLs before every value
+            order.push(`(${expr} IS NULL) ${s.nullsFirst ? 'DESC' : 'ASC'}`, `${expr} ${s.desc ? 'DESC' : 'ASC'}`);
         });
         if (!dimensionSorted) order.push(`(${quoteIdent(k)} IS NULL) ASC`, `${quoteIdent(k)} ASC`);
     });

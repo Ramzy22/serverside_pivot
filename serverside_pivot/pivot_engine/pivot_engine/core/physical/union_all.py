@@ -11,7 +11,7 @@ column per measure alias, and ``__depth`` (0 = grand total).  Presence is
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import ibis
 import pyarrow as pa
@@ -113,7 +113,8 @@ def _trunc(x: float) -> float:  # type: ignore[empty-body]
     """SQL TRUNC on a double (toward zero), a double result."""
 
 
-def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any) -> Any:
+def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any,
+             cell: Optional[Tuple[Any, ...]] = None) -> Any:
     """REQ-AGG-010: a formula over the node's own aggregates; a NULL input or an undefined result is NULL."""
     null = ibis.null().cast("float64")
     args = e.args
@@ -123,9 +124,9 @@ def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], conditi
         return ibis.literal(float(args[0]), type="float64")
     if e.op == "ref":
         m = next(x for x in plan.query.measures if x.alias == args[0])
-        return _lower(m, table, plan, keys, condition).cast("float64")
+        return _lower(m, table, plan, keys, condition, cell).cast("float64")
     if e.op in {"round", "pow"}:
-        x = _formula(args[0], table, plan, keys, condition)
+        x = _formula(args[0], table, plan, keys, condition, cell)
         if e.op == "round":
             return _round(x, ibis.literal(int(args[1]), type="int32"))
         exponent = float(args[1])
@@ -134,7 +135,7 @@ def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], conditi
         if exponent < 0:
             x = ibis.ifelse(x == 0, null, x)
         return x.pow(ibis.literal(exponent, type="float64"))
-    xs = [_formula(a, table, plan, keys, condition) for a in args]
+    xs = [_formula(a, table, plan, keys, condition, cell) for a in args]
     if e.op == "+":
         return xs[0] + xs[1]
     if e.op == "-":
@@ -160,10 +161,12 @@ def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], conditi
     return ibis.ifelse(any_null, null, pick)
 
 
-def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any = None) -> Any:
+def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any = None,
+           cell: Optional[Tuple[Any, ...]] = None) -> Any:
+    """``cell``: the column member of a pivot cell (``condition`` selects it); it fixes a column label's member."""
     """One measure at a level grouped by ``keys``; a per-member axis value is level-aware (REQ-DIM-003)."""
     if m.agg == FORMULA_AGG:
-        value = _formula(m.expr, table, plan, keys, condition)
+        value = _formula(m.expr, table, plan, keys, condition, cell)
         return ibis.ifelse(value.isnan() | value.isinf(), ibis.null().cast("float64"), value)
     if m.agg != MEMBER_AGG:
         return lower_measure(m, table, condition)
@@ -172,16 +175,31 @@ def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition
     dtype = table[axis.value].type()
     if axis.members[0].agg == "array_agg":  # a series axis (REQ-AGG-009): one list type
         dtype = ibis.expr.datatypes.Array(dtype)
+    fixed = None  # REQ-DIM-006: a cell fixes the member when the label is a column dimension
+    if cell is not None and axis.label in plan.query.columns:
+        fixed = cell[list(plan.query.columns).index(axis.label)]
+        keys = [*keys, axis.label]
     if axis.label not in keys:  # above the label: the members' aggregations differ, no value
         # A reduction (not a literal), so a global aggregate still yields its one row over no records.
         first = lower_measure(axis.members[0].measure(), table, condition)
         return ibis.ifelse(ibis.literal(False), first.cast(dtype), ibis.null().cast(dtype))
     value = ibis.null().cast(dtype)
     for member in reversed(axis.members):
+        if fixed is not None and member.label != fixed:
+            continue
         is_member = table[axis.label] == ibis.literal(member.label, type="string")
         cond = is_member if condition is None else (is_member & condition)
-        own = lower_measure(member.measure(), table, cond).cast(dtype)
-        value = ibis.ifelse(is_member.any(), own, value)  # the group holds one member
+        if member.agg == FORMULA_AGG:  # REQ-DIM-007: the formula on the member's records
+            f = _formula(member.expr, table, plan, keys, cond, cell)
+            own = ibis.ifelse(f.isnan() | f.isinf(), ibis.null().cast("float64"), f).cast(dtype)
+        else:
+            own = lower_measure(member.measure(), table, cond).cast(dtype)
+        if fixed is not None:  # an empty cell is the member's own aggregation over no records
+            return own
+        value = ibis.ifelse(is_member.any(), own, value)  # the node holds one member
+    if fixed is not None:  # a label naming no member: no records, no value
+        none = ibis.null().cast(dtype)
+        return ibis.ifelse(table[axis.key].count() < 0, none, none)  # a reduction: a global aggregate keeps its row
     return value
 
 
@@ -194,8 +212,9 @@ def _measures(table: Any, plan: LogicalPlan, aliases: Sequence[str] = (), keys: 
             out[m.alias] = _lower(m, table, plan, keys)
     if wanted is None:
         schema = table.schema()
-        for _j, member, m, name in plan.query.cells():
-            out[name] = _lower(m, table, plan, keys, _member_condition(table, schema, plan.query.columns, member))
+        for _j, member, m, name in plan.query.cells():  # a cell fixes its column members (REQ-DIM-006)
+            out[name] = _lower(m, table, plan, keys,
+                               _member_condition(table, schema, plan.query.columns, member), tuple(member))
     return out
 
 
@@ -236,12 +255,15 @@ def with_unpivot(relation: Any, unpivot: Any) -> Any:
     cast = "float64" if family == "floating" else ("string" if family == "string" else None)
     branches = []
     for m in unpivot.members:
-        value = relation[m.field] if cast is None else relation[m.field].cast(cast)
+        if m.field is None:  # REQ-DIM-007: a formula member carries the records, no source value
+            value = ibis.null().cast(cast or "float64")
+        else:
+            value = relation[m.field] if cast is None else relation[m.field].cast(cast)
         branch = relation.select(*[relation[c] for c in relation.columns],
                                  ibis.literal(m.label, type="string").name(unpivot.label),
                                  value.name(unpivot.value),
                                  ibis.literal(m.order, type="int64").name(unpivot.key))
-        if unpivot.drop_nulls:
+        if unpivot.drop_nulls and m.field is not None:
             branch = branch.filter(branch[unpivot.value].notnull())
         branches.append(branch)
     out = branches[0]
@@ -327,17 +349,20 @@ def _eligible(e0: Any, plan: LogicalPlan) -> Any:
     """E: records of E0 whose group passes at every filtered level (REQ-TOT-001)."""
     e = e0
     ragged = plan.query.ragged is not None
-    for level_no, filters in sorted(plan.filters_by_level.items()):
-        keys = list(plan.rows[:level_no])
-        # REQ-DIM-005: only records with a node at this level are filtered by it
-        groups = e0.filter(e0[keys[-1]].notnull()) if ragged else e0
-        grouped = groups.group_by(keys).aggregate(**_measures(groups, plan, [f.measure for f in filters], keys))
-        cond = None
-        for f in filters:
-            term = _CMP[f.op](grouped[f.measure], f.value)
-            cond = term if cond is None else (cond & term)
-        passing = _semi_join_on_keys(e, grouped.filter(cond), keys)
-        e = passing.union(e.filter(e[keys[-1]].isnull()), distinct=False) if ragged else passing
+    for level_no, level_filters in sorted(plan.filters_by_level.items()):
+        for cells in sorted({f.cells for f in level_filters}):
+            filters = [f for f in level_filters if f.cells == cells]
+            row_keys = list(plan.rows[:level_no])
+            keys = row_keys + list(plan.query.columns) if cells else row_keys  # REQ-DIM-006: a cell's grain
+            # REQ-DIM-005: only records with a node at this level are filtered by it
+            groups = e0.filter(e0[row_keys[-1]].notnull()) if ragged else e0
+            grouped = groups.group_by(keys).aggregate(**_measures(groups, plan, [f.measure for f in filters], keys))
+            cond = None
+            for f in filters:
+                term = _CMP[f.op](grouped[f.measure], f.value)
+                cond = term if cond is None else (cond & term)
+            passing = _semi_join_on_keys(e, grouped.filter(cond), keys)
+            e = passing.union(e.filter(e[row_keys[-1]].isnull()), distinct=False) if ragged else passing
     return e
 
 
@@ -411,7 +436,7 @@ def tree(
         # REQ-LAYOUT-001: the group row first (pre-order) or after its descendants (post-order).
         order.append(below if q.subtotals == "before" else below.desc())
         dimension_sorted = False
-        for n, (field, desc, is_measure, absolute) in enumerate(plan.sort):
+        for n, (field, desc, is_measure, absolute, nulls_first) in enumerate(plan.sort):
             if is_measure and (i, n) in cell_sort:  # REQ-SORT-004: the ancestor's value in one column member
                 value = union[cell_sort[(i, n)]]
             elif is_measure:
@@ -424,7 +449,7 @@ def tree(
                 continue  # a dimension entry orders only its own level
             if absolute:
                 value = value.abs()
-            order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
+            order += [_null_rank(value, nulls_first), value.desc() if desc else value.asc()]
         if not dimension_sorted:  # deterministic tie-break: the member value, ascending
             order += [union[k].isnull().cast("int8"), union[k].asc()]
     if q.derived:
@@ -481,7 +506,7 @@ def output_columns(plan: LogicalPlan) -> List[str]:
 
 def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, str], str]]:
     """Attach, for each level i, the sorted measures of the row's level-i ancestor (REQ-SORT-001)."""
-    measures = [field for field, _desc, is_measure, _abs in plan.sort if is_measure]
+    measures = [field for field, _desc, is_measure, _abs, _nf in plan.sort if is_measure]
     names: Dict[Tuple[int, str], str] = {}
     if not measures:
         return union, names
@@ -506,12 +531,17 @@ def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> 
     return union, names
 
 
+def _null_rank(value: Any, nulls_first: bool) -> Any:
+    """The NULL position key of a sort entry: NULLS LAST (REQ-BACK-001), or first (REQ-SORT-006)."""
+    return (value.notnull() if nulls_first else value.isnull()).cast("int8")
+
+
 def _flat_order(union: Any, plan: LogicalPlan, member_key: Dict[str, str],
                 cell_sort: Dict[Tuple[int, int], str]) -> List[Any]:
     """REQ-LAYOUT-002: leaves ordered by the sort entries in precedence, then every row dimension; grand total last."""
     leaf = len(plan.rows)
     order: List[Any] = [(union[DEPTH] == 0).cast("int8")]
-    for n, (field, desc, is_measure, absolute) in enumerate(plan.sort):
+    for n, (field, desc, is_measure, absolute, nulls_first) in enumerate(plan.sort):
         if is_measure and (leaf, n) in cell_sort:
             value = union[cell_sort[(leaf, n)]]
         elif field in member_key:
@@ -520,8 +550,8 @@ def _flat_order(union: Any, plan: LogicalPlan, member_key: Dict[str, str],
             value = union[field]
         if absolute:
             value = value.abs()
-        order += [value.isnull().cast("int8"), value.desc() if desc else value.asc()]
-    ordered = {field for field, _d, is_measure, absolute in plan.sort
+        order += [_null_rank(value, nulls_first), value.desc() if desc else value.asc()]
+    ordered = {field for field, _d, is_measure, absolute, nulls_first in plan.sort
                if not is_measure and not absolute and field not in member_key}
     for k in plan.rows:
         if k not in ordered:  # an entry already orders by this value: a tie-break adds nothing
@@ -597,7 +627,7 @@ def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, D
         for n, s, member in entries:
             names[(i, n)] = f"__cell{i}_{n}"
             condition = _member_condition(source, schema, q.columns, tuple(member))
-            aggregates[names[(i, n)]] = _lower(measures[s.field], source, plan, keys, condition)
+            aggregates[names[(i, n)]] = _lower(measures[s.field], source, plan, keys, condition, tuple(member))
         lookup = source.group_by(keys).aggregate(**aggregates)
         lookup = lookup.select(**{f"__canc{i}_{j}": lookup[k] for j, k in enumerate(keys)},
                                **{name: lookup[name] for name in aggregates})

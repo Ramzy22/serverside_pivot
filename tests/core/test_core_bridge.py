@@ -89,17 +89,15 @@ def test_expansion_paths_are_coerced_and_filtered():
 
 @pytest.mark.parametrize("kw, reason", [
     (dict(columns=["c"]), "column pivot without pivot_config"),
-    (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True),
-          filters=[{"field": "v_sum", "op": ">", "value": 1}]), "measure filter with column pivot"),
     (dict(rows=["r"], columns=["zz"], pivot_config=PivotConfig(enabled=True)), "unknown column fields ['zz']"),
     (dict(custom_dimensions=[{"id": "x", "rules": [{"label": "L", "field": "nope", "op": "=", "value": 1}]}]),
      "filter on unknown field 'nope'"),
     (dict(having=[{"field": "v_sum"}]), "having"),
     (dict(group_allow_unbalanced=True, rows=["r", "v"]), "ragged hierarchy over fields of different types"),
-    (dict(measure_axis=MeasureAxisConfig(placement="columns")), "measure axis on columns"),
+    (dict(measure_axis=MeasureAxisConfig(placement="diagonal")), "measure axis on diagonal"),
+    (dict(rows=[], measure_axis=MeasureAxisConfig(placement="columns", suppress_zero_members=True)),
+     "measure axis zero suppression without row levels"),
     (dict(rows=["r"], columns=["c"], pivot_config=PivotConfig(enabled=True, top_n=5)), "column pivot options"),
-    (dict(sort=[{"field": "r", "order": "asc", "sortKeyField": "v", "sortType": "tenor"}]),
-     "custom member order with a sort type"),
     (dict(measures=[Measure(field="v", agg="mode", alias="m")]), "aggregation 'mode'"),
     (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="ntile")]), "window function 'ntile'"),
     (dict(measures=[Measure(field="v", agg="sum", alias="m", window_func="rank", window_group_by=["r"])]),
@@ -119,7 +117,7 @@ def test_expansion_paths_are_coerced_and_filtered():
         placement="rows", label_field="M", value_field="V", members=[{"measureAlias": "v_sum", "label": "S"}])),
      "ragged hierarchy with a measure axis"),
     (dict(sort=[{"field": "r", "order": "asc", "collation": "nocase"}]), "sort keys ['collation']"),
-    (dict(sort=[{"field": "r", "nulls": "first"}]), "nulls 'first'"),
+    (dict(sort=[{"field": "r", "nulls": "middle"}]), "nulls 'middle'"),
     (dict(sort=[{"field": "r", "semanticType": "calendar"}]), "semantic sort 'calendar'"),  # tenor: REQ-SORT-005
     (dict(filters=[{"field": "r", "op": "=", "value": "A", "regex": True}]), "filter keys ['regex']"),
 ])
@@ -784,3 +782,66 @@ def test_sorts_naming_no_column_of_the_view_are_ignored():  # REQ-SORT-004
     assert sort([{"field": "revenue", "order": "desc"}]) == (SortKey("revenue", True),)
     with pytest.raises(CoreUnsupported, match="sort on 'nope'"):
         sort([{"field": "nope"}])
+
+
+def test_measure_axis_on_columns_and_zero_suppression_map_to_the_core():  # REQ-DIM-006
+    schema = ibis.schema({"r": "string", "c": "string", "s": "float64", "k": "float64"})
+    measures = [Measure(field="s", agg="sum", alias="s_sum"), Measure(field="k", agg="sum", alias="k_sum")]
+
+    def query(placement, rows=("r",), columns=(), zero=False):
+        axis = MeasureAxisConfig(placement=placement, label_field="M", value_field="Amount",
+                                 suppress_zero_members=zero)
+        spec = PivotSpec(table="t", rows=list(rows), columns=list(columns), measures=measures, measure_axis=axis,
+                         pivot_config=PivotConfig(enabled=True))
+        return spec_to_query(spec, [["__ALL__"]], schema)
+
+    q = query("columns", columns=["c"], zero=True)
+    assert (q.rows, q.columns) == (("r",), ("c", "M"))  # the label is the innermost column unless placed
+    assert q.measure_filters == (MeasureFilter(1, "Amount", "!=", 0, cells=True),)
+    assert query("columns", columns=["M", "c"]).columns == ("M", "c")
+    q = query("rows", rows=("r", "M"), zero=True)
+    assert (q.rows, q.columns, q.measure_filters) == (("r", "M"), (), (MeasureFilter(2, "Amount", "!=", 0),))
+
+
+def test_measure_axis_label_columns_follow_the_member_order():  # REQ-DIM-006
+    con = ibis.duckdb.connect()
+    con.create_table("ax", pa.table({"r": ["A", "A", "B"], "zeta": [1.0, 0.0, 0.0], "alpha": [2.0, 0.0, 0.0]}))
+    axis = MeasureAxisConfig(placement="columns", label_field="M", value_field="Amount", suppress_zero_members=True,
+                             members=[{"sourceField": "zeta", "label": "zeta", "order": 0},
+                                      {"sourceField": "alpha", "label": "alpha", "order": 1}])
+    s = PivotSpec(table="ax", rows=["r"], measures=[Measure(field="zeta", agg="sum", alias="zeta_sum"),
+                                                     Measure(field="alpha", agg="sum", alias="alpha_sum")],
+                  measure_axis=axis, pivot_config=PivotConfig(enabled=True), totals=True)
+    view = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    rows = {r["_path"]: {k: v for k, v in r.items() if k.endswith("_Amount")} for r in view["rows"]}
+    assert list(rows["A"]) == ["zeta_Amount", "alpha_Amount"]  # member order, not alphabetical
+    assert rows["A"] == {"zeta_Amount": 1.0, "alpha_Amount": 2.0}
+    assert "B" not in rows  # every cell of B is zero: suppressed
+    assert rows["__grand_total__"] == {"zeta_Amount": 1.0, "alpha_Amount": 2.0}
+
+
+def test_formula_axis_members_evaluate_on_the_member_records():  # REQ-DIM-007
+    con = ibis.duckdb.connect()
+    con.create_table("fx", pa.table({"cat": ["A", "A", "B"], "sales": [10.0, 20.0, 5.0], "cost": [4.0, 8.0, 2.0]}))
+    axis = MeasureAxisConfig(placement="rows", label_field="M", value_field="Amount",
+                             members=[{"measureAlias": "sales_sum", "label": "Sales", "order": 0},
+                                      {"measureAlias": "ratio", "label": "Ratio", "order": 1},
+                                      {"measureAlias": "margin", "label": "Margin", "order": 2}])
+    s = PivotSpec(table="fx", rows=["cat", "M"], totals=True, measure_axis=axis, measures=[
+        Measure(field="sales", agg="sum", alias="sales_sum"), Measure(field="cost", agg="sum", alias="cost_sum"),
+        Measure(field=None, agg="formula", alias="margin", expression="sales_sum - cost_sum"),
+        Measure(field=None, agg="formula", alias="ratio", expression="margin / sales_sum")])
+    view = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    got = {r["_path"]: r["Amount"] for r in view["rows"]}
+    assert got["A|||Sales"] == 30.0 and got["A|||Margin"] == 18.0 and got["A|||Ratio"] == pytest.approx(0.6)
+    assert got["B|||Margin"] == 3.0 and got["B|||Ratio"] == pytest.approx(0.6)
+    assert got["A"] is None and got["__grand_total__"] is None  # above the label (REQ-DIM-003)
+    assert [r["_path"] for r in view["rows"]][:4] == ["A", "A|||Sales", "A|||Ratio", "A|||Margin"]
+
+
+def test_nulls_first_and_keyed_sorts_with_a_sort_type_map_to_the_core():  # REQ-SORT-006, REQ-SORT-003
+    q = spec_to_query(spec(sort=[{"field": "r", "nulls": "first", "order": "desc"}]), [], SCHEMA)
+    assert q.sort == (SortKey("r", True, nulls_first=True),)
+    q = spec_to_query(spec(sort=[{"field": "r", "sortKeyField": "v", "sortType": "tenor", "absoluteSort": True}]),
+                      [], SCHEMA)
+    assert q.sort == (SortKey("r", False, False, "v"),)  # the supplied key is the order

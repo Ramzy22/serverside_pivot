@@ -106,7 +106,11 @@
               "<="
             ]
           },
-          "value": {}
+          "value": {},
+          "cells": {
+            "type": "boolean",
+            "description": "REQ-DIM-006: group by the level's path and every column dimension (a pivot cell's grain). Omitted when false."
+          }
         }
       }
     },
@@ -141,6 +145,10 @@
             "enum": [
               "tenor"
             ]
+          },
+          "nullsFirst": {
+            "type": "boolean",
+            "description": "REQ-SORT-006: NULLs before every value, in both directions. Omitted when false."
           }
         }
       }
@@ -352,7 +360,10 @@
                 "type": "string"
               },
               "field": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "order": {
                 "type": "integer"
@@ -371,6 +382,10 @@
               },
               "orderBy": {
                 "type": "string"
+              },
+              "expr": {
+                "type": "object",
+                "description": "REQ-DIM-007: a formula member's expression (agg 'formula', no field)."
               }
             }
           }

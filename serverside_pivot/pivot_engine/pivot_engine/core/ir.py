@@ -162,12 +162,17 @@ Filter = Union[Predicate, PredicateGroup]
 
 @dataclass(frozen=True)
 class MeasureFilter:
-    """Group predicate at hierarchy ``level`` (1-based), evaluated on E0 (REQ-TOT-001)."""
+    """Group predicate at hierarchy ``level`` (1-based), evaluated on E0 (REQ-TOT-001).
+
+    ``cells``: the group is the level's path and every column dimension, a
+    pivot cell's grain (REQ-DIM-006), instead of the level's path alone.
+    """
 
     level: int
     measure: str
     op: str
     value: Any
+    cells: bool = False
 
 
 @dataclass(frozen=True)
@@ -182,7 +187,8 @@ class SortKey:
     ``member`` (measure entries only) orders by the node's value within one
     column member, a pivot cell (REQ-SORT-004).  ``semantic`` (text dimension
     entries only) orders the members by a key computed from the member value:
-    "tenor" (REQ-SORT-005).
+    "tenor" (REQ-SORT-005).  ``nulls_first`` puts the entry's NULLs before
+    every value, in both directions (REQ-SORT-006).
     """
 
     field: str
@@ -191,6 +197,7 @@ class SortKey:
     by: Optional[str] = None
     member: Optional[Tuple[Any, ...]] = None
     semantic: Optional[str] = None
+    nulls_first: bool = False
 
 
 SEMANTIC_SORTS = frozenset({"tenor"})
@@ -280,16 +287,18 @@ def extend_schema(schema: Mapping[str, str], categories: Tuple[Category, ...]) -
 @dataclass(frozen=True)
 class UnpivotMember:
     label: str  # the member's value in the label column
-    field: str  # the source column whose value the member's records carry
+    field: Optional[str]  # the source column whose value the member's records carry (None: a formula)
     order: int  # the member's value in the key column (its display order)
     # REQ-DIM-003: the member's own aggregation of ``field`` (all members or none)
     agg: Optional[str] = None
     weight: Optional[str] = None
     q: Optional[float] = None
     order_by: Optional[str] = None
+    # REQ-DIM-007: a formula member (agg "formula") over the query's measures, on the member's records
+    expr: Optional[Expr] = None
 
     def measure(self) -> MeasureRef:
-        return MeasureRef(self.label, str(self.agg), self.field, self.weight, self.q, self.order_by)
+        return MeasureRef(self.label, str(self.agg), self.field, self.weight, self.q, self.order_by, self.expr)
 
 
 MEMBER_AGG = "member"  # REQ-DIM-003: the value measure of a per-member measure axis
@@ -322,7 +331,7 @@ class Unpivot:
         return any(m.agg is not None for m in self.members)
 
     def value_family(self, schema: Mapping[str, str]) -> str:
-        families = {schema[m.field] for m in self.members}
+        families = {schema[m.field] for m in self.members if m.field is not None}  # a formula member is numeric
         if families <= _NUMERIC:
             return "floating"
         return families.pop() if len(families) == 1 else "string"
@@ -336,13 +345,20 @@ class Unpivot:
         if len(set(names)) != 3 or any(not n or n in schema for n in names):
             raise IRValidationError(f"measure axis columns {names} are empty, repeated or collide with a column.")
         for m in self.members:
-            if m.field not in schema:
+            if m.agg == FORMULA_AGG:  # REQ-DIM-007
+                if m.field is not None or m.expr is None:
+                    raise IRValidationError(f"formula member {m.label!r} has an expression and no source field.")
+                check_expr(m.expr)
+            elif m.expr is not None or m.field not in schema:
                 raise IRValidationError(f"measure axis member {m.label!r} references unknown column {m.field!r}.")
         if self.per_member:
             if any(m.agg is None for m in self.members):
                 raise IRValidationError("a per-member measure axis needs an aggregation on every member.")
             for m in self.members:  # each member is an ordinary measure of its source field
-                PivotQuery(dataset="__axis", rows=(), measures=(m.measure(),)).validate(schema)
+                if m.agg != FORMULA_AGG:
+                    PivotQuery(dataset="__axis", rows=(), measures=(m.measure(),)).validate(schema)
+            if any(m.agg == FORMULA_AGG for m in self.members) and self.value_family(schema) != "floating":
+                raise IRValidationError("formula members need a numeric measure axis.")
             if len({m.agg == "array_agg" for m in self.members}) > 1:  # one value column: one kind of value
                 raise IRValidationError("a measure axis cannot mix series (array_agg) and scalar members.")
         return {**schema, self.label: "string", self.value: self.value_family(schema), self.key: "integer"}
@@ -541,6 +557,14 @@ class PivotQuery:
                 if schema[m.order_by] == "other":
                     raise IRValidationError(f"order field {m.order_by!r} is not orderable.")
         series = self.series_measures()  # REQ-AGG-009: a series is shown, never compared or computed with
+        if axis is not None:  # REQ-DIM-007: a formula member references plain measures only
+            plain_refs = {m.alias for m in self.measures if m.agg not in {MEMBER_AGG, FORMULA_AGG}} - series
+            for axis_member in axis.members:
+                if axis_member.expr is not None:
+                    unknown = sorted(set(axis_member.expr.refs()) - plain_refs)
+                    if unknown:
+                        raise IRValidationError(f"formula member {axis_member.label!r} references {unknown}: "
+                                                "only plain, non-series measures of the query.")
         for f in formulas.values():
             assert f.expr is not None
             if set(f.expr.refs()) & series:
@@ -574,6 +598,8 @@ class PivotQuery:
                 raise IRValidationError(f"measure filter level {mf.level} outside 1..{len(self.rows)}.")
             if mf.op not in _COMPARISON_OPS:
                 raise IRValidationError(f"unsupported measure filter operator {mf.op!r}.")
+            if mf.cells and not self.columns:
+                raise IRValidationError("a cell-grain measure filter needs column dimensions.")
         if len({(s.field, s.member) for s in self.sort}) != len(self.sort):
             raise IRValidationError("each sort field (and column member) may appear once.")
         for s in self.sort:
@@ -691,10 +717,12 @@ def from_wire(obj: Mapping[str, Any], *, dataset: Optional[str] = None) -> Pivot
             ),
             filters=tuple(_filter_from_wire(f) for f in obj.get("filters", ())),
             measure_filters=tuple(
-                MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"]) for f in obj.get("measureFilters", ())
+                MeasureFilter(int(f["level"]), f["measure"], f["op"], f["value"], bool(f.get("cells", False)))
+                for f in obj.get("measureFilters", ())
             ),
             sort=tuple(SortKey(s["field"], bool(s.get("desc", False)), bool(s.get("absolute", False)), s.get("by"),
-                               None if s.get("member") is None else tuple(s["member"]), s.get("semantic"))
+                               None if s.get("member") is None else tuple(s["member"]), s.get("semantic"),
+                               bool(s.get("nullsFirst", False)))
                        for s in obj.get("sort", ())),
             totals=obj.get("totals", "visible"),
             subtotals=obj.get("subtotals", "before"),
@@ -734,11 +762,13 @@ def to_wire(query: PivotQuery) -> Dict[str, Any]:
         "rows": list(query.rows),
         "measures": [measure_to_wire(m) for m in query.measures],
         "filters": [filt(f) for f in query.filters],
-        "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value}
+        "measureFilters": [{"level": f.level, "measure": f.measure, "op": f.op, "value": f.value,
+                            **({"cells": True} if f.cells else {})}  # omitted when off: existing vectors hold
                            for f in query.measure_filters],
         "sort": [{"field": k.field, "desc": k.desc, "absolute": k.absolute, **({"by": k.by} if k.by else {}),
                   **({"member": list(k.member)} if k.member is not None else {}),
-                  **({"semantic": k.semantic} if k.semantic else {})}
+                  **({"semantic": k.semantic} if k.semantic else {}),
+                  **({"nullsFirst": True} if k.nulls_first else {})}  # omitted when off: existing vectors hold
                  for k in query.sort],
         "totals": query.totals,
         "window": {"offset": query.window.offset, "limit": query.window.limit},
@@ -776,6 +806,8 @@ def _member_to_wire(m: UnpivotMember) -> Dict[str, Any]:
     for key, value in (("agg", m.agg), ("weight", m.weight), ("q", m.q), ("orderBy", m.order_by)):
         if value is not None:  # omitted when absent: existing wire forms are unchanged
             out[key] = value
+    if m.expr is not None:
+        out["expr"] = expr_to_wire(m.expr)
     return out
 
 
@@ -788,8 +820,10 @@ def unpivot_from_wire(obj: Any) -> Optional[Unpivot]:
     if obj is None:
         return None
     return Unpivot(str(obj["label"]), str(obj["value"]), str(obj["key"]),
-                   tuple(UnpivotMember(str(m["label"]), str(m["field"]), int(m["order"]), m.get("agg"), m.get("weight"),
-                                       m.get("q"), m.get("orderBy")) for m in obj["members"]),
+                   tuple(UnpivotMember(str(m["label"]), None if m.get("field") is None else str(m["field"]),
+                                       int(m["order"]), m.get("agg"), m.get("weight"), m.get("q"), m.get("orderBy"),
+                                       None if m.get("expr") is None else expr_from_wire(m["expr"]))
+                         for m in obj["members"]),
                    bool(obj.get("dropNulls", False)))
 
 

@@ -310,7 +310,7 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
         {"id": m.alias or m.field, "sourceField": m.field, "measureAlias": m.alias, "agg": m.agg or "sum",
          "label": m.field or m.alias, "order": i}
         for i, m in enumerate(measures) if m and getattr(m, "alias", None)]
-    members: List[Tuple[str, str, int, str, Any]] = []  # (label, source, order, agg, measure)
+    members: List[Tuple[str, Optional[str], int, str, Any]] = []  # (label, source, order, agg, measure)
     seen: set = set()
     for i, member in enumerate(raw_members):
         source = str(member.get("sourceField") or member.get("source_field") or member.get("field") or "").strip()
@@ -345,10 +345,17 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
                 for _l, source, _o, agg, m in members)
     uniform = len(aggs) == 1 and aggs <= _AXIS_AGGS and plain
     own: List[Optional[MeasureRef]] = [None] * len(members)
+    hidden: List[MeasureRef] = []  # REQ-DIM-007: the plain measures formula members reference
     if not uniform:  # REQ-DIM-003: each member keeps its own measure (legacy aggregates first, then unpivots)
         for i, (text, source, _o, agg, m) in enumerate(members):
             if m is not None and (getattr(m, "ratio_numerator", None) or getattr(m, "window_func", None)):
                 reasons.append("measure axis member is a derived measure")
+                continue
+            if m is not None and str(getattr(m, "agg", "") or "").strip().lower() == "formula":
+                expr = _axis_formula(m, measures, hidden, reasons)
+                if expr is not None:
+                    own[i] = MeasureRef(text, FORMULA_AGG, None, expr=expr)
+                    members[i] = (text, None, members[i][2], "formula", m)
                 continue
             ref = _measure(m, reasons) if m is not None else (
                 MeasureRef(text, _AGG[agg], source) if agg in _AGG else None)
@@ -361,13 +368,12 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
                 continue
             own[i] = ref
             members[i] = (text, ref.field, members[i][2], agg, m)
-    if config.placement != "rows":
+    on_columns = config.placement == "columns"  # REQ-DIM-006: the label as a column dimension
+    if config.placement not in {"rows", "columns"}:
         reasons.append(f"measure axis on {config.placement}")
-    if config.suppress_zero_members:
-        reasons.append("measure axis zero suppression")
     if any(n in families for n in (label, value, key)):
         reasons.append("measure axis columns collide with a column")
-    missing = [source for _l, source, _o, _a, _m in members if source not in families]
+    missing = [source for _l, source, _o, _a, _m in members if source is not None and source not in families]
     if missing:
         reasons.append(f"measure axis unknown fields {missing}")
     if len({text for text, *_rest in members}) != len(members):
@@ -375,20 +381,78 @@ def _measure_axis(spec: Any, families: Dict[str, str], reasons: List[str]) -> Op
     if reasons:
         return None
     unpivot = Unpivot(label, value, key, tuple(
-        UnpivotMember(t, s, o) if ref is None else UnpivotMember(t, s, o, ref.agg, ref.weight, ref.q, ref.order_by)
+        UnpivotMember(t, s, o) if ref is None else UnpivotMember(t, s, o, ref.agg, ref.weight, ref.q, ref.order_by,
+                                                                  ref.expr)
         for (t, s, o, _a, _m), ref in zip(members, own, strict=True)), drop_nulls=bool(config.suppress_empty_members))
     families.update(unpivot.extend(families))
-    rows = [str(r) for r in spec.rows or []]
-    if label not in rows and not getattr(spec, "_measure_axis_exact_layout", False):
+    rows = [str(r) for r in spec.rows or [] if not (on_columns and str(r) == label)]
+    columns = [str(c) for c in getattr(spec, "columns", None) or [] if on_columns or str(c) != label]
+    if on_columns and label not in columns:
+        columns.append(label)  # the label is the innermost column dimension unless placed
+    if not on_columns and label not in rows and not getattr(spec, "_measure_axis_exact_layout", False):
         rows.append(label)  # legacy appends a missing label level
     sort = list(spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else []))
     if label in rows and not any(isinstance(s, Mapping) and (s.get("field") == label or s.get("sortKeyField") == key)
                                  for s in sort):
         sort.append({"field": label, "order": "asc", "sortKeyField": key})  # members in their order
     agg = _AGG[next(iter(aggs))] if uniform else MEMBER_AGG
-    return {"unpivot": unpivot, "rows": rows, "sort": sort,
-            "columns": [str(c) for c in getattr(spec, "columns", None) or [] if str(c) != label],
-            "measures": [MeasureRef(value, agg, value)]}
+    measure_filters: List[MeasureFilter] = []
+    if config.suppress_zero_members:
+        # REQ-DIM-006: a member whose value is zero (or NULL) is suppressed: on rows a label node, on
+        # columns a cell; records of a suppressed member leave E, so a node left without any is not shown.
+        if on_columns and rows:
+            measure_filters.append(MeasureFilter(len(rows), value, "!=", 0, cells=True))
+        elif on_columns:
+            reasons.append("measure axis zero suppression without row levels")
+            return None
+        else:
+            measure_filters.append(MeasureFilter(rows.index(label) + 1, value, "!=", 0))
+    return {"unpivot": unpivot, "rows": rows, "sort": sort, "columns": columns,
+            "measures": [MeasureRef(value, agg, value), *hidden], "measure_filters": measure_filters}
+
+
+def _axis_formula(m: Any, measures: Sequence[Any], hidden: List[MeasureRef], reasons: List[str]) -> Optional[Expr]:
+    """A formula axis member's expression over hidden copies of the plain measures it names (REQ-DIM-007).
+
+    A reference to another formula measure is that formula's expression, inlined; a cycle is NULL.
+    """
+    by_alias = {str(x.alias): x for x in measures if getattr(x, "alias", None)}
+    lowered = {k.lower(): k for k in by_alias}
+    inlining: List[str] = []
+
+    def resolve(name: str) -> Optional[str]:
+        alias = name if name in by_alias else lowered.get(name.lower())
+        if alias is None:
+            return None
+        target = by_alias[alias]
+        if str(getattr(target, "agg", "") or "").strip().lower() == "formula":
+            return f"__formula__{alias}"
+        ref = f"{HIDDEN}ax_{alias}"
+        if ref not in {h.alias for h in hidden}:
+            base = _measure(target, reasons, alias=ref)
+            if base is None:
+                raise _FormulaDecline("formula member over an unsupported measure")
+            hidden.append(base)
+        return ref
+
+    def expand(expr: Expr) -> Expr:
+        if expr.op == "ref" and str(expr.args[0]).startswith("__formula__"):
+            alias = str(expr.args[0])[len("__formula__"):]
+            if alias in inlining:
+                return Expr("null")
+            inlining.append(alias)
+            try:
+                return expand(_formula_expr(str(getattr(by_alias[alias], "expression", "") or ""), resolve))
+            finally:
+                inlining.pop()
+        return Expr(expr.op, tuple(expand(a) if isinstance(a, Expr) else a for a in expr.args))
+
+    try:
+        inlining.append(str(m.alias))
+        return expand(_formula_expr(str(getattr(m, "expression", "") or ""), resolve))
+    except _FormulaDecline as exc:
+        reasons.append(str(exc))
+        return None
 
 
 # --------------------------------------------------------------------- ragged hierarchy (REQ-DIM-005)
@@ -688,7 +752,7 @@ def _unknown_keys(f: Any, reasons: List[str]) -> None:
 
 def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, start_row: int = 0,
                   end_row: Optional[int] = None, subtotals: str = "before",
-                  cell_sorts: Optional[List[Tuple[int, str, str, bool, bool]]] = None) -> PivotQuery:
+                  cell_sorts: Optional[List[Tuple[int, str, str, bool, bool, bool]]] = None) -> PivotQuery:
     """Map a legacy spec to the IR; raise :class:`CoreUnsupported` with every reason.
 
     The query's window addresses the legacy flattened list (nodes in tree
@@ -777,43 +841,44 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
                 and (s.get("field") == axis_label or (axis is None and s.get("field") not in families))):
             continue  # the measure-axis level is not shown (axis off or label not a row): nothing to order
         semantic_kind = str(semantic or ("tenor" if sort_type == "curve_pillar_tenor" else "")).strip().lower()
+        nulls = str(s.get("nulls") or "last").strip().lower()
+        nulls_first = nulls == "first"  # REQ-SORT-006
         if key_field and key_field in families and s.get("field") in rows:
             # REQ-SORT-003: members ordered by MIN(key) (legacy: a hidden sort key per member).  A supplied
             # key is the order: it wins over a semantic type or a pillar sort type, as in legacy.
-            if absolute or (sort_type and sort_type not in _PLAIN_SORT_TYPES | {"curve_pillar_tenor"}):
-                reasons.append("custom member order with a sort type")
-            elif str(s.get("nulls") or "last").lower() != "last":
-                reasons.append(f"nulls {s.get('nulls')!r}")
-            else:
-                sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", False, str(key_field)))
+            # The key is the order, whatever the sort type (an absolute key orders as the key: keys are ranks).
+            sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", False, str(key_field),
+                                nulls_first=nulls_first))
         elif key_field and key_field in families and s.get("field") not in columns:
             continue  # a member order for a dimension that is not a row level: nothing to order
         elif key_field and key_field in families:
             reasons.append("custom member order on a column dimension")
         elif semantic_kind == "tenor" and s.get("field") in rows and families.get(str(s.get("field"))) == "string":
-            if absolute or str(s.get("nulls") or "last").lower() != "last":
-                reasons.append("tenor sort with absolute or nulls first")
+            if absolute:
+                reasons.append("tenor sort with absolute")
             else:  # REQ-SORT-005
-                sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", semantic="tenor"))
+                sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", semantic="tenor",
+                                    nulls_first=nulls_first))
         elif semantic:
             reasons.append(f"semantic sort {semantic!r}")
-        elif str(s.get("nulls") or "last").lower() != "last":
+        elif nulls not in {"first", "last"}:
             reasons.append(f"nulls {s.get('nulls')!r}")
         elif sort_type and not absolute and sort_type not in _PLAIN_SORT_TYPES:
             reasons.append(f"sort type {sort_type!r}")
         elif s.get("field") in rows or (s.get("field") in aliases and not columns):
-            sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", absolute))
+            sort.append(SortKey(str(s["field"]), str(s.get("order", "asc")).lower() == "desc", absolute,
+                                nulls_first=nulls_first))
         elif s.get("field") in aliases:
             continue  # a pivoted view shows no column for the plain measure: ignored, as legacy does
         elif columns and str(s.get("field") or "").startswith("__RowTotal__")                 and str(s["field"])[len("__RowTotal__"):] in aliases:
             sort.append(SortKey(str(s["field"])[len("__RowTotal__"):], str(s.get("order", "asc")).lower() == "desc",
-                                absolute))
+                                absolute, nulls_first=nulls_first))
         elif columns and cell_sorts is not None and any(
                 str(s.get("field") or "").endswith(f"_{a}") for a in aliases):
             field_text = str(s["field"])
             alias = max((a for a in aliases if field_text.endswith(f"_{a}")), key=len)
             cell_sorts.append((len(sort), field_text[: -len(alias) - 1], alias,
-                               str(s.get("order", "asc")).lower() == "desc", absolute))
+                               str(s.get("order", "asc")).lower() == "desc", absolute, nulls_first))
         elif s.get("field") not in columns and (
                 s.get("field") in families
                 or s.get("field") in {f"{m.field}_{m.agg}" for m in spec.measures or [] if m.field}):
@@ -822,8 +887,8 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
             reasons.append(f"sort on {s.get('field')!r}")
 
     filters, measure_filters = _filters(spec, aliases, families, len(rows), reasons)
-    if measure_filters and columns:
-        reasons.append("measure filter with column pivot")
+    if axis:
+        measure_filters = (*measure_filters, *axis["measure_filters"])
     if reasons:
         raise CoreUnsupported(reasons)
 
@@ -859,7 +924,7 @@ def legacy_column_key(member: Sequence[Any]) -> str:
 
 
 def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any],
-                     cell_sorts: Sequence[Tuple[int, str, str, bool, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
+                     cell_sorts: Sequence[Tuple[int, str, str, bool, bool, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
     """Bind the column window: every member, or the legacy-selected keys, in their order.
 
     Deferred cell sorts are typed here; one naming no member is ignored, as legacy does.
@@ -877,9 +942,9 @@ def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any
     keys = list(by_key) if wanted is None else [str(k) for k in wanted if str(k) in by_key]
     sort = list(query.sort)
     inserted = 0
-    for position, key, alias, desc, absolute in cell_sorts:
+    for position, key, alias, desc, absolute, nulls_first in cell_sorts:
         if key in by_key:
-            sort.insert(position + inserted, SortKey(alias, desc, absolute, member=by_key[key]))
+            sort.insert(position + inserted, SortKey(alias, desc, absolute, member=by_key[key], nulls_first=nulls_first))
             inserted += 1
     return replace(query, column_members=tuple(by_key[k] for k in keys), sort=tuple(sort)), keys
 
@@ -993,7 +1058,7 @@ def core_hierarchy_view(
     relation = resolve(spec.table)
     if tabular_subtotals or flat:
         target_paths = [["__ALL__"]]  # every group is open: collapse state does not apply to a flat layout
-    cell_sorts: List[Tuple[int, str, str, bool, bool]] = []
+    cell_sorts: List[Tuple[int, str, str, bool, bool, bool]] = []
     query = spec_to_query(spec, target_paths, relation.schema(), start_row=start_row, end_row=end_row,
                           subtotals="none" if flat else ("after" if tabular_subtotals else "before"),
                           cell_sorts=cell_sorts)
@@ -1084,7 +1149,7 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     limit = getattr(spec, "limit", None) or None  # the run_pivot contract: limit 0 (or None) = no limit
     plain = copy.copy(spec)
     plain.offset = 0
-    cell_sorts: List[Tuple[int, str, str, bool, bool]] = []
+    cell_sorts: List[Tuple[int, str, str, bool, bool, bool]] = []
     query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     query, keys = _resolve_members(query, spec, resolver, cell_sorts)

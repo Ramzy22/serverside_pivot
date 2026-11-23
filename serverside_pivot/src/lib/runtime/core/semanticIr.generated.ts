@@ -58,6 +58,10 @@ export interface PivotQuery {
     measure: string;
     op: "=" | "!=" | ">" | ">=" | "<" | "<=";
     value: unknown;
+    /**
+     * REQ-DIM-006: group by the level's path and every column dimension (a pivot cell's grain). Omitted when false.
+     */
+    cells?: boolean;
   }[];
   sort?: {
     field: string;
@@ -75,6 +79,10 @@ export interface PivotQuery {
      * REQ-SORT-005: order a text row dimension's members by a key computed from the member value.
      */
     semantic?: "tenor";
+    /**
+     * REQ-SORT-006: NULLs before every value, in both directions. Omitted when false.
+     */
+    nullsFirst?: boolean;
   }[];
   totals?: "visible" | "all_data";
   /**
@@ -126,7 +134,7 @@ export interface PivotQuery {
     members: [
       {
         label: string;
-        field: string;
+        field: string | null;
         order: number;
         /**
          * REQ-DIM-003: the member's own aggregation (all members or none); the value measure is then agg 'member'.
@@ -135,10 +143,16 @@ export interface PivotQuery {
         weight?: string;
         q?: number;
         orderBy?: string;
+        /**
+         * REQ-DIM-007: a formula member's expression (agg 'formula', no field).
+         */
+        expr?: {
+          [k: string]: unknown;
+        };
       },
       ...{
         label: string;
-        field: string;
+        field: string | null;
         order: number;
         /**
          * REQ-DIM-003: the member's own aggregation (all members or none); the value measure is then agg 'member'.
@@ -147,6 +161,12 @@ export interface PivotQuery {
         weight?: string;
         q?: number;
         orderBy?: string;
+        /**
+         * REQ-DIM-007: a formula member's expression (agg 'formula', no field).
+         */
+        expr?: {
+          [k: string]: unknown;
+        };
       }[]
     ];
   };

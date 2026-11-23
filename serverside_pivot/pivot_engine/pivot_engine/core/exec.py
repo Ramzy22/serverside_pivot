@@ -41,10 +41,12 @@ def canonical(query: PivotQuery) -> str:
                       *([expr_to_wire(m.expr)] if m.expr is not None else [])]
                      for m in query.measures],
         "filters": [_canonical_filter(f, scalar) for f in query.filters],
-        "measureFilters": [[f.level, f.measure, f.op, scalar(f.value)] for f in query.measure_filters],
+        "measureFilters": [[f.level, f.measure, f.op, scalar(f.value), *([True] if f.cells else [])]
+                           for f in query.measure_filters],
         "sort": [[k.field, k.desc, k.absolute, *([k.by] if k.by else []),
                   *([CanonicalPathCodec.encode(list(k.member))] if k.member is not None else []),
-                  *([{"semantic": k.semantic}] if k.semantic else [])]
+                  *([{"semantic": k.semantic}] if k.semantic else []),
+                  *([{"nullsFirst": True}] if k.nulls_first else [])]
                  for k in query.sort],
         "totals": query.totals,
         "expanded": None if query.expanded is None
@@ -129,7 +131,8 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
                    offset: int = 0) -> Tuple[Tuple[Any, ...], ...]:
     """The ordered column catalog (REQ-PIV-001): distinct members over E0.
 
-    Members are ordered by value per column, NULLS LAST; ``offset``/``limit``
+    Members are ordered by value per column, NULLS LAST, a measure-axis label
+    by its member order (REQ-DIM-006); ``offset``/``limit``
     select a column window.  The result feeds ``PivotQuery.column_members``.
     """
     from .physical.union_all import filtered
@@ -139,8 +142,17 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
     query.validate({name: type_family(dtype) for name, dtype in schema.items()})
     if not query.columns:
         return ()
-    source = filtered(relation, query).select(*query.columns).distinct()
-    order = [k for c in query.columns for k in (source[c].isnull().cast("int8"), source[c].asc())]
+    axis = query.unpivot
+    keyed = axis is not None and axis.label in query.columns  # REQ-DIM-006: the label orders by member order
+    extra = [axis.key] if keyed and axis is not None else []
+    source = filtered(relation, query).select(*query.columns, *extra).distinct()
+
+    order: List[Any] = []
+    for c in query.columns:
+        if keyed and axis is not None and c == axis.label:
+            order += [source[axis.key].isnull().cast("int8"), source[axis.key].asc(), source[c].asc()]
+        else:
+            order += [source[c].isnull().cast("int8"), source[c].asc()]
     expr = source.order_by(order)
     if limit is not None or offset:
         expr = expr.limit(limit, offset=offset)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import dataclasses
 import os
 import pathlib
 from decimal import Decimal
@@ -75,11 +76,13 @@ def _oracle(records, query: PivotQuery):
         rows=list(query.rows),
         measures=[OMeasure(m.alias, m.agg, m.field, m.weight, m.q, getattr(m, "order_by", None),
                           getattr(m, "expr", None)) for m in query.measures],
-        measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
+        measure_filters=[OMeasureFilter(f.level, f.measure, f.op, f.value, getattr(f, "cells", False))
+                        for f in query.measure_filters],
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member)
+        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member,
+               getattr(s, "nulls_first", False))
               for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
@@ -88,7 +91,8 @@ def _oracle(records, query: PivotQuery):
                     for c in query.categories],
         unpivot=None if query.unpivot is None else (
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
-            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
+            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by, getattr(m, "expr", None))
+             for m in query.unpivot.members],
             query.unpivot.drop_nulls),
         ragged=None if getattr(query, "ragged", None) is None else (list(query.ragged.fields), query.ragged.missing),
     )
@@ -116,7 +120,8 @@ def test_core_conforms_to_every_vector(vector):
         dataset="t",
         rows=tuple(q["rows"]),
         measures=tuple(MeasureRef(m["alias"], m["agg"], m["field"]) for m in q["measures"]),
-        measure_filters=tuple(MeasureFilter(f["level"], f["measure"], f["op"], f["value"]) for f in q["measureFilters"]),
+        measure_filters=tuple(MeasureFilter(f["level"], f["measure"], f["op"], f["value"], f.get("cells", False))
+                              for f in q["measureFilters"]),
         totals=q["totals"],
     )
     expected = [(tuple(r["path"]), r["values"]) for r in vector["expected"]["rows"]]
@@ -178,6 +183,7 @@ def queries(draw):
                                # REQ-AGG-009: a series ordered by a field (ties, NULL orders) or by value
                                draw(st.sampled_from([None, "w", "k"])) if agg == "array_agg" else None)),)
     unpivot = None
+    axis_on_columns = False
     key_fields = ["w", "k", "n"] if categories else ["w", "k"]
     if draw(st.booleans()):  # REQ-DIM-002: the measure axis as a row level (members over v and w)
         fields = draw(st.lists(st.sampled_from(["v", "w"]), min_size=1, max_size=2, unique=True))
@@ -189,14 +195,23 @@ def queries(draw):
         member_aggs = [("array_agg" if series_axis else draw(st.sampled_from(
                            ["sum", "avg", "min", "max", "count", "first", "last"]))) if per_member
                        else None for _ in fields]
-        unpivot = Unpivot("mn", "mv", "mk", tuple(
+        axis_members = tuple(
             UnpivotMember(lab, f, o, a, order_by="k" if a in {"first", "last"} or (a == "array_agg" and o > 0) else None)
-            for lab, f, o, a in zip(labels, fields, orders, member_aggs)), drop_nulls=draw(st.booleans()))
-        position = draw(st.integers(0, len(rows)))
-        rows = rows[:position] + ("mn",) + rows[position:]
+            for lab, f, o, a in zip(labels, fields, orders, member_aggs))
+        axis_formula = per_member and not series_axis and draw(st.booleans())
+        if axis_formula:  # REQ-DIM-007: a formula member over plain measures, on its own records
+            axis_members = axis_members + (UnpivotMember("F", None, draw(st.integers(-1, 3)), "formula",
+                                                         expr=draw(formula_exprs(["b_sum", "b_cnt"], depth=2))),)
+        unpivot = Unpivot("mn", "mv", "mk", axis_members, drop_nulls=draw(st.booleans()))
+        axis_on_columns = draw(st.booleans())  # REQ-DIM-006: the label as a column dimension
+        if not axis_on_columns:
+            position = draw(st.integers(0, len(rows)))
+            rows = rows[:position] + ("mn",) + rows[position:]
         if per_member:
             agg, alias = "member", "m_member"
             measures = (MeasureRef(alias, "member", "mv"),)
+            if axis_formula:
+                measures = measures + (MeasureRef("b_sum", "sum", "v"), MeasureRef("b_cnt", "count", "w"))
         else:
             measures = (MeasureRef(alias, agg, "mv", weight=measures[0].weight, q=measures[0].q,
                                    order_by=measures[0].order_by),)
@@ -234,6 +249,7 @@ def queries(draw):
                     SortKey(draw(st.sampled_from([r for r in rows if r in {"r", "c", "g", "mn"} or r.startswith("__rag")])),
                             desc=draw(st.booleans()), semantic="tenor")]
     sort = tuple(draw(st.lists(st.sampled_from(sort_choices), max_size=2, unique_by=lambda k: k.field)))
+    sort = tuple(dataclasses.replace(k, nulls_first=draw(st.booleans())) for k in sort)  # REQ-SORT-006
     window = Window()
     if draw(st.booleans()):
         window = Window(offset=draw(st.integers(0, 6)), limit=draw(st.integers(0, 6)))
@@ -253,7 +269,13 @@ def queries(draw):
         else:
             derived = (DerivedMeasure("d", func, alias, desc=draw(st.booleans())),)
     columns, members = (), ()
-    if draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
+    if axis_on_columns:  # REQ-DIM-006: the axis label (alone or after k) as a column dimension
+        assert unpivot is not None
+        columns = draw(st.sampled_from([("mn",), ("k", "mn")]))
+        label_member = st.sampled_from([m.label for m in unpivot.members] + ["absent"])
+        member = label_member.map(lambda v: (v,)) if columns == ("mn",) else st.tuples(DIM, label_member)
+        members = tuple(draw(st.lists(member, max_size=4, unique=True)))
+    elif draw(st.booleans()):  # REQ-PIV-001: explicit column window, members may be absent from the data
         columns = ("w",) if ragged is not None and "k" in ragged.fields else ("k",)
         member_value = DIM if columns == ("k",) else st.one_of(st.none(), st.integers(0, 4))
         members = tuple((v,) for v in draw(st.lists(member_value, max_size=3, unique=True)))
@@ -261,6 +283,9 @@ def queries(draw):
             # REQ-SORT-004: a pivot cell, possibly outside the returned column window
             sort = sort + (SortKey(alias, desc=draw(st.booleans()), member=(draw(member_value),),
                                    absolute=agg not in {"min", "max", "first", "last"} and draw(st.booleans())),)
+    if columns and not series and draw(st.booleans()):  # REQ-DIM-006: a cell-grain filter (zero suppression)
+        mfs = mfs + (MeasureFilter(draw(st.integers(1, len(rows))), alias, draw(st.sampled_from(["!=", ">"])),
+                                   draw(st.integers(-1, 2)), cells=True),)
     return PivotQuery(dataset="t", rows=rows, measures=measures, measure_filters=mfs, sort=sort, filters=filters,
                       totals=draw(st.sampled_from(["visible", "all_data"])),
                       subtotals=draw(st.sampled_from(["before", "after"] if ragged is not None else ["before", "after", "none"])),

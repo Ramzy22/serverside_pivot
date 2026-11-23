@@ -22,11 +22,13 @@ def to_oracle(query: Any) -> Query:
         measures=[Measure(m.alias, m.agg, m.field, m.weight, m.q, getattr(m, "order_by", None),
                           getattr(m, "expr", None)) for m in query.measures],
         filters=[_filter(f) for f in query.filters],
-        measure_filters=[MeasureFilter(f.level, f.measure, f.op, f.value) for f in query.measure_filters],
+        measure_filters=[MeasureFilter(f.level, f.measure, f.op, f.value, getattr(f, "cells", False))
+                        for f in query.measure_filters],
         totals=query.totals,
         subtotals=query.subtotals,
         expanded=None if query.expanded is None else list(query.expanded),
-        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member)
+        sort=[(s.field, s.desc, s.absolute, ("semantic", s.semantic) if s.semantic else s.by, s.member,
+               getattr(s, "nulls_first", False))
               for s in query.sort],
         columns=list(query.columns),
         column_members=list(query.column_members),
@@ -35,7 +37,8 @@ def to_oracle(query: Any) -> Query:
                     for c in getattr(query, "categories", ())],
         unpivot=None if getattr(query, "unpivot", None) is None else (
             query.unpivot.label, query.unpivot.value, query.unpivot.key,
-            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by) for m in query.unpivot.members],
+            [(m.label, m.field, m.order, m.agg, m.weight, m.q, m.order_by, getattr(m, "expr", None))
+             for m in query.unpivot.members],
             query.unpivot.drop_nulls),
         ragged=None if getattr(query, "ragged", None) is None else (list(query.ragged.fields), query.ragged.missing),
     )
