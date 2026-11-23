@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any, Dict, Optional, Protocol
 
 from ..cache_coordinator import CacheCoordinator, CacheNamespaces
-from ..hierarchy_cache_registry import estimate_container_bytes
+from ..resource_governor import estimate_container_bytes
 from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, current_workload_account, get_worker_resource_governor
 from .distributed import RedisRuntimeState, distributed_runtime_from_env
 

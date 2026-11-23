@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +12,9 @@ from pivot_engine.backends.execution import QueryCancelledError, QueryTimeoutErr
 from pivot_engine.backends.duckdb_backend import ConnectionPool
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
 from pivot_engine.backends.ibis_backend import IbisBackend
-from pivot_engine.controller import PivotController
+from pivot_engine.core.exec import materialize
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
+from pivot_engine.transport.core_bridge import run_core_read
 
 
 LONG_DUCKDB_QUERY = {
@@ -255,55 +255,6 @@ async def test_ibis_duckdb_query_timeout_environment_interrupts_the_statement(mo
         backend.close()
 
 
-@pytest.mark.asyncio
-async def test_scalable_controller_routes_ibis_expressions_through_backend_facade(monkeypatch):
-    """Calling expression.to_pyarrow in the controller would bypass cancellation."""
-    pa = pytest.importorskip("pyarrow")
-    backend = IbisBackend(connection_uri=":memory:")
-    controller = ScalablePivotController.__new__(ScalablePivotController)
-    controller.backend = backend
-    expression = backend.con.sql("SELECT 1 AS value")
-    calls = []
-
-    async def execute_async(query):
-        calls.append(query)
-        return pa.table({"value": [1]})
-
-    monkeypatch.setattr(backend, "execute_async", execute_async)
-    try:
-        result = await controller._execute_ibis_expr_async(expression, "sales")
-    finally:
-        backend.close()
-
-    assert result.to_pylist() == [{"value": 1}]
-    assert calls == [{"ibis_expr": expression}]
-
-
-@pytest.mark.asyncio
-async def test_base_controller_creates_an_ibis_facade_for_a_custom_planner(monkeypatch):
-    """Direct executor fallback would bypass cancellation with a custom planner."""
-    pa = pytest.importorskip("pyarrow")
-    source_backend = IbisBackend(connection_uri=":memory:")
-    controller = PivotController.__new__(PivotController)
-    controller.backend = object()
-    controller.planner = SimpleNamespace(con=source_backend.con)
-    expression = source_backend.con.sql("SELECT 1 AS value")
-    calls = []
-
-    async def execute_async(_self, query):
-        calls.append(query)
-        return pa.table({"value": [1]})
-
-    monkeypatch.setattr(IbisBackend, "execute_async", execute_async)
-    try:
-        result = await controller._execute_ibis_expr_async(expression)
-    finally:
-        source_backend.close()
-
-    assert result.to_pylist() == [{"value": 1}]
-    assert calls == [{"ibis_expr": expression}]
-
-
 def test_ibis_backend_rejects_hard_deadline_without_a_documented_capability():
     """Treating an unknown Ibis driver as cancellable would fake a hard deadline."""
     class UnsupportedConnection:
@@ -487,3 +438,80 @@ def test_late_cancel_does_not_interrupt_running_native_borrower(monkeypatch):
             original_checkin(lease)
         backend.close()
     assert not worker.is_alive() and not borrower.is_alive()
+
+
+def _slow_core_read(backend):
+    """A core read of two long statements: a request-level cancel must stop at the first."""
+    slow = backend.con.sql(LONG_IBIS_DUCKDB_SQL)
+    return lambda _resolve: (materialize(slow), materialize(slow))
+
+
+@pytest.mark.asyncio
+async def test_a_core_read_timeout_interrupts_its_statement_and_refuses_the_rest(monkeypatch):
+    """Executing core statements with expression.to_pyarrow would ignore QUERY_TIMEOUT."""
+    monkeypatch.setenv("QUERY_TIMEOUT", "0.2")
+    controller = ScalablePivotController(backend_uri=":memory:")
+    backend = controller.backend
+    with pytest.raises(QueryTimeoutError, match="query_timeout"):
+        await run_core_read(controller, "t", _slow_core_read(backend))
+    metrics = backend.execution_metrics()
+    assert metrics["running"] == 0
+    assert metrics["timeouts"] == 1
+    assert metrics["cancellation_attempts"] == metrics["cancellation_successes"] == 1  # the 2nd never ran
+    controller.close()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_core_read_interrupts_its_statement():
+    """A client cancel of a core read must reach the database, not wait for every statement."""
+    controller = ScalablePivotController(backend_uri=":memory:")
+    backend = controller.backend
+    task = asyncio.ensure_future(run_core_read(controller, "t", _slow_core_read(backend)))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    metrics = backend.execution_metrics()
+    assert metrics["running"] == 0
+    assert metrics["cancellation_attempts"] == metrics["cancellation_successes"] == 1
+    controller.close()
+
+
+@pytest.mark.asyncio
+async def test_every_core_statement_of_a_request_runs_on_a_cancellable_lease(monkeypatch):
+    """A core read path executing outside the lease seam would be uncancellable."""
+    pa = pytest.importorskip("pyarrow")
+    from pivot_engine.types.pivot_spec import PivotSpec
+
+    controller = ScalablePivotController(backend_uri=":memory:")
+    controller.load_data_from_arrow("s", pa.table({"r": ["N", "S", "N"], "c": ["a", "b", "a"], "v": [1, 2, 3]}))
+    leased = []
+    original = IbisBackend._execute_duckdb_ibis_with_lease
+
+    def spy(self, query, params, return_arrow, execution):
+        leased.append(query)
+        return original(self, query, params, return_arrow, execution)
+
+    monkeypatch.setattr(IbisBackend, "_execute_duckdb_ibis_with_lease", spy)
+    spec = PivotSpec.from_dict({"table": "s", "rows": ["r"], "columns": ["c"], "pivot_config": {"enabled": True},
+                                "measures": [{"field": "v", "agg": "sum", "alias": "v"}]})
+    result = await controller.run_pivot_async(spec)
+    assert sorted(result.column_names) == sorted(["r", "a_v", "b_v"])
+    assert leased, "the core pivot did not run on a leased cursor"
+    controller.close()
+
+
+def test_a_lease_sees_the_in_memory_tables_of_its_expression():
+    """Pooled cursors do not see the connection's in-memory tables unless registered on the lease."""
+    pa = pytest.importorskip("pyarrow")
+    import ibis
+    from pivot_engine.backends.execution import DatabaseExecution
+
+    backend = IbisBackend(connection_uri=":memory:")
+    backend.con.create_table("t", pa.table({"a": [1, 2, 3], "b": ["x", "y", "x"]}))
+    members = ibis.memtable(pa.table({"b": ["x"]}))
+    expression = backend.con.table("t").join(members, "b").aggregate(s=lambda t: t.a.sum())
+    result = backend._execute_duckdb_ibis_with_lease({"ibis_expr": expression}, None, True, DatabaseExecution("q"))
+    assert result.to_pylist() == [{"s": 4}]
+    assert backend.execution_metrics()["discarded_leases"] == 0
+    backend.close()

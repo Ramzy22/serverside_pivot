@@ -7,6 +7,10 @@ allocations cannot be accounted for precisely from Python.
 
 from __future__ import annotations
 
+import sys
+from datetime import date, datetime
+from decimal import Decimal
+
 from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass, fields
@@ -599,3 +603,35 @@ def get_worker_resource_governor() -> ResourceGovernor:
             _worker_governor = ResourceGovernor(ResourceLimits.from_environment())
             _worker_governor_pid = pid
         return _worker_governor
+
+
+def estimate_container_bytes(value: Any, seen: set[int] | None = None) -> int | None:
+    """Compose the governor's value sizing for known hierarchy/metadata containers.
+
+    Counts retained value data, not Python allocator or native heap overhead.
+    Unknown leaves are rejected without serializing arbitrary user objects.
+    """
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return 0
+    seen.add(id(value))
+    measured = estimate_value_bytes(value)
+    if measured is not None:
+        return measured
+    if value is None:
+        return 0
+    if isinstance(value, (bool, int, float, Decimal, date, datetime)):
+        return sys.getsizeof(value)
+    if isinstance(value, dict):
+        children = (part for pair in value.items() for part in pair)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        children = iter(value)
+    else:
+        return None
+    total = 0
+    for child in children:
+        charge = estimate_container_bytes(child, seen)
+        if charge is None:
+            return None
+        total += charge
+    return total

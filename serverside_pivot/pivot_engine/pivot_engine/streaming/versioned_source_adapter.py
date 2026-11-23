@@ -398,9 +398,9 @@ class VersionedSourceAdapter:
                     _ACTIVE_FILE_OWNERS.pop(self._duckdb_file_path, None)
 
     def _ibis_connection(self) -> Any:
-        planner_con = getattr(getattr(self._controller, "planner", None), "con", None)
-        if planner_con is not None:
-            return planner_con
+        con = getattr(self._controller, "con", None)
+        if con is not None:
+            return con
         return getattr(getattr(self._controller, "backend", None), "con", None)
 
     def _raw_duckdb(self) -> Any:
@@ -1109,7 +1109,7 @@ class VersionedSourceAdapter:
                 for inbox in tuple(self._inboxes.get(table, {}).values()):
                     inbox.push_locked(batch)
 
-            catalog = getattr(getattr(getattr(self._controller, "planner", None), "builder", None), "catalog", None)
+            catalog = getattr(self._controller, "catalog", None)
             if catalog is not None:
                 catalog.invalidate(table)
             cache_coord = getattr(self._controller, "cache_coordinator", None)

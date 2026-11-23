@@ -10,7 +10,7 @@ Features:
 - Database-agnostic operations and cloud capability descriptors
 """
 
-from typing import Any, List, Dict, Optional, Union
+from typing import Any, Callable, List, Dict, Optional, Union
 import asyncio
 import itertools
 import os
@@ -47,11 +47,19 @@ from pivot_engine.backends.execution import (
     DatabaseExecutionError,
     QueryCancelledError,
     QueryTimeoutError,
+    RequestExecution,
     resolve_query_timeout_seconds,
 )
 
 
 _CANCELLATION_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
+def _in_memory_tables(expr: Any) -> List[Any]:
+    """(name, Arrow data) of every in-memory table an Ibis expression reads."""
+    import ibis.expr.operations as ops
+
+    return [(op.name, op.data.to_pyarrow(op.schema)) for op in expr.op().find(ops.InMemoryTable)]
 
 
 def _connect_ibis_uri(connection_uri: str, **connection_kwargs) -> Any:
@@ -395,12 +403,17 @@ class IbisBackend:
         lease = None
         discard = False
         started_at = time.time()
+        memtables: List[Any] = []
+        registered: List[str] = []
         try:
             ibis_expr = query.get("ibis_expr") if isinstance(query, dict) else None
             if ibis_expr is not None:
                 self.con._run_pre_execute_hooks(ibis_expr)
                 expression = ibis_expr.as_table()
                 sql = self.con.compile(expression)
+                # In-memory tables live on the Ibis connection, not on pooled
+                # cursors: the lease sees them only once registered on it.
+                memtables = _in_memory_tables(expression)
             elif isinstance(query, dict) and "sql" in query:
                 sql = query["sql"]
             elif isinstance(query, str):
@@ -412,6 +425,9 @@ class IbisBackend:
             execution.attach_lease(lease)
             if execution.cancellation_requested:
                 raise QueryCancelledError()
+            for name, data in memtables:
+                lease.register(name, data)
+                registered.append(name)
             if params:
                 raw_table = _fetch_arrow_table(lease.execute(sql, params))
             else:
@@ -446,6 +462,11 @@ class IbisBackend:
         finally:
             try:
                 if lease is not None:
+                    for name in registered:
+                        try:
+                            lease.unregister(name)
+                        except Exception:  # noqa: BLE001 - a lease that cannot unregister is retired
+                            discard = True
                     execution.release_lease()
                     discard = discard or execution.cancel_error is not None
                     retained = self._duckdb_pool.checkin(lease, discard=discard)
@@ -564,6 +585,88 @@ class IbisBackend:
             if worker.done():
                 with self._running_queries_lock:
                     self._running_queries.pop(execution.query_id, None)
+
+    def _lease_statement_runner(self, request: RequestExecution) -> Callable[[Any], Any]:
+        """A core statement runner: each statement on its own cancellable lease."""
+
+        def run(expr: Any) -> Any:
+            execution = DatabaseExecution(f"ibis-query-{next(self._query_id_counter)}")
+            request.begin(execution)
+            try:
+                return self._execute_duckdb_ibis_with_lease({"ibis_expr": expr}, None, True, execution)
+            finally:
+                request.end(execution)
+
+        return run
+
+    async def run_statements(self, work: Callable[[], Any], *, timeout_seconds: Optional[float] = None) -> Any:
+        """Run ``work`` (synchronous, any number of core statements) with request-level cancellation.
+
+        With a cancellable DuckDB pool every statement runs on a leased cursor
+        that a client cancel or the query deadline interrupts, and later
+        statements are refused.  Without one, a requested deadline is soft
+        (when allowed) or refused with ``CancellationUnavailableError``.
+        """
+        from ..core.exec import statement_runner
+
+        requested_timeout = (
+            resolve_query_timeout_seconds(timeout_seconds)
+            if timeout_seconds is not None
+            else getattr(self, "_query_timeout_seconds", None)
+        )
+        loop = asyncio.get_running_loop()
+        if getattr(self, "_duckdb_pool", None) is None:
+            if requested_timeout is not None and not getattr(self, "_allow_soft_timeout", False):
+                raise CancellationUnavailableError()
+            task = run_in_executor_scoped(loop, None, work)
+            try:
+                if requested_timeout is None:
+                    return await asyncio.shield(task)
+                done, _pending = await asyncio.wait({task}, timeout=requested_timeout)
+                if done:
+                    return task.result()
+                with self._running_queries_lock:
+                    self._execution_metrics["timeouts"] += 1
+                raise QueryTimeoutError()
+            except asyncio.CancelledError as exc:
+                # The executor thread cannot stop a physical query here: do not
+                # let an outer cancellation claim database cancellation.
+                raise CancellationUnavailableError() from exc
+            finally:
+                while not task.done():  # keep ownership until the physical work exits
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:  # noqa: BLE001 - its outcome was already reported
+                        break
+
+        request = RequestExecution()
+        runner = self._lease_statement_runner(request)
+
+        def bound() -> Any:
+            with statement_runner(runner):
+                return work()
+
+        worker = run_in_executor_scoped(loop, None, bound)
+        try:
+            if requested_timeout is None:
+                return await asyncio.shield(worker)
+            done, _pending = await asyncio.wait({worker}, timeout=requested_timeout)
+            if done:
+                return worker.result()
+            if request.request_cancel("query_timeout"):
+                with self._running_queries_lock:
+                    self._execution_metrics["cancellation_attempts"] += 1
+                    self._execution_metrics["timeouts"] += 1
+            await self._await_execution_cleanup(worker)
+            raise QueryTimeoutError()
+        except asyncio.CancelledError:
+            if request.request_cancel("client_cancelled"):
+                with self._running_queries_lock:
+                    self._execution_metrics["cancellation_attempts"] += 1
+            await self._await_execution_cleanup(worker)
+            raise
 
     async def cancel_query(self, query_id: Union[int, str]) -> bool:
         """Cancel an owned DuckDB statement and wait for its cleanup acknowledgement."""

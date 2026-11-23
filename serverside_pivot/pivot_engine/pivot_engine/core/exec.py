@@ -9,20 +9,49 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from typing import Any, Callable, List, Optional, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import replace
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
-from .ir import DetailQuery, DistinctQuery, PivotQuery, PredicateGroup, expr_to_wire
+from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
 from .logical import plan as logical_plan
 from .physical import STRATEGIES, choose
 from .registry import type_family
 
-__all__ = ["canonical", "compile_query", "execute", "execute_async", "fingerprint", "scope_fingerprint"]
+__all__ = ["canonical", "compile_query", "execute", "execute_async", "fingerprint", "materialize",
+           "measure_expr", "record_predicate", "records", "scope_fingerprint", "statement_runner"]
 
 Resolver = Callable[[str], Any]
+StatementRunner = Callable[[Any], Any]
+
+_RUNNER: ContextVar[Optional[StatementRunner]] = ContextVar("pivot_core_statement_runner", default=None)
+
+
+def materialize(expr: Any) -> Any:
+    """Run one verified core statement: the only place the core touches the database.
+
+    A request binds a runner (``statement_runner``) that owns cancellation, the
+    query deadline and the physical lease; without one the statement runs on
+    the expression's own backend.  Returns what ``expr.to_pyarrow()`` returns
+    (an Arrow table, or a scalar for a scalar expression).
+    """
+    runner = _RUNNER.get()
+    return expr.to_pyarrow() if runner is None else runner(expr)
+
+
+@contextmanager
+def statement_runner(runner: Optional[StatementRunner]) -> Iterator[None]:
+    """Bind the runner every ``materialize`` in this context uses."""
+    token = _RUNNER.set(runner)
+    try:
+        yield
+    finally:
+        _RUNNER.reset(token)
 
 
 def canonical(query: PivotQuery) -> str:
@@ -107,7 +136,7 @@ def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[st
 def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> ResultFrame:
     expr = compile_query(query, resolve, strategy=strategy)
     return ResultFrame(
-        table=expr.to_pyarrow(),
+        table=materialize(expr),
         rows=tuple(query.rows),
         measures=tuple(query.value_columns()),
         fingerprint=fingerprint(query),
@@ -117,7 +146,7 @@ def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = N
 
 async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> ResultFrame:
     expr = compile_query(query, resolve, strategy=strategy)  # resolve + verify on the caller's context
-    table = await run_in_executor_scoped(asyncio.get_running_loop(), None, expr.to_pyarrow)
+    table = await run_in_executor_scoped(asyncio.get_running_loop(), None, materialize, expr)
     return ResultFrame(
         table=table,
         rows=tuple(query.rows),
@@ -128,14 +157,15 @@ async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optio
 
 
 def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int] = None,
-                   offset: int = 0) -> Tuple[Tuple[Any, ...], ...]:
-    """The ordered column catalog (REQ-PIV-001): distinct members over E0.
+                   offset: int = 0, order: Sequence[ColumnOrder] = ()) -> Tuple[Tuple[Any, ...], ...]:
+    """The ordered column catalog (REQ-PIV-001, REQ-PIV-002): distinct members over E0.
 
-    Members are ordered by value per column, NULLS LAST, a measure-axis label
-    by its member order (REQ-DIM-006); ``offset``/``limit``
-    select a column window.  The result feeds ``PivotQuery.column_members``.
+    Members are ordered column by column: by the field's ``ColumnOrder``
+    when ``order`` names it, else by value NULLS LAST; a measure-axis label by
+    its member order (REQ-DIM-006).  ``offset``/``limit`` select a column
+    window.  The result feeds ``PivotQuery.column_members``.
     """
-    from .physical.union_all import filtered
+    from .physical.union_all import DEPTH, _null_rank, filtered, tenor_days
 
     relation = resolve(query.dataset)
     schema = relation.schema()
@@ -145,19 +175,58 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
     axis = query.unpivot
     keyed = axis is not None and axis.label in query.columns  # REQ-DIM-006: the label orders by member order
     extra = [axis.key] if keyed and axis is not None else []
-    source = filtered(relation, query).select(*query.columns, *extra).distinct()
+    e0 = filtered(relation, query)
+    source = e0.select(*query.columns, *extra).distinct()
+    by_field: Dict[str, ColumnOrder] = {o.field: o for o in order if o.field in query.columns}
+    aliases = {m.alias for m in query.measures} | {d.alias for d in query.derived}
 
-    order: List[Any] = []
+    def attach(source: Any, lookup: Any, field: str, name: str) -> Any:
+        lookup = lookup.select(**{f"{name}_k": lookup[field], name: lookup[name]})
+        joined = source.left_join(lookup, source[field].identical_to(lookup[f"{name}_k"]))
+        return joined.select(*[joined[c] for c in source.columns], joined[name])
+
+    keys: List[Tuple[str, Optional[str], ColumnOrder]] = []  # (field, key column or None, its order)
+    for i, c in enumerate(query.columns):
+        o = by_field.get(c)
+        if o is None or (keyed and axis is not None and c == axis.label):
+            continue
+        name: Optional[str] = None
+        if o.total is not None and o.total in aliases:
+            # The member's own value: a one-level tree over E0 (no measure filters, no column pivot).
+            one_level = replace(query, rows=(c,), columns=(), column_members=(), measure_filters=(), sort=(),
+                                expanded=None, window=Window(), subtotals="before", ragged=None)
+            tree = compile_query(one_level, resolve)
+            name = f"__corder{i}"
+            source = attach(source, tree.filter(tree[DEPTH] == 1).select(c, **{name: tree[o.total]}), c, name)
+        elif o.by is not None and o.by in e0.columns:  # REQ-SORT-003; an unknown key column is ignored
+            name = f"__corder{i}"
+            source = attach(source, e0.group_by(c).aggregate(**{name: e0[o.by].min()}), c, name)
+        elif o.semantic == "tenor":  # REQ-SORT-005
+            name = f"__corder{i}"
+            source = source.mutate(**{name: tenor_days(source[c])})
+        keys.append((c, name, o))
+
+    by_key = {c: (name, o) for c, name, o in keys}
+    expr_order: List[Any] = []
     for c in query.columns:
         if keyed and axis is not None and c == axis.label:
-            order += [source[axis.key].isnull().cast("int8"), source[axis.key].asc(), source[c].asc()]
-        else:
-            order += [source[c].isnull().cast("int8"), source[c].asc()]
-    expr = source.order_by(order)
+            expr_order += [source[axis.key].isnull().cast("int8"), source[axis.key].asc(), source[c].asc()]
+            continue
+        if c not in by_key:
+            expr_order += [source[c].isnull().cast("int8"), source[c].asc()]
+            continue
+        name, o = by_key[c]
+        value = source[name] if name is not None else source[c]
+        if o.absolute:
+            value = value.abs()
+        expr_order += [_null_rank(value, o.nulls_first), value.desc() if o.desc else value.asc()]
+        if name is not None:  # ties: the member value ascending, NULLS LAST
+            expr_order += [source[c].isnull().cast("int8"), source[c].asc()]
+    expr = source.order_by(expr_order)
     if limit is not None or offset:
         expr = expr.limit(limit, offset=offset)
     verify_scoped(expr)
-    return tuple(tuple(r[c] for c in query.columns) for r in expr.to_pyarrow().to_pylist())
+    return tuple(tuple(r[c] for c in query.columns) for r in materialize(expr).to_pylist())
 
 
 def detail(query: DetailQuery, resolve: Resolver) -> Tuple[Any, int]:
@@ -170,7 +239,33 @@ def detail(query: DetailQuery, resolve: Resolver) -> Tuple[Any, int]:
     page, count = lower_detail(query, relation)
     verify_scoped(page)
     verify_scoped(count)
-    return page.to_pyarrow(), int(count.to_pyarrow().as_py())
+    return materialize(page), int(materialize(count).as_py())
+
+
+def records(query: DetailQuery, resolve: Resolver) -> Any:
+    """The (unmaterialized) relation of the records a detail query selects, for record-level consumers
+    (live aggregation): the same E0 the reads see, never a looser filter."""
+    from .physical.detail import lower_records
+
+    relation = resolve(query.dataset)
+    query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
+    out = lower_records(query, relation)
+    verify_scoped(out)
+    return out
+
+
+def record_predicate(relation: Any, f: Any) -> Any:
+    """The boolean expression of one IR filter over ``relation`` (exact core semantics: NULLs, case, sets)."""
+    from .physical.union_all import _predicate
+
+    return _predicate(relation, f)
+
+
+def measure_expr(relation: Any, m: MeasureRef, condition: Any = None) -> Any:
+    """One registry aggregation over ``relation`` (records where ``condition`` holds), named by its alias."""
+    from .physical.lowering import lower
+
+    return lower(m, relation, condition).name(m.alias)
 
 
 def distinct_values(query: DistinctQuery, resolve: Resolver) -> Tuple[List[Any], int]:
@@ -183,7 +278,7 @@ def distinct_values(query: DistinctQuery, resolve: Resolver) -> Tuple[List[Any],
     page, count = lower_distinct(query, relation)
     verify_scoped(page)
     verify_scoped(count)
-    return page.to_pyarrow().column(query.column).to_pylist(), int(count.to_pyarrow().as_py())
+    return materialize(page).column(query.column).to_pylist(), int(materialize(count).as_py())
 
 
 def dataset_fingerprint(relation: Any) -> Tuple[Any, ...]:
@@ -197,5 +292,5 @@ def dataset_fingerprint(relation: Any) -> Tuple[Any, ...]:
         __n=relation.count(), **{f"__h{i}": (relation[c].hash() % 1000000007).sum() for i, c in enumerate(columns)}
     )
     verify_scoped(expr)
-    row = expr.to_pyarrow().to_pylist()[0]
+    row = materialize(expr).to_pylist()[0]
     return tuple(row[k] for k in ["__n", *(f"__h{i}" for i in range(len(columns)))])

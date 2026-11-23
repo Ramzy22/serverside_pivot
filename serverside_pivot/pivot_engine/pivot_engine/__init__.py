@@ -1,10 +1,12 @@
 """
 pivot_engine package - enhanced with scalable capabilities
 
-Expose controllers for both basic and scalable pivot operations.
+Exposes the pivot controller (``ScalablePivotController``; ``PivotController`` is
+the same class under its historical name) and the edges built on it.
 """
-from .controller import PivotController
 from .scalable_pivot_controller import ScalablePivotController
+
+PivotController = ScalablePivotController
 
 # Import tanstack adapter to make it available
 from .tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation, TanStackPivotAdapter

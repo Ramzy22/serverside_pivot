@@ -23,14 +23,11 @@ def run_comprehensive_test():
         print(f"   [FAIL] {e}")
         all_tests_passed = False
     
-    # Test 2: Hierarchical Managers
-    print("\n2. Testing Hierarchical Managers...")
+    # Test 2: Semantic core
+    print("\n2. Testing the semantic core...")
     try:
-        from pivot_engine.hierarchical_scroll_manager import HierarchicalVirtualScrollManager
-        from pivot_engine.progressive_loader import ProgressiveDataLoader
-        from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
-        from pivot_engine.pruning_manager import HierarchyPruningManager
-        print("   [PASS] All hierarchical managers available")
+        from pivot_engine.core.exec import compile_query, execute  # noqa: F401
+        print("   [PASS] Semantic core available")
     except Exception as e:
         print(f"   [FAIL] {e}")
         all_tests_passed = False
@@ -63,12 +60,12 @@ def run_comprehensive_test():
         
         # Check that key scalability methods exist
         required_methods = [
-            'run_materialized_hierarchy',
-            'run_intelligent_prefetch', 
-            'run_progressive_hierarchical_load',
-            'run_pruned_hierarchical_pivot',
-            'run_virtual_scroll_hierarchical',
-            'run_hierarchical_pivot_batch_load'
+            'run_pivot',
+            'run_pivot_async',
+            'run_pivot_arrow',
+            'run_pivot_export',
+            'get_drill_through_data',
+            'resolve_table',
         ]
         
         for method in required_methods:
@@ -106,10 +103,6 @@ def run_comprehensive_test():
         assert "rows" in result
         print("   [PASS] Basic pivot functionality works")
         
-        # Test materialized hierarchies
-        mat_result = controller.run_materialized_hierarchy(spec)
-        assert "status" in mat_result
-        print("   [PASS] Materialized hierarchies work")
         
     except Exception as e:
         print(f"   [FAIL] Feature integration: {e}")

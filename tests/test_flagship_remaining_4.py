@@ -594,11 +594,11 @@ def test_parts_http_export_preserves_exact_filtered_interval(monkeypatch, warm_v
     service = PivotRuntimeService(adapter_getter=lambda: adapter)
     query_calls = []
     database_calls = []
-    execute_database = adapter.controller._execute_ibis_expr_async
-    async def observed_database(*args, **kwargs):
+    execute_database = adapter.controller.backend.run_statements
+    def observed_database(*args, **kwargs):
         database_calls.append(1)
-        return await execute_database(*args, **kwargs)
-    monkeypatch.setattr(adapter.controller, '_execute_ibis_expr_async', observed_database)
+        return execute_database(*args, **kwargs)
+    monkeypatch.setattr(adapter.controller.backend, 'run_statements', observed_database)
     execute_query = adapter.controller.run_pivot_async
     async def observed_query(spec, *args, **kwargs):
         call = {'limit': spec.limit, 'offset': spec.offset, 'refresh': kwargs.get('force_refresh')}

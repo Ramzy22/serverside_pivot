@@ -16,15 +16,8 @@ forbidden_modules =
     pivot_engine.editing
     pivot_engine.cdc
     pivot_engine.cache
-    pivot_engine.common
     pivot_engine.tanstack_adapter
-    pivot_engine.controller
     pivot_engine.scalable_pivot_controller
-    pivot_engine.hierarchical_scroll_manager
-    pivot_engine.pruning_manager
-    pivot_engine.progressive_loader
-    pivot_engine.materialized_hierarchy_manager
-    pivot_engine.intelligent_prefetch_manager
     pivot_engine.complete_rest_api
     pivot_engine.flight_server
     pivot_engine.dash_integration

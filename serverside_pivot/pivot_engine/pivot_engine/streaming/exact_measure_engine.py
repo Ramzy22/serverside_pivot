@@ -378,10 +378,14 @@ class SufficientStatsProjector:
         cls,
         table: IbisTable,
         measures: Sequence[Measure],
-        *,
-        expression_builder: Any = None,
     ) -> List[Any]:
-        """Return single-pass Ibis aggregate expressions including sufficient stats."""
+        """Return single-pass Ibis aggregate expressions including sufficient stats.
+
+        Conditions and the aggregations without sufficient statistics lower through the semantic core;
+        what the core cannot express is an error, never a silently unconditional value.
+        """
+        from ..transport.core_bridge import core_measure_expr, core_record_filter
+
         projections: List[Any] = [table.count().name(cls.ROW_COUNT_COL)]
         for measure in measures:
             alias = measure.alias
@@ -389,10 +393,8 @@ class SufficientStatsProjector:
             if agg in _FORMULA_AGGS:
                 continue
             col = table[measure.field] if measure.field and measure.field in table.columns else None
-            if measure.filter_condition and col is not None and expression_builder is not None:
-                f_expr = expression_builder.build_filter_expression(table, [measure.filter_condition])
-                if f_expr is not None:
-                    col = col.where(f_expr)
+            if measure.filter_condition and col is not None:
+                col = col.where(core_record_filter(table, measure.filter_condition))
 
             if agg == "count":
                 expr = col.count() if col is not None else table.count()
@@ -409,10 +411,8 @@ class SufficientStatsProjector:
             elif agg in _WAVG_AGGS:
                 assert col is not None and measure.weighted_field
                 w_col = table[measure.weighted_field]
-                if measure.filter_condition and expression_builder is not None:
-                    f_expr = expression_builder.build_filter_expression(table, [measure.filter_condition])
-                    if f_expr is not None:
-                        w_col = w_col.where(f_expr)
+                if measure.filter_condition:
+                    w_col = w_col.where(core_record_filter(table, measure.filter_condition))
                 # Correction 1A: BOTH numerator AND denominator MUST share valid_mask!
                 valid_mask = col.notnull() & w_col.notnull()
                 prod_expr = col * w_col
@@ -444,8 +444,7 @@ class SufficientStatsProjector:
                 projections.append(col.max().name(alias))
                 projections.append(col.count().name(cls.nn_col(alias)))
             else:
-                if expression_builder is not None:
-                    projections.append(expression_builder.build_measure_aggregation(table, measure))
+                projections.append(core_measure_expr(table, measure))
         return projections
 
 

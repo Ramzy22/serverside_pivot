@@ -403,7 +403,7 @@ class DatabaseMutationExecutor:
     def execute_parameterized_fetchone(self, sql: str, params: List[Any]) -> Any:
         self._ensure_mutations_supported()
         adapted_sql = self._adapt_sql_placeholders(sql)
-        con = self.controller.planner.con
+        con = self.controller.con
         if hasattr(con, "con"):
             result = con.con.execute(adapted_sql, [*params])
         elif hasattr(con, "execute"):
@@ -420,7 +420,7 @@ class DatabaseMutationExecutor:
     def execute_parameterized_fetchall(self, sql: str, params: List[Any]) -> List[Any]:
         self._ensure_mutations_supported()
         adapted_sql = self._adapt_sql_placeholders(sql)
-        con = self.controller.planner.con
+        con = self.controller.con
         if hasattr(con, "con"):
             result = con.con.execute(adapted_sql, [*params])
         elif hasattr(con, "execute"):
@@ -440,7 +440,7 @@ class DatabaseMutationExecutor:
     def execute_parameterized_mutation(self, sql: str, params: List[Any]) -> None:
         self._ensure_mutations_supported()
         adapted_sql = self._adapt_sql_placeholders(sql)
-        con = self.controller.planner.con
+        con = self.controller.con
         if hasattr(con, "con") and hasattr(con.con, "execute"):
             con.con.execute(adapted_sql, [*params])
         elif hasattr(con, "execute"):

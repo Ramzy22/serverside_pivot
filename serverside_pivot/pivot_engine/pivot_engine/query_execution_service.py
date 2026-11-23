@@ -1,17 +1,23 @@
-"""Planning and query execution ownership for scalable pivot requests.
+"""Pivot execution for ``ScalablePivotController.run_pivot_async``.
 
-The controller remains the stable public API, but does not need to own the
-normalise -> plan -> execute -> profile sequence for every request. This
-collaborator keeps that sequence outside ``ScalablePivotController`` so that
-planner and backend execution can evolve independently.
+Normalise the spec, answer it from the semantic core (``core_pivot_table``:
+one row per leaf group), then format and profile the result.  A request the
+core does not express raises ``CoreUnsupported``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, Dict, Optional
-from .core.authority.scope import run_in_executor_scoped
+
+
+def spec_fingerprint(spec: Any) -> str:
+    """A stable digest of a normalized pivot spec (the result-tier key; the scope is keyed separately)."""
+    import hashlib
+    import json
+
+    payload = spec.to_dict() if hasattr(spec, "to_dict") else spec
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class PivotQueryExecutor:
@@ -28,142 +34,41 @@ class PivotQueryExecutor:
         force_refresh: bool = False,
         profile_sink: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Plan, execute, materialize when appropriate, and profile a pivot."""
+        """Answer a pivot from the core, then format and profile it."""
         controller = self._controller
-        started_wall_time = time.time()
         started_at = time.perf_counter()
-        controller._request_count += 1
         normalized_spec = controller._normalize_spec(spec)
 
-        core_table = await self._core_table(normalized_spec)
-        if core_table is not None:
-            execute_finished_at = time.perf_counter()
-            return self._format_result(
-                core_table,
-                normalized_spec,
-                return_format=return_format,
-                profile_sink=profile_sink,
-                started_at=started_at,
-                planning_started_at=None,
-                planning_finished_at=None,
-                execute_started_at=started_at,
-                execute_finished_at=execute_finished_at,
-                needs_column_discovery=False,
-                query_count=1,
-                execution_profile={"engine": "core"},
-                path="core",
-            )
-
-        if controller._can_use_sparse_materialized_pivot(normalized_spec):
-            execution_profile: Dict[str, Any] = {}
-            execute_started_at = time.perf_counter()
-            result_table = await controller._execute_sparse_materialized_pivot_async(
-                normalized_spec,
-                force_refresh,
-                profile_sink=execution_profile,
-            )
-            execute_finished_at = time.perf_counter()
-            await self._schedule_materialization_if_needed(
-                normalized_spec,
-                started_wall_time,
-            )
-            return self._format_result(
-                result_table,
-                normalized_spec,
-                return_format=return_format,
-                profile_sink=profile_sink,
-                started_at=started_at,
-                planning_started_at=None,
-                planning_finished_at=None,
-                execute_started_at=execute_started_at,
-                execute_finished_at=execute_finished_at,
-                needs_column_discovery=False,
-                query_count=1,
-                execution_profile=execution_profile,
-                path="sparse_materialized",
-            )
-
-        planning_started_at = time.perf_counter()
-
-        def plan_with_lock() -> Dict[str, Any]:
-            with controller.planning_lock:
-                return controller.planner.plan(normalized_spec)
-
-        plan_result = await run_in_executor_scoped(asyncio.get_running_loop(), None,
-            plan_with_lock,
-        )
-        planning_finished_at = time.perf_counter()
-        metadata = plan_result.get("metadata", {})
-        execution_profile: Dict[str, Any] = {}
-        execute_started_at = time.perf_counter()
-        if metadata.get("needs_column_discovery"):
-            result_table = await controller._execute_topn_pivot_async(
-                normalized_spec,
-                plan_result,
-                force_refresh,
-                profile_sink=execution_profile,
-            )
-        else:
-            result_table = await controller._execute_standard_pivot_async(
-                normalized_spec,
-                plan_result,
-                force_refresh,
-                profile_sink=execution_profile,
-            )
+        core_table = await self._core_table(normalized_spec, force_refresh=force_refresh)
         execute_finished_at = time.perf_counter()
-        await self._schedule_materialization_if_needed(
-            normalized_spec,
-            started_wall_time,
-        )
         return self._format_result(
-            result_table,
+            core_table,
             normalized_spec,
             return_format=return_format,
             profile_sink=profile_sink,
             started_at=started_at,
-            planning_started_at=planning_started_at,
-            planning_finished_at=planning_finished_at,
-            execute_started_at=execute_started_at,
+            planning_started_at=None,
+            planning_finished_at=None,
+            execute_started_at=started_at,
             execute_finished_at=execute_finished_at,
-            needs_column_discovery=bool(metadata.get("needs_column_discovery")),
-            query_count=len(plan_result.get("queries", []) or []),
-            execution_profile=execution_profile,
+            needs_column_discovery=False,
+            query_count=1,
+            execution_profile={"engine": "core"},
+            path="core",
         )
 
-    async def _core_table(self, spec: Any) -> Any:
-        """The pivot from the core (an unsupported request raises ``CoreUnsupported``)."""
-        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_pivot_table
+    async def _core_table(self, spec: Any, *, force_refresh: bool = False) -> Any:
+        """The pivot from the core result tier, else the core (an unsupported request raises
+        ``CoreUnsupported``)."""
+        from .transport.core_bridge import core_pivot_table, run_core_read
 
-        resolve = getattr(self._controller, "resolve_table", None)
-        if resolve is None:
-            raise CoreUnsupported(["controller without resolve_table"])
-        return await run_in_executor_scoped(asyncio.get_running_loop(), None,
-                                            lambda: core_locked_call(self._controller, spec.table,
-                                                                     lambda: core_pivot_table(resolve, spec)))
-
-    async def _schedule_materialization_if_needed(
-        self,
-        spec: Any,
-        started_wall_time: float,
-    ) -> None:
         controller = self._controller
-        if not controller.stats_tracker.record_query(
-            spec,
-            time.time() - started_wall_time,
-        ):
-            return
-        # Shared DuckDB/Ibis connections or read-only cloud backends without DDL
-        # materialization enabled must not run background materialization.
-        caps = getattr(controller, "backend_capabilities", None)
-        if caps is not None:
-            if getattr(caps, "shared_connection_requires_lock", False) or not getattr(caps, "supports_ddl_materialization", False):
-                return
-        elif controller._uses_duckdb_ibis():
-            return
-        controller.task_manager.create_task(
-            controller._trigger_materialization(spec),
-            name=f"smart_materialization_{spec.table}",
-        )
+        cached = None if force_refresh else controller.cached_core_result(spec)
+        if cached is not None:
+            return cached
+        table = await run_core_read(controller, spec.table, lambda resolve: core_pivot_table(resolve, spec))
+        controller.store_core_result(spec, table)
+        return table
 
     def _format_result(
         self,

@@ -4,8 +4,7 @@ import duckdb
 import pyarrow as pa
 
 from pivot_engine.backends.ibis_backend import IbisBackend
-from pivot_engine.controller import PivotController
-from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
+from pivot_engine import PivotController
 from pivot_engine.util.sql_builder import quote_ident
 
 
@@ -39,7 +38,10 @@ def test_controller_arrow_fallback_treats_table_name_as_identifier():
     connection.execute("CREATE TABLE victim(x INTEGER)")
     controller = PivotController.__new__(PivotController)
     controller.backend = SimpleNamespace(con=connection)
-    controller.planner = SimpleNamespace(con=SimpleNamespace())
+    controller.con = connection  # a raw connection: no load_arrow_table / create_table
+    controller.catalog = SimpleNamespace(invalidate=lambda _name: None)
+    controller.cache = None
+    controller.cache_coordinator = SimpleNamespace(invalidate=lambda **_kw: None)
 
     controller.load_data_from_arrow(
         INJECTED_TABLE,
@@ -63,13 +65,3 @@ def test_ibis_backend_create_index_cannot_execute_injected_column_sql():
     assert _table_exists(connection, "victim")
 
 
-def test_materialized_index_builder_cannot_execute_injected_column_sql():
-    connection = duckdb.connect(":memory:")
-    connection.execute("CREATE TABLE safe(x INTEGER)")
-    connection.execute("CREATE TABLE victim(x INTEGER)")
-    manager = MaterializedHierarchyManager.__new__(MaterializedHierarchyManager)
-    manager.backend = DuckDBRawSQL(connection)
-
-    manager._create_index_safely("safe", [INJECTED_COLUMN])
-
-    assert _table_exists(connection, "victim")

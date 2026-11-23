@@ -245,13 +245,11 @@ class SnapshotProvider:
         self._entries: Dict[str, _ManagedSnapshotEntry] = {}
 
     def _raw_duckdb(self) -> Any:
-        planner_con = getattr(getattr(self._controller, "planner", None), "con", None)
-        con = planner_con or getattr(getattr(self._controller, "backend", None), "con", None)
-        return _extract_raw_duckdb_connection(con)
+        return _extract_raw_duckdb_connection(self._ibis_con())
 
     def _ibis_con(self) -> Any:
-        planner_con = getattr(getattr(self._controller, "planner", None), "con", None)
-        return planner_con or getattr(getattr(self._controller, "backend", None), "con", None)
+        con = getattr(self._controller, "con", None)
+        return con if con is not None else getattr(getattr(self._controller, "backend", None), "con", None)
 
     def _ensure_meta_table_locked(self, raw_con: Any) -> None:
         raw_con.execute(

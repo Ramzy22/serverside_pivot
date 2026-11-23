@@ -5,7 +5,7 @@ Commercial-grade showcase demonstrating `DashTanstackPivot` with automatic
 client/server execution mode resolution (`auto`, `client`, `server`) and
 full parity between the browser-side `ClientPivotTransport` (`DuckDbWasmExecutor`
 + `ClientSqlPlanner` + `ClientResponsePostProcessor`) and the Python server-side
-`TanStackPivotAdapter` / `IbisPlanner`.
+`TanStackPivotAdapter` and the semantic core.
 
 Key Capabilities Demonstrated:
   - Automatic mode resolution (`executionMode="auto"` by default):

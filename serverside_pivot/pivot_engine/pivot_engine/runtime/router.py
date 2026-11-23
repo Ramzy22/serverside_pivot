@@ -75,15 +75,7 @@ class RuntimeRequestRouter:
         if controller is None:
             return None
         raw_names: Optional[List[Any]] = None
-        planner = getattr(controller, "planner", None)
-        if planner is not None and callable(getattr(planner, "get_table_schema_and_columns", None)):
-            try:
-                schema_result = planner.get_table_schema_and_columns(table_name)
-                if isinstance(schema_result, (tuple, list)) and len(schema_result) >= 2:
-                    raw_names = list(schema_result[1] or [])
-            except Exception:
-                raw_names = None
-        if raw_names is None and callable(getattr(controller, "_get_table_schema", None)):
+        if callable(getattr(controller, "_get_table_schema", None)):
             try:
                 schema = controller._get_table_schema(table_name)
                 if schema is not None and getattr(schema, "names", None) is not None:

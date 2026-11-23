@@ -94,7 +94,7 @@ def test_expansion_paths_are_coerced_and_filtered():
     (dict(rows=["r"], columns=["zz"], pivot_config=PivotConfig(enabled=True)), "unknown column fields ['zz']"),
     (dict(custom_dimensions=[{"id": "x", "rules": [{"label": "L", "field": "nope", "op": "=", "value": 1}]}]),
      "filter on unknown field 'nope'"),
-    (dict(having=[{"field": "v_sum"}]), "having"),
+    (dict(having=[{"field": "region", "op": "=", "value": "x"}]), "having on a non-measure field"),
     (dict(group_allow_unbalanced=True, rows=["r", "v"]), "ragged hierarchy over fields of different types"),
     (dict(measure_axis=MeasureAxisConfig(placement="diagonal")), "measure axis on diagonal"),
     (dict(rows=[], measure_axis=MeasureAxisConfig(placement="columns", suppress_zero_members=True)),

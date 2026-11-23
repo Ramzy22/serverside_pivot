@@ -67,51 +67,6 @@ def test_runtime_payload_store_exposes_ttl_lru_namespace_metrics():
     assert namespace["metrics"]["entries"] == 1
 
 
-def test_controller_mutation_invalidation_uses_cache_coordinator_namespaces():
-    controller = ScalablePivotController(backend_uri=":memory:")
-    table_name = "sales_data"
-    table_key = controller._cache_table_key(table_name)
-
-    controller.cache.set(f"pivot_ibis:query:{table_key}:abc", {"stale": True})
-    controller._hierarchy_view_cache_set(
-        "view",
-        {
-            "expanded_set": set(),
-            "hierarchy_result": {},
-            "visible_rows": [],
-            "grand_total_row": None,
-            "grand_total_formula_source_rows": [],
-        },
-    )
-    controller._hierarchy_grand_total_cache_set("total", {"_id": "Grand Total"})
-    controller._hierarchy_root_count_cache_set("count", 4)
-    controller._hierarchy_root_page_cache_set("page", ["North", "South"])
-    controller._hierarchy_root_result_cache_set(
-        "result", pa.table({"region": ["North", "South"]})
-    )
-
-    controller._clear_mutation_caches(table_name, structural=False)
-
-    assert controller.cache.get(f"pivot_ibis:query:{table_key}:abc") is None
-    assert controller._hierarchy_view_cache_get("view") is None
-    assert controller._hierarchy_grand_total_cache_get("total") is None
-    assert controller._hierarchy_root_result_cache_get("result") is None
-    assert controller._hierarchy_root_count_cache_get("count") == 4
-    assert controller._hierarchy_root_page_cache_get("page") == ["North", "South"]
-
-    controller._clear_mutation_caches(table_name, structural=True)
-
-    assert controller._hierarchy_root_count_cache_get("count") is None
-    assert controller._hierarchy_root_page_cache_get("page") is None
-
-    snapshot = controller.cache_coordinator.snapshot(include_events=True)
-    assert snapshot["namespaces"][CacheNamespaces.CONTROLLER_QUERY]["metrics"]["invalidations"] >= 2
-    assert snapshot["namespaces"][CacheNamespaces.CONTROLLER_HIERARCHY_VIEW]["metrics"]["invalidations"] >= 2
-    assert snapshot["namespaces"][CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT]["metrics"]["invalidations"] == 1
-    assert snapshot["events"][-1]["event"] == "mutation"
-    assert snapshot["events"][-1]["structural"] is True
-
-
 def test_data_load_invalidation_reaches_adapter_namespaces_after_registration():
     from pivot_engine.tanstack_adapter import create_tanstack_adapter
 

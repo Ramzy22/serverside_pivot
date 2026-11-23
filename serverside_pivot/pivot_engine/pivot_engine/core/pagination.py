@@ -38,7 +38,7 @@ import ibis
 from .authority.scope import current_scope
 from .authority.verifier import verify_scoped
 from .cache import CacheKey, CacheManager, key_for
-from .exec import Resolver, canonical, execute, scope_fingerprint
+from .exec import Resolver, canonical, execute, materialize, scope_fingerprint
 from .frame import ResultFrame
 from .ir import PivotQuery, Window
 from .logical import plan as logical_plan
@@ -262,7 +262,7 @@ class Pager:
         name = f"__pivot_mat_{mat_id}"
         backend.create_table(name, obj=numbered, temp=True)
         table = backend.table(name)
-        total = int(table.count().to_pyarrow().as_py())
+        total = int(materialize(table.count()).as_py())
         return _Materialized(backend=backend, table=name, total=total)
 
     def _slice(self, query: PivotQuery, handle: _Materialized, offset: int, limit: int) -> ResultFrame:
@@ -270,7 +270,7 @@ class Pager:
         columns = [*query.rows, *query.value_columns(), DEPTH]
         page = t.filter((t[ROW] >= offset) & (t[ROW] < offset + limit)).order_by(ROW).select(*columns)
         return ResultFrame(
-            table=page.to_pyarrow(),
+            table=materialize(page),
             rows=tuple(query.rows),
             measures=tuple(m.alias for m in query.measures),
             fingerprint=f"mat:{handle.table}",

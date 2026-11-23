@@ -1,4 +1,3 @@
-from .diff_engine import QueryDiffEngine, SpecChangeType, TileKey
 from .snapshot_provider import (
     SnapshotAuthorizationError,
     SnapshotDescriptor,
@@ -17,13 +16,10 @@ __all__ = [
     "BaselineComparisonResult",
     "BaselineComparisonRow",
     "BaselineComparisonService",
-    "QueryDiffEngine",
     "SnapshotAuthorizationError",
     "SnapshotDescriptor",
     "SnapshotError",
     "SnapshotExpiredError",
     "SnapshotProvider",
     "SnapshotStrategy",
-    "SpecChangeType",
-    "TileKey",
 ]

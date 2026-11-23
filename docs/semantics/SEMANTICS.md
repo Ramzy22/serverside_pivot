@@ -39,7 +39,7 @@ Definitions, for a request over dataset `D`:
 | REQ-TOT-004 | `totals = all_data`: subtotals and grand total are `agg(E₀ ∩ n)`. |
 | REQ-TOT-005 | Expansion state never changes eligibility or totals. It only changes which rows are materialized. |
 | REQ-TOT-006 | The grand total is the same on every page, on a cache hit, and with or without measure filters. |
-| REQ-TOT-007 | A measure filter that names no level (the UI's column filter on a measure) applies at the deepest row level; parents and the grand total are then visible totals (REQ-TOT-003). |
+| REQ-TOT-007 | A measure filter that names no level (the UI's column filter on a measure) applies at the deepest row level; parents and the grand total are then visible totals (REQ-TOT-003). A flat AND group that mixes dimension and measure conditions is the conjunction of its parts: each dimension condition is a row filter (it defines E0), each measure condition a measure filter at the deepest level, whatever the term order. An OR group, or a nested group, that names a measure has no exact meaning and is a typed error. A `having` entry is a level-less measure filter of the same kind; one that names a non-measure field is a typed error. Filter operators accept the edge spellings (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `equals`, ...) as synonyms of the same operators. |
 | REQ-TOT-008 | When totals are enabled, the grand total row always exists, even over an empty E (its measures follow the registry's empty-input rules), so `total_rows` is at least 1. |
 
 ## 3. Aggregation (REQ-AGG)
@@ -74,7 +74,8 @@ Definitions, for a request over dataset `D`:
 
 | Id | Requirement |
 |---|---|
-| REQ-PIV-001 | A column pivot has explicit, ordered column members (the column window). Each cell is the measure over the node's records whose column values equal the member, with null-safe typed equality, so a NULL member is the NULL group. Every registry aggregation is supported in cells, including holistic ones. The node's own measure is the row total. The column catalog is the distinct members over E0, ordered by value with NULLS LAST; a measure-axis label column is ordered by the member order instead (REQ-DIM-006). Two members whose display keys collide are an error, never a merge. |
+| REQ-PIV-001 | A column pivot has explicit, ordered column members (the column window). Each cell is the measure over the node's records whose column values equal the member, with null-safe typed equality, so a NULL member is the NULL group. Every registry aggregation is supported in cells, including holistic ones. The node's own measure is the row total. The column catalog is the distinct members over E0, ordered by value with NULLS LAST unless an order is requested (REQ-PIV-002); a measure-axis label column is ordered by the member order instead (REQ-DIM-006). Two members whose display keys collide are an error, never a merge. |
+| REQ-PIV-002 | Each column dimension may request an order for its catalog: by **total** (the default for the request: the first measure, descending), by **label** (the member value), by a **member key** (`sortKeyField`, REQ-SORT-003; an unknown key is ignored), or by **tenor** (REQ-SORT-005), in either direction, optionally by absolute value and NULLS FIRST (REQ-SORT-006). A total is the measure over the E0 records of the member: it includes the row filters and the scope, never the measure filters, so filtering nodes out of the view never reorders the catalog. Ties are broken by the member value ascending, NULLS LAST. Each entry carries its display key; a column cursor returns the entries whose display key sorts after the cursor. |
 
 ## 3d. Custom dimensions (REQ-DIM)
 

@@ -367,9 +367,9 @@ class SharedLiveQuery:
         row_dims = list(self.spec.rows or [])
         col_dims = list(self.spec.columns or [])
         measures = list(self.spec.measures or [])
-        builder = getattr(getattr(self._controller, "planner", None), "builder", None)
-
         from contextlib import nullcontext
+
+        from ..transport.core_bridge import core_records
 
         with self._source_adapter._execution_locks.lock_for(table_name):
             rev, schema_ver = self._source_adapter.read_coherent_revision(table_name)
@@ -391,14 +391,7 @@ class SharedLiveQuery:
 
             with lock_ctx:
                 base_tbl = self._controller.resolve_table(table_name)
-                filtered = base_tbl
-                custom_dims = getattr(self.spec, "custom_dimensions", None) or []
-                if custom_dims and builder is not None and hasattr(builder, "apply_custom_dimensions"):
-                    filtered = builder.apply_custom_dimensions(filtered, custom_dims)
-                if self._effective_filters and builder is not None:
-                    f_expr = builder.build_filter_expression(filtered, self._effective_filters)
-                    if f_expr is not None:
-                        filtered = filtered.filter(f_expr)
+                filtered = core_records(base_tbl, self.spec, self._effective_filters)
 
                 for depth, paths_at_depth in by_depth.items():
                     level_dims = row_dims[:depth]
@@ -416,7 +409,7 @@ class SharedLiveQuery:
                             sub_tbl = sub_tbl.filter(or_filter)
 
                     projections = SufficientStatsProjector.build_projections(
-                        sub_tbl, measures, expression_builder=builder
+                        sub_tbl, measures
                     )
                     group_cols = level_dims + col_dims
                     expr = sub_tbl.group_by(group_cols).aggregate(projections) if group_cols else sub_tbl.aggregate(projections)

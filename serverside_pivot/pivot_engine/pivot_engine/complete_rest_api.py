@@ -634,7 +634,6 @@ def create_complete_api(backend_uri: Optional[str] = None):
         backend_uri=uri,
         enable_streaming=config.enable_streaming,
         enable_incremental_views=config.enable_incremental_views,
-        tile_size=config.tile_size,
         cache_ttl=config.default_cache_ttl,
         cdc_exact_state_store=config.cdc_exact_state_store,
     )
@@ -841,7 +840,6 @@ def create_realtime_api(backend_uri: Optional[str] = None):
         backend_uri=uri,
         enable_streaming=config.enable_streaming,
         enable_incremental_views=config.enable_incremental_views,
-        tile_size=config.tile_size,
         cache_ttl=config.default_cache_ttl,
         cdc_exact_state_store=config.cdc_exact_state_store,
     )
@@ -855,22 +853,9 @@ async def example_usage():
     api = create_realtime_api()
     
     # The API is now ready to serve requests
-    print("Complete REST API ready with all endpoints:")
-    print("- /health")
-    print("- /pivot")
-    print("- /pivot/export (New)")
-    print("- /pivot/hierarchical") 
-    print("- /pivot/virtual-scroll")
-    print("- /pivot/progressive-load")
-    print("- /pivot/materialized-hierarchy")
-    print("- /pivot/pruned-hierarchical")
-    print("- /pivot/intelligent-prefetch")
-    print("- /pivot/streaming-aggregation")
-    print("- /pivot/cdc/setup")
-    print("- /pivot/schema/{table_name}")
-    print("- /pivot/expansion-state")
-    print("- /pivot/batch-load")
-    print("- /ws/pivot/{connection_id} (WebSocket)")
+    print("Complete REST API ready with endpoints:")
+    for route in api.get_app().routes:
+        print(f"- {getattr(route, 'path', route)}")
     
     return api
 

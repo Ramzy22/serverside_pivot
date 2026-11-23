@@ -75,7 +75,7 @@ import pivot_engine
 from pivot_engine import create_tanstack_adapter
 adapter = create_tanstack_adapter(backend_uri=":memory:")
 adapter.controller.load_data_from_arrow("bootstrap", pa.table({"x": [1]}), register_checkpoint=False)
-rows = adapter.controller.planner.con.table("bootstrap").to_pyarrow().to_pylist()
+rows = adapter.controller.con.table("bootstrap").to_pyarrow().to_pylist()
 assert rows == [{"x": 1}], rows
 print(json.dumps({"engine": pivot_engine.__file__, "rows": rows}))
 """], cwd=tmp_path, capture_output=True, text=True)

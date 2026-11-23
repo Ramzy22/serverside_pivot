@@ -1,13 +1,13 @@
 import pytest
 import pyarrow as pa
-from pivot_engine.controller import PivotController
-from pivot_engine.types.pivot_spec import PivotSpec, Measure
+from pivot_engine import PivotController
+from pivot_engine.transport.core_bridge import CoreUnsupported
 
 @pytest.fixture
 def controller() -> PivotController:
     """Fixture to create a PivotController with Ibis planner."""
     # Use in-memory DuckDB for tests
-    return PivotController(planner_name="ibis", backend_uri=":memory:")
+    return PivotController(backend_uri=":memory:")
 
 @pytest.fixture
 def sample_data() -> pa.Table:
@@ -160,11 +160,11 @@ def test_measure_axis_rows_virtualizes_wide_physical_measures(controller: PivotC
 
     result = controller.run_pivot(spec, return_format="dict")
 
-    assert result["columns"] == ["category", "Explain Line", "__sortkey__Explain Line", "Amount"]
-    rows = sorted(result["rows"], key=lambda row: row[2])
+    assert result["columns"] == ["category", "Explain Line", "Amount"]
+    rows = result["rows"]  # the core orders the label level by the member order (REQ-SORT-003)
     assert rows == [
-        ["Equity", "Delta Explain", 0, 20],
-        ["Equity", "Gamma Explain", 1, 15],
+        ["Equity", "Delta Explain", 20],
+        ["Equity", "Gamma Explain", 15],
     ]
 
 
@@ -202,14 +202,13 @@ def test_measure_axis_rows_can_still_pivot_normal_column_dimensions(controller: 
     assert result["columns"] == [
         "category",
         "Explain Line",
-        "__sortkey__Explain Line",
         "Book_Amount",
         "Hedge_Amount",
     ]
-    rows = sorted(result["rows"], key=lambda row: row[2])
+    rows = result["rows"]  # the core orders the label level by the member order (REQ-SORT-003)
     assert rows == [
-        ["Equity", "Delta Explain", 10, 100, -80],
-        ["Equity", "Gamma Explain", 20, 25, -10],
+        ["Equity", "Delta Explain", 100, -80],
+        ["Equity", "Gamma Explain", 25, -10],
     ]
 
 
@@ -244,19 +243,20 @@ def test_measure_axis_aggregate_first_supports_mixed_and_weighted_measures(contr
 
     result = controller.run_pivot(spec, return_format="dict")
 
-    assert result["columns"] == ["category", "Measure Name", "__sortkey__Measure Name", "Amount"]
-    rows = sorted(result["rows"], key=lambda row: (row[0], row[2]))
+    assert result["columns"] == ["category", "Measure Name", "Amount"]
+    order = ["Amount Sum", "Amount Avg", "Weighted Price"]
+    rows = sorted(result["rows"], key=lambda row: (row[0], order.index(row[1])))
     assert rows == [
-        ["A", "Amount Sum", 0, 30.0],
-        ["A", "Amount Avg", 1, 15.0],
-        ["A", "Weighted Price", 2, 8.0],
-        ["B", "Amount Sum", 0, 5.0],
-        ["B", "Amount Avg", 1, 5.0],
-        ["B", "Weighted Price", 2, 100.0],
+        ["A", "Amount Sum", 30.0],
+        ["A", "Amount Avg", 15.0],
+        ["A", "Weighted Price", 8.0],
+        ["B", "Amount Sum", 5.0],
+        ["B", "Amount Avg", 5.0],
+        ["B", "Weighted Price", 100.0],
     ]
 
 
-def test_measure_axis_aggregate_first_supports_formula_ratio_and_window_measures(controller: PivotController):
+def test_derived_measure_axis_members_are_a_typed_error(controller: PivotController):
     data = pa.table({
         "category": ["A", "A", "B"],
         "amount": [10, 20, 5],
@@ -297,18 +297,11 @@ def test_measure_axis_aggregate_first_supports_formula_ratio_and_window_measures
         },
     }
 
-    result = controller.run_pivot(spec, return_format="dict")
-    rows = {
-        (row[0], row[1]): row[3]
-        for row in result["rows"]
-    }
+    # Ratio/formula/window members are spec-only: a typed error, never a silent partial axis.
+    with pytest.raises(CoreUnsupported) as raised:
+        controller.run_pivot(spec, return_format="dict")
+    assert "measure axis member is a derived measure" in raised.value.reasons
 
-    assert rows[("A", "Margin")] == 18.0
-    assert rows[("B", "Margin")] == 3.0
-    assert rows[("A", "Cost Ratio")] == pytest.approx(0.4)
-    assert rows[("B", "Cost Ratio")] == pytest.approx(0.4)
-    assert rows[("A", "Sales % Total")] == pytest.approx(30 / 35)
-    assert rows[("B", "Sales % Total")] == pytest.approx(5 / 35)
 
 
 def test_measure_axis_aggregate_first_can_pivot_mixed_measures(controller: PivotController):
@@ -345,70 +338,17 @@ def test_measure_axis_aggregate_first_can_pivot_mixed_measures(controller: Pivot
     assert result["columns"] == [
         "category",
         "Measure Name",
-        "__sortkey__Measure Name",
         "Book_Amount",
         "Hedge_Amount",
     ]
-    rows = sorted(result["rows"], key=lambda row: row[2])
+    rows = result["rows"]  # the core orders the label level by the member order (REQ-SORT-003)
     assert rows == [
-        ["Equity", "Delta Sum", 0, 100.0, -80.0],
-        ["Equity", "Gamma Avg", 1, 25.0, -10.0],
+        ["Equity", "Delta Sum", 100.0, -80.0],
+        ["Equity", "Gamma Avg", 25.0, -10.0],
     ]
 
-# Conditional import for fakeredis
-try:
-    import fakeredis
-    FAKEREDIS_AVAILABLE = True
-except ImportError:
-    FAKEREDIS_AVAILABLE = False
-
-@pytest.mark.skipif(not FAKEREDIS_AVAILABLE, reason="fakeredis is not installed")
-def test_controller_with_redis_cache(sample_data: pa.Table):
-    """
-    Test that the PivotController works correctly with the RedisCache.
-    """
-    from pivot_engine.cache.redis_cache import RedisCache
-
-    fake_client = fakeredis.FakeRedis(decode_responses=False)
-    cache = RedisCache.__new__(RedisCache)
-    cache.client = fake_client
-    cache.default_ttl = 300
-
-    controller = PivotController(
-        planner_name="ibis",
-        backend_uri=":memory:",
-        cache=cache,
-    )
-
-    controller.load_data_from_arrow("sales", sample_data)
-
-    spec = {
-        "table": "sales",
-        "rows": ["region"],
-        "columns": [],
-        "measures": [{"field": "sales", "agg": "sum", "alias": "total_sales"}],
-        "filters": [],
-    }
-
-    result = controller.run_pivot(spec, return_format="dict")
-
-    assert "columns" in result
-    assert "rows" in result
-    assert result["columns"] == ["region", "total_sales"]
-    
-    sorted_rows = sorted(result["rows"], key=lambda x: x[0])
-    
-    assert len(sorted_rows) == 2
-    assert sorted_rows[0] == ["East", 300]
-    assert sorted_rows[1] == ["West", 750]
-
-    assert fake_client.keys()
-
-
-def test_cursor_pagination(controller: PivotController):
-    """
-    Test cursor-based pagination.
-    """
+def test_keyset_cursor_is_a_typed_error(controller: PivotController):
+    """Keyset (cursor) pagination is spec-only: the request is refused with a typed error."""
     # Create a larger dataset for pagination
     data = pa.table({
         "city": [f"City {i}" for i in range(5)],
@@ -425,45 +365,9 @@ def test_cursor_pagination(controller: PivotController):
         "limit": 2,
     }
     
-    result1 = controller.run_pivot(spec1, return_format="dict")
-    
-    assert len(result1["rows"]) == 2
-    assert result1["rows"][0][0] == "City 0"
-    assert result1["rows"][1][0] == "City 1"
-    assert result1["next_cursor"] is not None
-    assert result1["next_cursor"] == {"city": "City 1"}
+    spec1["cursor"] = {"city": "City 1"}  # keyset paging is spec-only: not served (docs/gates/M4.md)
+    with pytest.raises(CoreUnsupported) as raised:
+        controller.run_pivot(spec1, return_format="dict")
+    assert "keyset cursor" in raised.value.reasons
 
-    # --- Second Page ---
-    spec2 = {
-        "table": "sales_pagination",
-        "rows": ["city"],
-        "measures": [{"field": "sales", "agg": "sum", "alias": "total_sales"}],
-        "sort": [{"field": "city", "order": "asc"}],
-        "limit": 2,
-        "cursor": result1["next_cursor"], # Use the cursor from the previous result
-    }
-
-    result2 = controller.run_pivot(spec2, return_format="dict")
-
-    assert len(result2["rows"]) == 2
-    assert result2["rows"][0][0] == "City 2"
-    assert result2["rows"][1][0] == "City 3"
-    assert result2["next_cursor"] is not None
-    assert result2["next_cursor"] == {"city": "City 3"}
-
-    # --- Third and Final Page ---
-    spec3 = {
-        "table": "sales_pagination",
-        "rows": ["city"],
-        "measures": [{"field": "sales", "agg": "sum", "alias": "total_sales"}],
-        "sort": [{"field": "city", "order": "asc"}],
-        "limit": 2,
-        "cursor": result2["next_cursor"],
-    }
-
-    result3 = controller.run_pivot(spec3, return_format="dict")
-    
-    assert len(result3["rows"]) == 1
-    assert result3["rows"][0][0] == "City 4"
-    assert result3["next_cursor"] is None # Should be the last page
 

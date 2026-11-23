@@ -330,18 +330,16 @@ class TreeRuntimeService:
         *,
         include_extra_fields: bool = False,
     ) -> Tuple[Any, Any]:
+        from ..transport.core_bridge import core_records
+
         controller = getattr(adapter, "controller", None)
-        planner = getattr(controller, "planner", None)
-        con = getattr(planner, "con", None)
-        if con is None:
+        resolve = getattr(controller, "resolve_table", None)
+        if not callable(resolve):
             return None, None
 
         spec = adapter.convert_tanstack_request_to_pivot_spec(request)
-        filtered_table = con.table(request.table)
-        builder = getattr(planner, "builder", None)
-        filter_expr = builder.build_filter_expression(filtered_table, spec.filters) if builder and spec.filters else None
-        if filter_expr is not None:
-            filtered_table = filtered_table.filter(filter_expr)
+        # The scoped relation (REQ-SEC-001) with the exact core filters: never a looser record set.
+        filtered_table = core_records(resolve(request.table), spec, list(spec.filters or []))
 
         requested_columns = self._collect_requested_columns(
             filtered_table,

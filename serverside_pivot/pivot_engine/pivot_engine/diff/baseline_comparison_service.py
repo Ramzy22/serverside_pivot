@@ -186,7 +186,6 @@ class BaselineComparisonService:
         """Aggregate an Ibis relation into multi-level GroupSufficientStats via single-pass SQL."""
         from contextlib import nullcontext
 
-        builder = getattr(getattr(self._controller, "planner", None), "builder", None)
         planning_lock = getattr(self._controller, "planning_lock", None)
         lock_ctx = planning_lock if planning_lock is not None else nullcontext()
 
@@ -206,18 +205,10 @@ class BaselineComparisonService:
             return "|".join(parts)
 
         with lock_ctx:
-            filtered = ibis_table
-            custom_dims = getattr(spec, "custom_dimensions", None) or []
-            if custom_dims and builder is not None and hasattr(builder, "apply_custom_dimensions"):
-                filtered = builder.apply_custom_dimensions(filtered, custom_dims)
-            if spec.filters and builder is not None:
-                f_expr = builder.build_filter_expression(filtered, spec.filters)
-                if f_expr is not None:
-                    filtered = filtered.filter(f_expr)
+            from ..transport.core_bridge import core_records
 
-            projections = SufficientStatsProjector.build_projections(
-                filtered, measures, expression_builder=builder
-            )
+            filtered = core_records(ibis_table, spec, list(spec.filters or []))
+            projections = SufficientStatsProjector.build_projections(filtered, measures)
 
             # Level 0 (Grand Total) + Level 1..D (each hierarchy prefix)
             for depth in range(0, len(row_dims) + 1):

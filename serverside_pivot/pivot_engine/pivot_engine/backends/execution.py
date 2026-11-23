@@ -174,6 +174,49 @@ class DatabaseExecution:
             self._cancel_complete.set()
 
 
+class RequestExecution:
+    """Cancellation for one request that runs several statements in sequence.
+
+    A cancel interrupts the statement running now (through its
+    ``DatabaseExecution`` lease) and refuses every later statement, so a
+    cancelled or timed-out request stops at the database instead of running
+    its remaining statements.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._reason: Optional[CancellationReason] = None
+        self._current: Optional[DatabaseExecution] = None
+
+    def begin(self, execution: DatabaseExecution) -> None:
+        with self._lock:
+            reason = self._reason
+            if reason is None:
+                self._current = execution
+        if reason == "query_timeout":
+            raise QueryTimeoutError()
+        if reason is not None:
+            raise QueryCancelledError()
+
+    def end(self, execution: DatabaseExecution) -> None:
+        with self._lock:
+            if self._current is execution:
+                self._current = None
+
+    def request_cancel(self, reason: CancellationReason) -> bool:
+        """Cancel once: the running statement, then every statement after it."""
+        if reason not in {"client_cancelled", "query_timeout"}:
+            raise ValueError("Unsupported database cancellation reason.")
+        with self._lock:
+            if self._reason is not None:
+                return False
+            self._reason = reason
+            current = self._current
+        if current is not None:
+            current.request_cancel(reason)
+        return True
+
+
 async def await_native_cleanup(worker: Any, timeout: float) -> None:
     """Keep the caller's reservation until the physical worker has exited."""
     loop = asyncio.get_running_loop()

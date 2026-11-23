@@ -14,7 +14,7 @@ from typing import Any, List, Tuple
 from ..ir import DetailQuery, DistinctQuery
 from .union_all import _member_condition, filtered
 
-__all__ = ["lower_detail", "lower_distinct"]
+__all__ = ["lower_detail", "lower_distinct", "lower_records"]
 
 
 def _search(table: Any, needle: str) -> Any:
@@ -25,6 +25,16 @@ def _search(table: Any, needle: str) -> Any:
     for term in terms[1:]:
         out = out | term
     return out
+
+
+def lower_records(query: DetailQuery, relation: Any) -> Any:
+    """The records a detail query selects, unordered and unpaged (E0 under the node)."""
+    table = filtered(relation, query)
+    if query.path_fields:
+        table = table.filter(_member_condition(table, table.schema(), query.path_fields, query.path))
+    if query.search:
+        table = table.filter(_search(table, query.search))
+    return table
 
 
 def lower_detail(query: DetailQuery, relation: Any) -> Tuple[Any, Any]:

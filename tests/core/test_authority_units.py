@@ -222,22 +222,21 @@ class Con:
 
 def _holder(con=None, backends=None):
     catalog = types.SimpleNamespace(_registered_backends=backends or {})
-    return types.SimpleNamespace(con=con, builder=types.SimpleNamespace(catalog=catalog))
+    return types.SimpleNamespace(con=con, catalog=catalog)
 
 
-def test_connections_of_walks_controller_planner_backend_and_catalogs():
+def test_connections_of_walks_controller_backend_and_catalogs():
     a, b, c, d, e = (Con(x) for x in "abcde")
     controller = _holder(a, {"x": b, "y": types.SimpleNamespace(con=d)})
-    controller.planner = _holder(c, {"z": a})  # duplicate a
-    controller.backend = _holder(e)
+    controller.backend = _holder(e, {"z": a, "w": c})  # a is a duplicate
     owner = types.SimpleNamespace(controller=controller)
-    assert S.connections_of(owner) == [a, b, d, c, e]
-    assert S.connections_of(controller) == [a, b, d, c, e]  # no .controller: the owner is the controller
+    assert S.connections_of(owner) == [a, b, d, e, c]
+    assert S.connections_of(controller) == [a, b, d, e, c]  # no .controller: the owner is the controller
 
 
 def test_connections_of_skips_missing_pieces():
     a, b = Con("a"), Con("b")
-    controller = types.SimpleNamespace(con=object(), planner=None, backend=_holder(a, {"k": b}))
+    controller = types.SimpleNamespace(con=object(), catalog=None, backend=_holder(a, {"k": b}))
     assert S.connections_of(controller) == [a, b]
     assert S.connections_of(types.SimpleNamespace()) == []
     assert S.connections_of(None) == []

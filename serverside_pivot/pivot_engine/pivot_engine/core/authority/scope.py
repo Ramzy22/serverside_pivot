@@ -262,12 +262,11 @@ def connections_of(owner: Any) -> List[Any]:
             seen.append(con)
 
     controller = getattr(owner, "controller", owner)
-    for holder in (controller, getattr(controller, "planner", None), getattr(controller, "backend", None)):
+    for holder in (controller, getattr(controller, "backend", None)):
         if holder is None:
             continue
         add(getattr(holder, "con", None))
-        builder = getattr(holder, "builder", None)
-        catalog = getattr(builder, "catalog", None)
+        catalog = getattr(holder, "catalog", None)
         for backend in list(getattr(catalog, "_registered_backends", {}).values()):
             add(getattr(backend, "con", backend))
     return seen

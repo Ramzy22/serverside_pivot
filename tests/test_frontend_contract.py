@@ -1562,40 +1562,6 @@ async def test_expansion_logic(adapter):
 
 
 @pytest.mark.asyncio
-async def test_first_expansion_does_not_reuse_paged_collapsed_root_cache(adapter):
-    spec = PivotSpec(
-        table="sales_data",
-        rows=["region", "country"],
-        measures=[
-            Measure(field="sales", agg="sum", alias="sales_sum"),
-            Measure(field="cost", agg="sum", alias="cost_sum"),
-        ],
-    )
-
-    collapsed = await adapter.controller.run_hierarchy_view(
-        spec,
-        [],
-        start_row=0,
-        end_row=20,
-        include_grand_total_row=False,
-        profiling=True,
-    )
-    expanded = await adapter.controller.run_hierarchy_view(
-        spec,
-        [["North"]],
-        start_row=0,
-        end_row=50,
-        include_grand_total_row=False,
-        profiling=True,
-    )
-
-    assert collapsed["profile"]["controller"]["path"] == "paged_collapsed_root"
-    assert expanded["profile"]["controller"]["path"] == "materialized_hierarchy"
-    assert expanded["profile"]["controller"]["reusedCache"] is False
-    assert any(isinstance(row, dict) and row.get("country") is not None for row in expanded["rows"])
-
-
-@pytest.mark.asyncio
 async def test_virtual_scroll_last_parent_keeps_children_after_reexpand(adapter):
     """A collapsed page is not a complete tree for a later expansion.
 
@@ -1667,47 +1633,6 @@ async def test_virtual_scroll_last_parent_keeps_children_after_reexpand(adapter)
         assert response.total_rows == parent_count + len(expected_children) + 1
         returned_paths = {row.get("_path") for row in response.data}
         assert expected_children <= returned_paths
-
-
-@pytest.mark.asyncio
-async def test_collapse_reuses_cached_expanded_hierarchy_without_reloading(adapter, monkeypatch):
-    spec = PivotSpec(
-        table="sales_data",
-        rows=["region", "country", "product"],
-        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
-    )
-
-    await adapter.controller.run_hierarchy_view(
-        spec,
-        [["North"], ["South"]],
-        start_row=0,
-        end_row=95,
-        include_grand_total_row=False,
-        profiling=True,
-    )
-
-    async def fail_if_reloaded(*_args, **_kwargs):
-        raise AssertionError("Collapsing a cached hierarchy must not reload it")
-
-    monkeypatch.setattr(
-        adapter.controller,
-        "run_hierarchical_pivot_batch_load",
-        fail_if_reloaded,
-    )
-    collapsed = await adapter.controller.run_hierarchy_view(
-        spec,
-        [["North"]],
-        start_row=0,
-        end_row=95,
-        include_grand_total_row=False,
-        profiling=True,
-    )
-
-    controller_profile = collapsed["profile"]["controller"]
-    assert controller_profile["reusedCache"] is True
-    assert controller_profile["reuseDirection"] == "collapse"
-    assert any(row.get("region") == "North" and row.get("depth") == 1 for row in collapsed["rows"])
-    assert not any(row.get("region") == "South" and row.get("depth") == 1 for row in collapsed["rows"])
 
 
 @pytest.mark.asyncio
@@ -2689,18 +2614,16 @@ async def test_pivot_column_catalog_cache_reuses_discovery(adapter, monkeypatch)
     request = make_wide_request()
     pivot_spec = adapter.convert_tanstack_request_to_pivot_spec(request)
 
-    original_build_column_values_query = adapter.controller.planner._build_column_values_query
+    from pivot_engine.transport import core_bridge
+
+    original_catalog = core_bridge.core_column_catalog
     call_count = {"value": 0}
 
-    def counting_build_column_values_query(*args, **kwargs):
+    def counting_catalog(*args, **kwargs):
         call_count["value"] += 1
-        return original_build_column_values_query(*args, **kwargs)
+        return original_catalog(*args, **kwargs)
 
-    monkeypatch.setattr(
-        adapter.controller.planner,
-        "_build_column_values_query",
-        counting_build_column_values_query,
-    )
+    monkeypatch.setattr(core_bridge, "core_column_catalog", counting_catalog)
 
     await adapter._discover_pivot_column_values(pivot_spec)
     await adapter._discover_pivot_column_values(pivot_spec)
@@ -2737,52 +2660,6 @@ async def test_virtual_scroll_response_cache_reuses_identical_window(adapter, mo
     assert len(calls) == 1
     assert first.total_rows == second.total_rows
     assert first.data == second.data
-
-
-@pytest.mark.asyncio
-async def test_run_hierarchy_view_reuses_cached_batch_for_incremental_expansion(adapter, monkeypatch):
-    controller = adapter.controller
-    spec = PivotSpec(
-        table="sales_data",
-        rows=["region", "country"],
-        columns=[],
-        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
-        filters=[],
-        totals=False,
-    )
-
-    root_rows = [
-        {"region": "North", "sales_sum": 10},
-        {"region": "South", "sales_sum": 20},
-    ]
-    north_rows = [{"region": "North", "country": "USA", "sales_sum": 10}]
-    south_rows = [{"region": "South", "country": "Brazil", "sales_sum": 20}]
-    call_targets = []
-
-    call_options = []
-
-    async def fake_batch_load(spec_dict, target_paths, max_levels=3, **options):
-        call_targets.append([list(path) for path in target_paths])
-        call_options.append(options)
-        result = {"": [dict(row) for row in root_rows]}
-        if ["North"] in target_paths:
-            result["North"] = [dict(row) for row in north_rows]
-        if ["South"] in target_paths:
-            result["South"] = [dict(row) for row in south_rows]
-        return result
-
-    monkeypatch.setattr(controller, "run_hierarchical_pivot_batch_load", fake_batch_load)
-
-    first = await controller.run_hierarchy_view(spec, [["North"]])
-    second = await controller.run_hierarchy_view(spec, [["North"], ["South"]])
-
-    assert call_targets[0] == [["North"]]
-    assert call_targets[1] == [["South"]]
-    assert call_options[0].get("include_root", True) is True
-    assert call_options[1]["include_root"] is False
-    assert any(row.get("country") == "USA" for row in second["rows"])
-    assert any(row.get("country") == "Brazil" for row in second["rows"])
-    assert len(second["rows"]) > len(first["rows"])
 
 
 @pytest.mark.asyncio
@@ -2970,42 +2847,6 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
 
 
 @pytest.mark.asyncio
-async def test_small_collapsed_root_view_materializes_once_and_slices_cached_results(adapter):
-    """Small root levels avoid repeating an IN-filtered pivot for every scroll."""
-    root_count = 80
-    adapter.controller.load_data_from_arrow(
-        "materialized_collapsed_root",
-        pa.Table.from_pydict(
-            {
-                "region": [f"Region {index:03d}" for index in range(root_count) for _ in range(2)],
-                "desk": [f"Desk {copy}" for _index in range(root_count) for copy in range(2)],
-                "sales": [index for index in range(root_count) for _ in range(2)],
-            }
-        ),
-    )
-    spec = PivotSpec(
-        table="materialized_collapsed_root",
-        rows=["region", "desk"],
-        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
-    )
-
-    first = await adapter.controller.run_hierarchy_view(
-        spec, [], start_row=0, end_row=9, profiling=True
-    )
-    second = await adapter.controller.run_hierarchy_view(
-        spec, [], start_row=40, end_row=49, profiling=True
-    )
-
-    assert first["total_rows"] == root_count
-    assert first["profile"]["controller"]["rootMaterialization"] == "stored"
-    assert second["profile"]["controller"]["rootMaterialization"] == "hit"
-    assert second["profile"]["controller"]["pageKeyFetchMs"] is None
-    assert [row["region"] for row in second["rows"]] == [
-        f"Region {index:03d}" for index in range(40, 50)
-    ]
-
-
-@pytest.mark.asyncio
 async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_query(adapter, monkeypatch):
     rows = 100_000
     table = pa.Table.from_pydict(
@@ -3099,100 +2940,6 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
     )
     # One grand-total query per request outside the first window (REQ-PAGE: the core orders it first).
     assert sum(1 for q in core_queries if q["offset"] == 0 and q["limit"] == 1) == 2
-
-
-def test_collapsed_root_cache_keys_ignore_materialized_pivot_window(adapter):
-    request = TanStackRequest(
-        operation=TanStackOperation.GET_DATA,
-        table="sales_data",
-        columns=[
-            {"id": "date"},
-            {"id": "country"},
-            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
-            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
-        ],
-        filters={},
-        sorting=[],
-        grouping=["date"],
-        aggregations=[
-            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
-            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
-        ],
-        totals=False,
-        row_totals=False,
-        version=1,
-        column_sort_options={},
-    )
-
-    spec_a = adapter.convert_tanstack_request_to_pivot_spec(request)
-    spec_b = adapter.convert_tanstack_request_to_pivot_spec(request)
-
-    assert spec_a.pivot_config is not None
-    assert spec_b.pivot_config is not None
-
-    spec_a.pivot_config.materialized_column_values = ["USA", "Canada"]
-    spec_b.pivot_config.materialized_column_values = ["Japan", "Germany"]
-
-    controller = adapter.controller
-    root_sort = controller._build_group_rows_sort(spec_a.rows[:1], spec_a.sort, spec_a.column_sort_options)
-
-    assert controller._collapsed_root_count_cache_key(spec_a) == controller._collapsed_root_count_cache_key(spec_b)
-    assert (
-        controller._collapsed_root_page_cache_key(spec_a, root_sort, 1000, 100)
-        == controller._collapsed_root_page_cache_key(spec_b, root_sort, 1000, 100)
-    )
-
-
-@pytest.mark.asyncio
-async def test_topn_query_skips_column_discovery_when_materialized_values_are_present(adapter, monkeypatch):
-    request = TanStackRequest(
-        operation=TanStackOperation.GET_DATA,
-        table="sales_data",
-        columns=[
-            {"id": "date"},
-            {"id": "country"},
-            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
-            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
-        ],
-        filters={},
-        sorting=[],
-        grouping=["date"],
-        aggregations=[
-            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
-            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
-        ],
-        totals=False,
-        row_totals=False,
-        version=1,
-        column_sort_options={},
-    )
-
-    spec = adapter.convert_tanstack_request_to_pivot_spec(request)
-    assert spec.pivot_config is not None
-    spec.pivot_config.materialized_column_values = ["USA", "Canada"]
-
-    original_execute = adapter.controller._execute_ibis_expr_async
-    execute_calls = []
-
-    async def recording_execute(expr, table_name=None):
-        execute_calls.append(expr)
-        return await original_execute(expr, table_name)
-
-    monkeypatch.setattr(adapter.controller, "_execute_ibis_expr_async", recording_execute)
-
-    profile_sink = {}
-    result = await adapter.controller.run_pivot_async(
-        spec,
-        return_format="arrow",
-        force_refresh=True,
-        profile_sink=profile_sink,
-    )
-
-    assert isinstance(result, pa.Table)
-    # only the requested members become cells, with no column discovery
-    assert profile_sink["planner"]["path"] == "core" and execute_calls == []
-    assert sorted(c for c in result.column_names if c.endswith("_sum")) == [
-        "Canada_cost_sum", "Canada_sales_sum", "USA_cost_sum", "USA_sales_sum"]
 
 
 def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():

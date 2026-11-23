@@ -1,4 +1,3 @@
-import os
 import pytest
 import pyarrow as pa
 
@@ -9,7 +8,7 @@ from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest
 
 
 def _controller_with_measure_axis_data(table_name: str = "measure_axis_hierarchy"):
-    controller = ScalablePivotController(planner_name="ibis", backend_uri=":memory:")
+    controller = ScalablePivotController(backend_uri=":memory:")
     controller.load_data_from_arrow(
         table_name,
         pa.table(
@@ -23,6 +22,21 @@ def _controller_with_measure_axis_data(table_name: str = "measure_axis_hierarchy
         ),
     )
     return controller
+
+
+async def _levels(controller, spec, expanded):
+    """The hierarchy view grouped by parent path (``"a|||b"``; ``""`` = the roots), from the core."""
+    from pivot_engine.transport.core_bridge import core_hierarchy_view, run_core_read
+
+    view = await run_core_read(controller, spec.table, lambda resolve: core_hierarchy_view(
+        resolve, spec, expanded, 0, None))
+    levels = {}
+    for row in view["rows"]:
+        if row.get("_isTotal"):
+            continue
+        path = str(row["_path"]).split("|||")
+        levels.setdefault("|||".join(path[:-1]), []).append(row)
+    return levels
 
 
 def _amounts(rows, *fields):
@@ -64,11 +78,7 @@ async def test_measure_axis_hierarchy_middle_level_keeps_measure_name_at_its_lev
         }
     )
 
-    result = await controller.run_hierarchical_pivot_batch_load(
-        spec.to_dict(),
-        [["North"], ["North", "Sales"]],
-        max_levels=len(spec.rows),
-    )
+    result = await _levels(controller, spec, [["North"], ["North", "Sales"]])
 
     assert _amounts(result[""], "region") == {("North",): 200.0, ("South",): 135.0}
     assert all("Measure Name" not in row for row in result[""])
@@ -84,12 +94,10 @@ async def test_measure_axis_hierarchy_middle_level_keeps_measure_name_at_its_lev
         ("Credit",): 50.0,
     }
 
-    view = await controller.run_hierarchy_view(
-        spec,
-        [["North"], ["North", "Sales"]],
-        start_row=0,
-        end_row=20,
-    )
+    from pivot_engine.transport.core_bridge import core_hierarchy_view, run_core_read
+
+    view = await run_core_read(controller, spec.table, lambda resolve: core_hierarchy_view(
+        resolve, spec, [["North"], ["North", "Sales"]], 0, 20))
     assert {
         row.get("_path"): (row.get("depth"), row.get("_pathFields"))
         for row in view["rows"]
@@ -135,11 +143,7 @@ async def test_measure_axis_hierarchy_first_and_last_levels_work_with_aggregate_
     measure_first_spec = controller._normalize_spec(
         {**base_spec, "rows": ["Measure Name", "region", "desk"]}
     )
-    measure_first = await controller.run_hierarchical_pivot_batch_load(
-        measure_first_spec.to_dict(),
-        [["Sales"]],
-        max_levels=len(measure_first_spec.rows),
-    )
+    measure_first = await _levels(controller, measure_first_spec, [["Sales"]])
 
     assert _amounts(measure_first[""], "Measure Name") == {
         ("Sales",): 250.0,
@@ -153,11 +157,7 @@ async def test_measure_axis_hierarchy_first_and_last_levels_work_with_aggregate_
     measure_last_spec = controller._normalize_spec(
         {**base_spec, "rows": ["region", "desk", "Measure Name"]}
     )
-    measure_last = await controller.run_hierarchical_pivot_batch_load(
-        measure_last_spec.to_dict(),
-        [["North"], ["North", "Rates"]],
-        max_levels=len(measure_last_spec.rows),
-    )
+    measure_last = await _levels(controller, measure_last_spec, [["North"], ["North", "Rates"]])
 
     # REQ-DIM-003: above the label the members' aggregations (sum, max) differ: no value.
     # Legacy summed them (157 = 150 + 7; finding F-AXIS-MIXED-PARENT).
@@ -326,10 +326,6 @@ async def test_measure_axis_hierarchy_preserves_array_agg_series_values():
     assert amount_by_path["AAA|||PnL 20D"] == [{"x": "d1", "y": 10.0}, {"x": "d2", "y": 20.0}]
 
     spec = adapter.convert_tanstack_request_to_pivot_spec(request)
-    hierarchy = await adapter.controller.run_hierarchical_pivot_batch_load(
-        spec.to_dict(),
-        [["AAA"]],
-        max_levels=len(row_fields),
-    )
+    hierarchy = await _levels(adapter.controller, spec, [["AAA"]])
     root_amounts = {row["instrument"]: row.get("Amount") for row in hierarchy[""]}
     assert root_amounts == {"AAA": None, "BBB": None}

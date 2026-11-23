@@ -272,7 +272,7 @@ async def main():
     df_nested = _build_df_nested()
 
     ctrl = ScalablePivotController(backend_uri=":memory:")
-    con  = ctrl.planner.con
+    con  = ctrl.con
     con.create_table("BUCKETED_RHO", df_flat,   overwrite=True)
     con.create_table("NESTED_RHO",   df_nested, overwrite=True)
 

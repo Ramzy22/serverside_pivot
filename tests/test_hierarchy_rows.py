@@ -321,50 +321,6 @@ def test_blank_root_expand_all_keeps_full_and_virtual_row_order_identical():
     assert virtual_paths[-1] == "P|||Search Hedge|||GOOGL 19JUN26 305P"
 
 
-@pytest.mark.asyncio
-async def test_adapter_legacy_hierarchy_fallback_slices_viewport_with_shared_policy():
-    class BatchOnlyController:
-        async def run_hierarchical_pivot_batch_load(self, _spec_dict, _target_paths, max_levels):
-            assert max_levels == 2
-            return {
-                "": [
-                    {"region": "North", "sales_sum": 100},
-                    {"region": "South", "sales_sum": 80},
-                ],
-                "North": [
-                    {"region": "North", "country": "USA", "sales_sum": 60},
-                    {"region": "North", "country": "Canada", "sales_sum": 40},
-                ],
-            }
-
-    adapter = TanStackPivotAdapter(BatchOnlyController())
-    request = TanStackRequest(
-        operation=TanStackOperation.GET_DATA,
-        table="sales",
-        columns=[
-            {"id": "region"},
-            {"id": "country"},
-            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
-        ],
-        filters={},
-        sorting=[],
-        grouping=["region", "country"],
-        aggregations=[],
-        pagination={"pageIndex": 0, "pageSize": 2},
-    )
-
-    response = await adapter.handle_virtual_scroll_request(
-        request,
-        1,
-        2,
-        expanded_paths=[["North"]],
-    )
-
-    assert [row["_id"] for row in response.data] == ["USA", "Canada"]
-    assert [row["_path"] for row in response.data] == ["North|||USA", "North|||Canada"]
-    assert response.total_rows == 4
-
-
 def test_iter_visible_hierarchy_rows_sets_path_and_pathfields_before_yield():
     """_path and _pathFields must be set on every row so tabular layout mode can
     show parent labels for child rows even when parent field values are absent."""
@@ -426,7 +382,7 @@ def test_no_subtotal_flag_participates_in_adapter_cache_fingerprint():
         include_subtotals=False,
     )
 
-    assert adapter._request_structure_fingerprint(base_request) != adapter._request_structure_fingerprint(no_subtotal_request)
+    assert adapter._viewport_keys.request_structure_fingerprint(base_request) != adapter._viewport_keys.request_structure_fingerprint(no_subtotal_request)
 
 
 def test_layout_and_subtotal_footer_mode_participate_in_adapter_cache_fingerprint():
@@ -454,6 +410,6 @@ def test_layout_and_subtotal_footer_mode_participate_in_adapter_cache_fingerprin
     tabular = request("tabular", True)
     tabular_without_subtotals = request("tabular", False)
 
-    assert adapter._request_structure_fingerprint(hierarchy) != adapter._request_structure_fingerprint(outline)
-    assert adapter._request_structure_fingerprint(outline) != adapter._request_structure_fingerprint(tabular)
-    assert adapter._request_structure_fingerprint(tabular) != adapter._request_structure_fingerprint(tabular_without_subtotals)
+    assert adapter._viewport_keys.request_structure_fingerprint(hierarchy) != adapter._viewport_keys.request_structure_fingerprint(outline)
+    assert adapter._viewport_keys.request_structure_fingerprint(outline) != adapter._viewport_keys.request_structure_fingerprint(tabular)
+    assert adapter._viewport_keys.request_structure_fingerprint(tabular) != adapter._viewport_keys.request_structure_fingerprint(tabular_without_subtotals)

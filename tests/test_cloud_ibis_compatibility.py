@@ -28,13 +28,10 @@ from pivot_engine.backends.capabilities import (
 )
 from pivot_engine.backends.ibis_backend import IbisBackend
 from pivot_engine.backends.table_catalog import IbisTableCatalog
-from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
 from pivot_engine.config import ScalablePivotConfig
-from pivot_engine.controller import PivotController
+from pivot_engine import PivotController
 from pivot_engine.data_input import normalize_data_input
 from pivot_engine.editing.mutation_executor import DatabaseMutationExecutor
-from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
-from pivot_engine.planner.ibis_planner import IbisPlanner
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.types.pivot_spec import Measure, PivotSpec
 
@@ -171,47 +168,6 @@ def test_table_catalog_qualified_names_and_ttl_schema_cache():
     assert list(resolved.columns) == ["id", "amount"]
 
 
-def test_dialect_portable_ilike_and_tenor_fallbacks():
-    con = ibis.duckdb.connect(":memory:")
-    con.create_table(
-        "items",
-        pa.table({"name": ["Alpha", "beta", "GAMMA"], "tenor": ["1M", "3M", "1Y"], "val": [1, 2, 3]}),
-        overwrite=True,
-    )
-    builder = IbisExpressionBuilder(con)
-    # Simulate BigQuery/SQLite capability where ilike and regex_extract are False
-    object.__setattr__(builder.capabilities, "supports_ilike", False)
-    object.__setattr__(builder.capabilities, "supports_regex_extract", False)
-
-    tbl = builder.resolve_table("items")
-    f_expr = builder.build_filter_expression(
-        tbl,
-        [{"field": "name", "op": "contains", "value": "ALP", "caseSensitive": False}],
-    )
-    filtered = tbl.filter(f_expr).to_pyarrow()
-    assert filtered.column("name").to_pylist() == ["Alpha"]
-
-    sorts = builder.build_sort_expressions(
-        tbl,
-        [{"field": "tenor", "order": "asc", "semanticType": "tenor"}],
-    )
-    assert len(sorts) == 1
-    sorted_tbl = tbl.order_by(sorts).to_pyarrow()
-    assert set(sorted_tbl.column("tenor").to_pylist()) == {"1M", "3M", "1Y"}
-
-
-def test_planner_skips_remote_row_count_query_by_default():
-    con = ibis.duckdb.connect(":memory:")
-    con.create_table("events", pa.table({"k": ["a", "b"], "v": [1, 2]}), overwrite=True)
-    fake_cloud = _FakeCloudBackend(con)
-    planner = IbisPlanner(con=fake_cloud)
-    assert planner.capabilities.is_cloud_or_remote is True
-
-    estimated = planner._estimate_table_row_count("events")
-    assert estimated == 100000
-    assert fake_cloud.table_calls == 0, "Remote cloud backend should not issue COUNT(*) during cost estimation"
-
-
 def test_mutation_executor_blocks_readonly_cloud_and_supports_rowid_free_updates():
     controller = ScalablePivotController(backend_uri=":memory:")
     controller.load_data_from_arrow(
@@ -304,22 +260,6 @@ def test_ibis_backend_record_batches_paged_fallback():
     total_rows = sum(b.num_rows for b in batches)
     assert total_rows == 10
     assert [b.num_rows for b in batches] == [4, 4, 2]
-
-
-def test_materialized_hierarchy_manager_skips_ddl_on_readonly_cloud_and_avoids_disk_write(tmp_path):
-    con = ibis.duckdb.connect(":memory:")
-    con.create_table("t", pa.table({"a": ["x", "y"], "v": [1, 2]}), overwrite=True)
-    fake_cloud = _FakeCloudBackend(con)
-    reg_file = tmp_path / "should_not_exist.json"
-    mgr = MaterializedHierarchyManager(fake_cloud, cache={}, registry_path=str(reg_file))
-    spec = PivotSpec(
-        table="t",
-        rows=["a"],
-        measures=[Measure(field="v", agg="sum", alias="v_sum")],
-    )
-    mgr.create_materialized_hierarchy(spec)
-    assert not reg_file.exists(), "MaterializedHierarchyManager should not write registry file to disk by default"
-    assert mgr.rollup_tables == {}
 
 
 def test_config_cloud_settings_from_env(monkeypatch):
@@ -446,9 +386,6 @@ def test_mutation_executor_pyformat_placeholder_adaptation():
         name = "postgres"
         con = _FakePyformatRawCon()
 
-    class _FakePlanner:
-        con = _FakePyformatIbisCon()
-
     caps = resolve_backend_capabilities(
         None,
         connection_uri="postgresql://u:p@host:5432/db",
@@ -458,7 +395,7 @@ def test_mutation_executor_pyformat_placeholder_adaptation():
 
     class _FakeController:
         backend_capabilities = caps
-        planner = _FakePlanner()
+        con = _FakePyformatIbisCon()
 
     executor = DatabaseMutationExecutor(_FakeController())
     executor.execute_parameterized_mutation(

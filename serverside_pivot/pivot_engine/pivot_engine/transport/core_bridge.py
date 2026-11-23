@@ -19,15 +19,18 @@ import ast
 import math
 import re
 import time
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
-from ..core.exec import column_members, detail, distinct_values, execute, fingerprint
+from ..core.exec import (
+    column_members, detail, distinct_values, execute, fingerprint, materialize, measure_expr, record_predicate,
+    records,
+)
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
-    FORMULA_AGG, MEMBER_AGG, Category, Expr, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
+    FORMULA_AGG, MEMBER_AGG, Category, ColumnOrder, Expr, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
 from ..core.physical import TREES, choose
 from ..core.logical import plan as logical_plan
@@ -54,8 +57,18 @@ _OPS = {
     "not_in": "not_in", "between": "between", "contains": "contains", "not_contains": "not_contains",
     "starts_with": "starts_with", "ends_with": "ends_with", "is_null": "is_null", "is_not_null": "is_not_null",
     "is_empty": "is_empty", "is_not_empty": "is_not_empty",
+    # The edge vocabulary (TanStack / spec API spellings) of the same operators.
+    "==": "=", "eq": "=", "equals": "=", "ne": "!=", "neq": "!=", "not_equals": "!=", "<>": "!=",
+    "lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "startswith": "starts_with", "endswith": "ends_with",
+    "notcontains": "not_contains", "notin": "not_in",
 }
 _MEASURE_FILTER_OPS = {"=", "!=", "<", "<=", ">", ">="}
+
+
+def _op(f: Mapping[str, Any]) -> Optional[str]:
+    """The core operator of a spec filter (case-insensitive), None if unknown."""
+    raw = str(f.get("op") or f.get("operator") or "=").strip()
+    return _OPS.get(raw) or _OPS.get(raw.lower())
 
 
 class CoreUnsupported(Exception):
@@ -113,9 +126,9 @@ def _dimension_filter(f: Mapping[str, Any], families: Mapping[str, str], reasons
     if field not in families:
         reasons.append(f"filter on unknown field {field!r}")
         return None
-    op = _OPS.get(str(f.get("op") or "="))
+    op = _op(f)
     if op is None:
-        reasons.append(f"filter operator {f.get('op')!r}")
+        reasons.append(f"filter operator {f.get('op') or f.get('operator')!r}")
         return None
     family = families[field]
     value = f.get("value")
@@ -136,11 +149,16 @@ def _filters(spec: Any, aliases: FrozenSet[str], families: Mapping[str, str], de
              reasons: List[str]) -> Tuple[Tuple[Any, ...], Tuple[MeasureFilter, ...]]:
     rows: List[Any] = []
     measure_filters: List[MeasureFilter] = []
-    for f in spec.filters or []:
+    having = [h for h in getattr(spec, "having", None) or [] if isinstance(h, Mapping)]
+    for h in having:  # REQ-TOT-007: a having entry is a level-less measure filter, never a record filter
+        if not set(_flatten_fields(h)) <= aliases:
+            reasons.append("having on a non-measure field")
+    for f in [*(spec.filters or []), *having]:
         fields = set(_flatten_fields(f))
         if fields & aliases:
-            # REQ-TOT-007: a level-less measure filter applies at the deepest row level.  A conjunction of
-            # measure conditions (a column filter menu's AND group) is one measure filter per condition.
+            # REQ-TOT-007: a level-less measure filter applies at the deepest row level.  A conjunction
+            # (a column filter menu's AND group) is one filter per condition: a dimension condition is a
+            # row filter (E0), a measure condition a measure filter, so the group means WHERE ... HAVING ...
             terms = [f]
             if "conditions" in f:
                 group_op = str(f.get("op") or f.get("operator") or "AND").upper()
@@ -149,13 +167,19 @@ def _filters(spec: Any, aliases: FrozenSet[str], families: Mapping[str, str], de
                         not isinstance(t, dict) or "conditions" in t for t in terms):
                     reasons.append("compound measure filter")
                     continue
-            if not fields <= aliases:
+            elif not fields <= aliases:
                 reasons.append("compound measure filter")
                 continue
+            dimension_terms = [t for t in terms if str(t.get("field")) not in aliases]
+            terms = [t for t in terms if str(t.get("field")) in aliases]
+            for term in dimension_terms:
+                mapped = _dimension_filter(term, families, reasons)
+                if mapped is not None:
+                    rows.append(mapped)
             for term in terms:
-                op = str(term.get("op") or "=")
+                op = _op(term) or str(term.get("op"))
                 if op not in _MEASURE_FILTER_OPS or depth == 0:
-                    reasons.append(f"measure filter {op!r}" if depth else "measure filter without row levels")
+                    reasons.append(f"measure filter {term.get('op')!r}" if depth else "measure filter without row levels")
                     continue
                 measure_filters.append(MeasureFilter(depth, str(term["field"]), op,
                                                      _coerce(term.get("value"), "floating")))
@@ -793,7 +817,7 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         if extra:
             reasons.append(f"sort keys {sorted(extra)}")
     categories = _categories(spec, families, reasons)
-    for attr, label in (("having", "having"), ("subtotals", "explicit subtotals"),
+    for attr, label in (("subtotals", "explicit subtotals"),
                         ("drill_paths", "drill paths"), ("cursor", "keyset cursor"),
                         ("grouping_config", "grouping sets")):
         if getattr(spec, attr, None):
@@ -930,6 +954,95 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
 
 
 # --------------------------------------------------------------------- columns
+
+
+def _column_orders(spec: Any, query: PivotQuery) -> List[ColumnOrder]:
+    """REQ-PIV-002 from the request's ``column_sort_options`` (the order the column catalog shows).
+
+    Per column field: ``pivotSortMode`` "total" orders by the first measure's
+    total, "label" by the member; with neither, a direction means "label" and
+    otherwise the default is "total" (descending) when the view has a measure.
+    A custom dimension's "creation"/"numeric" order is the field's default
+    member key (``__sortkey__<field>``).
+    """
+    options = getattr(spec, "column_sort_options", None)
+    options = options if isinstance(options, Mapping) else {}
+    value_aliases = [m.alias for m in query.measures if not m.alias.startswith(HIDDEN)] + [d.alias for d in query.derived]
+    first = str(getattr((spec.measures or [None])[0], "alias", None) or "")
+    total = first if first in value_aliases else (value_aliases[0] if query.unpivot is not None and value_aliases
+                                                  else None)
+    creation = {category_field_id(d): str(d.get("order") or "creation").strip().lower()
+                for d in getattr(spec, "custom_dimensions", None) or [] if isinstance(d, Mapping)}
+    orders: List[ColumnOrder] = []
+    for field in query.columns:
+        default: Dict[str, Any] = {}
+        dim_order = creation.get(field)
+        if dim_order == "alpha_desc":
+            default = {"pivotSortMode": "label", "pivotDirection": "desc"}
+        elif dim_order in {"creation", "numeric"}:
+            default = {"pivotSortMode": "label", "pivotDirection": "asc", "sortKeyField": f"__sortkey__{field}"}
+        elif dim_order == "numeric_desc":
+            default = {"pivotSortMode": "label", "pivotDirection": "desc", "sortKeyField": f"__sortkey__{field}"}
+        explicit = options.get(field) if isinstance(options.get(field), Mapping) else {}
+        raw = {**default, **explicit}
+        mode = str(raw.get("pivotSortMode") or "").strip().lower()
+        direction = str(raw.get("pivotDirection") or "").strip().lower()
+        if mode not in {"label", "total"}:
+            mode = "label" if direction in {"asc", "desc"} or total is None else "total"
+        if direction not in {"asc", "desc"}:
+            direction = "desc" if mode == "total" and total is not None else "asc"
+        sort_type = str(raw.get("sortType") or "").strip().lower()
+        semantic = str(raw.get("semanticType") or raw.get("sortSemantic")
+                       or ("tenor" if sort_type == "curve_pillar_tenor" else "")).strip().lower()
+        absolute = bool(raw.get("absoluteSort")) or sort_type in {"absolute", "abs", "absolute_value", "absolute-value"}
+        nulls_first = str(raw.get("nulls") or "last").strip().lower() == "first"
+        if mode == "total" and total is not None:
+            orders.append(ColumnOrder(field, direction == "desc", total=total, absolute=absolute,
+                                      nulls_first=nulls_first))
+        else:
+            key = raw.get("sortKeyField")
+            orders.append(ColumnOrder(field, direction == "desc", by=str(key) if key else None,
+                                      semantic=semantic if semantic == "tenor" else None,
+                                      absolute=absolute and not key, nulls_first=nulls_first))
+    return orders
+
+
+def core_column_catalog(resolve: Callable[[str], Any], spec: Any) -> List[Dict[str, Any]]:
+    """The ordered column catalog of a pivot spec (REQ-PIV-001, REQ-PIV-002).
+
+    One entry per column member, in catalog order: each column field's value
+    and the member's display key ``_col_key``.  A ``column_cursor`` keeps the
+    members whose key sorts after it.  The column window the view then shows is
+    chosen from this catalog (``pivot_config.materialized_column_values``).
+    """
+    import copy
+
+    relation = resolve(spec.table)
+    plain = copy.copy(spec)
+    plain.offset = 0
+    cfg = copy.copy(getattr(spec, "pivot_config", None))
+    cursor = getattr(cfg, "column_cursor", None) if cfg is not None else None
+    if cfg is not None:
+        cfg.top_n = None
+        cfg.order_by_measure = None
+        cfg.column_cursor = None
+        cfg.materialized_column_values = None
+        plain.pivot_config = cfg
+    query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=[])
+    if not query.columns:
+        return []
+    resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
+    members = column_members(query, resolver, order=_column_orders(spec, query))
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for member in members:
+        key = legacy_column_key(member)
+        if key in seen:
+            raise CoreUnsupported([f"ambiguous pivot column key {key!r}"])  # F-PIVOT-DELIM
+        seen.add(key)
+        if cursor is None or key > str(cursor):
+            out.append({**dict(zip(query.columns, member)), "_col_key": key})
+    return out
 
 
 def legacy_column_key(member: Sequence[Any]) -> str:
@@ -1127,6 +1240,31 @@ def _has_formulas(query: PivotQuery) -> bool:
     return any(m.agg == FORMULA_AGG for m in query.measures)
 
 
+async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[str], Any]], Any]) -> Any:
+    """Run one core read for ``controller``: ``read(resolve)`` with its scoped table resolver.
+
+    The read queues on the table's execution lock and runs through the
+    backend's ``run_statements`` (request-level cancellation and the query
+    deadline on every statement) when the backend offers it.  A controller
+    without a scoped resolver cannot serve the core: ``CoreUnsupported``.
+    """
+    import asyncio
+
+    from ..core.authority.scope import run_in_executor_scoped
+
+    resolve = getattr(controller, "resolve_table", None)
+    if resolve is None:
+        raise CoreUnsupported(["controller without resolve_table"])
+
+    def work() -> Any:
+        return core_locked_call(controller, table, lambda: read(resolve))
+
+    run_statements = getattr(getattr(controller, "backend", None), "run_statements", None)
+    if callable(run_statements):
+        return await run_statements(work)
+    return await run_in_executor_scoped(asyncio.get_running_loop(), None, work)
+
+
 def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
     """Run a core read under the controller's execution lock for ``table``.
 
@@ -1240,10 +1378,10 @@ def _capture(capture: Dict[str, Any], query: PivotQuery, relation: Any) -> None:
     capture["query"] = to_wire(query)
     counted = relation.count()
     verify_scoped(counted)
-    if int(counted.to_pyarrow().as_py()) > CAPTURE_MAX_ROWS:
+    if int(materialize(counted).as_py()) > CAPTURE_MAX_ROWS:
         return
     verify_scoped(relation)
-    table = relation.to_pyarrow()
+    table = materialize(relation)
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
@@ -1263,7 +1401,7 @@ def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[s
     union, _ = TREES[choose(plan, relation.schema())](plan, relation)
     counted = union.count()
     verify_scoped(counted)  # every core expression is proven scoped before it runs
-    total = int(counted.to_pyarrow().as_py())
+    total = int(materialize(counted).as_py())
     if cache is not None:
         if len(cache) > 4096:
             cache.clear()
@@ -1332,6 +1470,57 @@ def core_drill_through(resolve: Callable[[str], Any], spec: Any, extra_filters: 
     )
     table, total = detail(query, lambda _name: relation)
     return {"rows": table.to_pylist(), "total_rows": total}
+
+
+# --------------------------------------------------------------------- record-level reads (live aggregation)
+
+
+def core_records(relation: Any, spec: Any, filters: Sequence[Mapping[str, Any]]) -> Any:
+    """The E0 records of ``spec`` (its categories, then ``filters``) as an unmaterialized relation.
+
+    Filters on measure aliases are post-aggregation and do not select records.  Every other filter must
+    map exactly onto the core: an unmappable one (a row-scope filter, for instance) is an error, never a
+    silently wider record set (REQ-SEC-001).
+    """
+    families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
+    reasons: List[str] = []
+    categories = _categories(spec, families, reasons)
+    aliases = frozenset(str(m.alias) for m in spec.measures or [])
+    mapped: List[Any] = []
+    for f in filters:
+        if set(_flatten_fields(f)) <= aliases:
+            continue
+        item = _dimension_filter(f, families, reasons)
+        if item is not None:
+            mapped.append(item)
+    if reasons:
+        raise CoreUnsupported(reasons)
+    query = DetailQuery(dataset=str(spec.table), filters=tuple(mapped), categories=categories)
+    return records(query, lambda _name: relation)
+
+
+def core_record_filter(relation: Any, f: Mapping[str, Any]) -> Any:
+    """The boolean expression of one spec filter over ``relation``; an unmappable filter is an error."""
+    families = {name: type_family(dtype) for name, dtype in relation.schema().items()}
+    reasons: List[str] = []
+    item = _dimension_filter(f, families, reasons)
+    if reasons or item is None:
+        raise CoreUnsupported(reasons or ["empty filter"])
+    return record_predicate(relation, item)
+
+
+def core_measure_expr(relation: Any, m: Any) -> Any:
+    """One spec measure as a registry aggregation over ``relation``, named by its alias (conditional
+    measures apply their condition exactly); an unsupported measure is an error."""
+    reasons: List[str] = []
+    condition = None
+    if getattr(m, "filter_condition", None):
+        condition = core_record_filter(relation, m.filter_condition)
+        m = replace(m, filter_condition=None) if is_dataclass(m) else m
+    ref = _measure(m, reasons)
+    if ref is None or reasons:
+        raise CoreUnsupported(reasons or [f"measure {getattr(m, 'alias', None)!r}"])
+    return measure_expr(relation, ref, condition)
 
 
 # --------------------------------------------------------------------- filter options

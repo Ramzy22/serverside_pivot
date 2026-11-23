@@ -48,7 +48,7 @@ from pivot_engine.resource_governor import (
     WorkloadAccount,
     current_workload_account,
 )
-from pivot_engine.types.pivot_spec import Measure, PivotSpec
+from pivot_engine.types.pivot_spec import Measure, PivotConfig, PivotSpec
 
 
 T = TypeVar("T")
@@ -103,6 +103,7 @@ def build_pivot_spec() -> PivotSpec:
         ],
         sort=[{"field": "region", "order": "asc"}, {"field": "product", "order": "asc"}],
         limit=5_000,
+        pivot_config=PivotConfig(enabled=True),
     )
 
 
@@ -115,7 +116,7 @@ def run_benchmark(row_count: int, repeat_runs: int) -> Dict[str, Any]:
         backend_uri=":memory:",
         enable_streaming=False,
         enable_incremental_views=False,
-        tile_size=200,
+
         cache_ttl=600,
     )
     spec = build_pivot_spec()
@@ -158,8 +159,8 @@ def run_benchmark(row_count: int, repeat_runs: int) -> Dict[str, Any]:
                 ),
             },
             "cache": {
-                "hits": int(getattr(controller, "_cache_hits", 0)),
-                "misses": int(getattr(controller, "_cache_misses", 0)),
+                "hits": int(controller.core_cache.hits),
+                "misses": int(controller.core_cache.misses),
             },
             "viewportRows": len(viewport_result.get("rows", [])),
             "repeatRuns": repeat_runs,
@@ -221,7 +222,6 @@ def run_memory_benchmark(
             backend_uri=":memory:",
             enable_streaming=False,
             enable_incremental_views=False,
-            tile_size=200,
             cache_ttl=600,
             resource_limits=limits,
             resource_governor=governor,

@@ -16,6 +16,7 @@ from .registry import REGISTRY, UnknownAggregationError
 __all__ = [
     "Category",
     "CategoryRule",
+    "ColumnOrder",
     "IRValidationError",
     "MeasureFilter",
     "MeasureRef",
@@ -201,6 +202,28 @@ class SortKey:
 
 
 SEMANTIC_SORTS = frozenset({"tenor"})
+
+
+@dataclass(frozen=True)
+class ColumnOrder:
+    """How one column dimension orders the column catalog (REQ-PIV-002).
+
+    The catalog's members are ordered column by column.  A field orders its
+    members by ``total`` (a measure alias of the query: the member's own value
+    as a one-level tree over E0), else by MIN(``by``) over the member's E0
+    records (REQ-SORT-003), else by its ``semantic`` key (REQ-SORT-005), else
+    by the member value; ``absolute`` orders a numeric key by magnitude.
+    NULLs come last in both directions unless ``nulls_first`` (REQ-SORT-006);
+    ties fall back to the member value ascending, NULLS LAST.
+    """
+
+    field: str
+    desc: bool = False
+    total: Optional[str] = None
+    by: Optional[str] = None
+    semantic: Optional[str] = None
+    absolute: bool = False
+    nulls_first: bool = False
 
 
 @dataclass(frozen=True)

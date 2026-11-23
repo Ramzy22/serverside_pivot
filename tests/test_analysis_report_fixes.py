@@ -1,10 +1,5 @@
-import asyncio
 import inspect
 import json
-import re
-from collections import OrderedDict
-from pathlib import Path
-from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.flight as fl
@@ -12,16 +7,13 @@ import pytest
 
 from pivot_engine.cache.memory_cache import MemoryCache
 from pivot_engine.config import ScalablePivotConfig
-from pivot_engine.controller import PivotController
 from pivot_engine.dash_integration import _find_sort_options_in_layout
-from pivot_engine.diff.diff_engine import DeltaInfo, QueryDiffEngine
 from pivot_engine.editing.patch_planner import filter_visible_impacted_scope_ids
 from pivot_engine.editing.scope_index import collect_impacted_scope_ids, visible_scope_ids_from_paths
 from pivot_engine.editing.session_manager import EditSessionManager
 from pivot_engine.editing.models import SessionEventRecord
 from pivot_engine.flight_server import PivotFlightServer
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
-from pivot_engine.types.pivot_spec import PivotSpec
 
 
 def test_scope_collection_deduplicates_during_construction():
@@ -74,44 +66,6 @@ def test_session_manager_removes_overlay_incrementally_and_preserves_next_origin
     cell = overlay["North"]["sales"]
     assert cell["directEventIds"] == ["evt_2"]
     assert cell["originalValue"] == 12
-
-
-def test_diff_engine_delta_table_preserves_base_schema_order():
-    engine = QueryDiffEngine(MemoryCache(ttl=300))
-    engine._delta_info["sales"] = DeltaInfo(table="sales", last_timestamp=0, incremental_field="updated_at")
-    engine.compute_delta_queries = lambda _spec, _plan: [SimpleNamespace(to_pyarrow=lambda: pa.table({"b": [3], "a": [4]}))]
-
-    base = pa.table({"a": [1], "b": [2]})
-    result = engine.apply_delta_updates(
-        {"table": "sales", "measures": []},
-        {"queries": [object()]},
-        base,
-    )
-
-    assert result.column_names == ["a", "b"]
-
-
-def test_tile_planning_uses_limit_capability_instead_of_fragile_op_name():
-    class LimitOnlyExpr:
-        def __init__(self):
-            self.calls = []
-
-        def limit(self, limit, offset=0):
-            self.calls.append((limit, offset))
-            return f"limited:{limit}:{offset}"
-
-    expr = LimitOnlyExpr()
-    engine = QueryDiffEngine(MemoryCache(ttl=300), tile_size=10)
-    queries, strategy = engine._plan_tile_aware(
-        [expr],
-        {"page": {"offset": 20, "limit": 5}, "limit": 5},
-        {"queries": [expr]},
-        {},
-    )
-
-    assert queries == ["limited:5:20"]
-    assert expr.calls == [(5, 20)]
-    assert strategy["tiles_needed"] == ["r20-25_c0--1"]
 
 
 def test_config_omits_redis_password_when_unset(monkeypatch):
@@ -307,106 +261,91 @@ def test_integer_proportional_aggregate_edit_uses_one_set_based_update():
     assert params == [1, 13, 2, 26]
 
 
-def test_pivot_controller_exposes_single_awaitable_hierarchical_api():
-    source = inspect.getsource(PivotController)
-    api_source = Path(
-        "serverside_pivot/pivot_engine/pivot_engine/complete_rest_api.py"
-    ).read_text(encoding="utf-8")
-
-    assert inspect.iscoroutinefunction(PivotController.run_hierarchical_pivot)
-    assert len(re.findall(r"^\s+async def run_hierarchical_pivot\(", source, flags=re.MULTILINE)) == 1
-    assert "return self.tree_manager.run_hierarchical_pivot(" not in source
-    # REST hierarchy routes are answered by the core hierarchy view, never the legacy loaders.
-    assert "await self.tanstack_adapter.hierarchy_view(" in api_source
-    for legacy_loader in ("run_hierarchical_pivot", "run_virtual_scroll_hierarchical", "run_pruned_hierarchical_pivot",
-                          "run_intelligent_prefetch", "run_progressive_hierarchical_load",
-                          "run_hierarchical_pivot_batch_load", "run_materialized_hierarchy"):
-        assert f"self.controller.{legacy_loader}(" not in api_source
 
 
-def test_mutation_cache_invalidation_is_table_scoped_and_preserves_unrelated_entries():
-    cache = MemoryCache(ttl=300)
-    cache.clear()
-    cache.set("pivot_ibis:query:sales:abc", "sales")
-    cache.set("pivot_ibis:query:other:abc", "other")
-    cache.set("pivot_ibis:query:legacy", "legacy")
-    cache.set("unrelated:key", "keep")
+def test_data_changes_clear_the_core_visible_counts():
+    """A stale visible-node count would page a reloaded or edited table with the old total."""
+    import pyarrow as pa
 
-    class ProbeController(ScalablePivotController):
-        def __init__(self):
-            self.cache = cache
-            self._hierarchy_view_cache = OrderedDict({"view": ({}, 0)})
-            self._hierarchy_root_count_cache = OrderedDict({"count": (1, 0)})
-            self._hierarchy_root_page_cache = OrderedDict({"page": ([1], 0)})
-            self._hierarchy_grand_total_cache = OrderedDict({"total": ({}, 0)})
-
-    controller = ProbeController()
-
+    controller = ScalablePivotController(backend_uri=":memory:")
+    controller.load_data_from_arrow("sales", pa.table({"r": ["A"], "v": [1]}))
+    controller.core_visible_counts["plan"] = 3
     controller._clear_mutation_caches("sales", structural=False)
-
-    assert cache.get("pivot_ibis:query:sales:abc") is None
-    assert cache.get("pivot_ibis:query:legacy") is None
-    assert cache.get("pivot_ibis:query:other:abc") == "other"
-    assert cache.get("unrelated:key") == "keep"
-    assert controller._hierarchy_view_cache == OrderedDict()
-    assert controller._hierarchy_grand_total_cache == OrderedDict()
-    assert controller._hierarchy_root_count_cache
-    assert controller._hierarchy_root_page_cache
+    assert controller.core_visible_counts == {}
+    controller.core_visible_counts["plan"] = 3
+    controller.load_data_from_arrow("sales", pa.table({"r": ["A", "B"], "v": [1, 2]}))
+    assert controller.core_visible_counts == {}
+    controller.close()
 
 
-def test_hierarchy_batch_load_has_no_silent_100k_cap_and_exact_parent_filters():
-    source = inspect.getsource(ScalablePivotController.run_hierarchical_pivot_batch_load)
+def _result_tier_controller(**kwargs):
+    import pyarrow as pa
 
-    filters = ScalablePivotController._build_parent_batch_filters(
-        ["region", "country"],
-        [["North", "USA"], ["South", "Brazil"]],
-    )
-
-    assert "100000" not in source
-    assert filters == [
-        {
-            "operator": "OR",
-            "conditions": [
-                {
-                    "operator": "AND",
-                    "conditions": [
-                        {"field": "region", "op": "=", "value": "North"},
-                        {"field": "country", "op": "=", "value": "USA"},
-                    ],
-                },
-                {
-                    "operator": "AND",
-                    "conditions": [
-                        {"field": "region", "op": "=", "value": "South"},
-                        {"field": "country", "op": "=", "value": "Brazil"},
-                    ],
-                },
-            ],
-        }
-    ]
+    controller = ScalablePivotController(backend_uri=":memory:", **kwargs)
+    controller.load_data_from_arrow(
+        "t", pa.table({"tenant": ["A", "A", "B"], "r": ["x", "y", "x"], "v": [1, 2, 100]}))
+    spec = {"table": "t", "rows": ["r"], "measures": [{"field": "v", "agg": "sum", "alias": "s"}]}
+    return controller, spec
 
 
-def test_windowed_hierarchy_flatten_counts_without_returning_full_rows():
-    class ProbeController(ScalablePivotController):
-        def __init__(self):
-            pass
+def _sums(result):
+    return {row[0]: row[1] for row in result["rows"]}
 
-    controller = ProbeController()
-    spec = PivotSpec(
-        table="sales",
-        rows=["region"],
-        measures=[],
-        filters=[],
-    )
-    hierarchy_result = {
-        "": [
-            {"region": f"R{i}", "sales_sum": i}
-            for i in range(1000)
-        ]
-    }
 
-    flattened = controller._flatten_hierarchy_rows_window(spec, hierarchy_result, [], 10, 12)
+def test_the_core_result_tier_reuses_identical_reads():
+    controller, spec = _result_tier_controller()
+    first = controller.run_pivot(spec, return_format="dict")
+    hits = controller.core_cache.hits
+    assert controller.run_pivot(spec, return_format="dict") == first
+    assert controller.core_cache.hits == hits + 1
+    controller.run_pivot(spec, return_format="dict", force_refresh=True)
+    assert controller.core_cache.hits == hits + 1  # a forced refresh never reads the tier
+    controller.close()
 
-    assert flattened["total_rows"] == 1000
-    assert [row["region"] for row in flattened["rows"]] == ["R10", "R11", "R12"]
-    assert flattened["full_rows"] is None
+
+def test_the_core_result_tier_is_dropped_on_load_and_mutation():
+    import pyarrow as pa
+
+    controller, spec = _result_tier_controller()
+    assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 101, "y": 2}
+    controller.load_data_from_arrow("t", pa.table({"tenant": ["A"], "r": ["x"], "v": [5]}))
+    assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 5}
+    controller.core_cache.put(
+        __import__("pivot_engine.core.cache", fromlist=["key_for"]).key_for("result", "t", "probe"), (0.0, pa.table({})))
+    controller._clear_mutation_caches("t", structural=False)
+    assert controller.core_cache.used_bytes("result") == 0
+    controller.close()
+
+
+def test_the_core_result_tier_expires_after_the_ttl(monkeypatch):
+    import pivot_engine.scalable_pivot_controller as module
+
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    controller, spec = _result_tier_controller(cache_ttl=10)
+    normalized = controller._normalize_spec(spec)
+    controller.run_pivot(spec, return_format="dict")
+    now[0] += 10
+    assert controller.cached_core_result(normalized) is not None
+    now[0] += 0.5
+    assert controller.cached_core_result(normalized) is None
+    controller.close()
+
+
+def test_the_core_result_tier_never_crosses_tenants():  # REQ-SEC-004
+    from pivot_engine.core.authority.scope import connections_of, scoped_execution
+    from pivot_engine.runtime.dataset_authorization import RowScopeGrant
+
+    controller, spec = _result_tier_controller()
+
+    def grant(tenant):
+        return RowScopeGrant(table="t", subject=tenant, field_values={"tenant": (tenant,)},
+                             scope_fingerprint=f"tenant={tenant}")
+
+    with scoped_execution(grant("A"), connections=connections_of(controller)):
+        a = _sums(controller.run_pivot(spec, return_format="dict"))
+    with scoped_execution(grant("B"), connections=connections_of(controller)):
+        b = _sums(controller.run_pivot(spec, return_format="dict"))
+    assert a == {"x": 1, "y": 2}
+    assert b == {"x": 100}
+    controller.close()

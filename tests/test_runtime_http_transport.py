@@ -1144,7 +1144,7 @@ def test_http_transport_mutations_are_default_deny_and_tenant_scoped_including_h
     def sales_by_tenant():
         return {
             row["tenant"]: row["sales"]
-            for row in unguarded_table(adapter.controller.planner.con, "sales")
+            for row in unguarded_table(adapter.controller.con, "sales")
             .execute()
             .to_dict("records")
         }
@@ -1385,7 +1385,7 @@ def test_http_transaction_history_cannot_override_the_authenticated_session():
     )
 
     current_sales = (
-        unguarded_table(adapter.controller.planner.con, "sales").execute().to_dict("records")[0]["sales"]
+        unguarded_table(adapter.controller.con, "sales").execute().to_dict("records")[0]["sales"]
     )
     assert forged_undo.status_code == 403
     assert current_sales == 999
@@ -1466,7 +1466,7 @@ def test_http_transport_preserves_an_explicit_permitted_tenant_key():
 
     rows_by_tenant = {
         row["tenant"]: row["sales"]
-        for row in unguarded_table(adapter.controller.planner.con, "sales")
+        for row in unguarded_table(adapter.controller.con, "sales")
         .execute()
         .to_dict("records")
     }

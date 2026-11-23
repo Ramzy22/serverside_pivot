@@ -1862,7 +1862,7 @@ def test_runtime_service_aggregate_sum_edit_propagates_across_duplicate_source_r
     }
     assert rows_by_path["North|||USA"]["sales_sum"] == pytest.approx(180)
     assert rows_by_path["North"]["sales_sum"] == pytest.approx(260)
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_usa_sales = sorted(
         row["sales"]
         for row in persisted_rows
@@ -1895,7 +1895,7 @@ def test_runtime_service_aggregate_sum_edit_propagates_across_duplicate_source_r
         ),
     )
     assert undo_response.status == "data"
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_usa_sales = sorted(
         row["sales"]
         for row in persisted_rows
@@ -1946,7 +1946,7 @@ def test_runtime_service_pivoted_aggregate_edit_resolves_column_scope():
     )
     assert north_row["USA_sales_sum"] == pytest.approx(180)
     assert north_row["Canada_sales_sum"] == pytest.approx(80)
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_canada_sales = [
         row["sales"]
         for row in persisted_rows
@@ -1997,7 +1997,7 @@ def test_runtime_service_integer_sum_aggregate_edit_uses_balanced_distribution_a
     assert propagation["execution"] == "set_based_sql"
     assert propagation["updatedRowCount"] == 1
 
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_sales = sorted(
         row["sales"]
         for row in persisted_rows
@@ -2039,7 +2039,7 @@ def test_runtime_service_integer_sum_aggregate_edit_uses_balanced_distribution_a
     )
 
     assert undo_response.status == "data"
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_sales = sorted(
         row["sales"]
         for row in persisted_rows
@@ -2253,7 +2253,7 @@ def test_runtime_service_weighted_average_edit_shifts_source_rows_consistently()
     assert response.status == "data"
     assert response.transaction_result["propagation"][0]["aggregationFn"] == "weighted_avg"
     assert response.transaction_result["propagation"][0]["strategy"] == "uniform_shift"
-    persisted_rows = adapter.controller.planner.con.table("rate_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("rate_data").execute().to_dict("records")
     north_rates = sorted(row["rate"] for row in persisted_rows if row["region"] == "North")
     assert north_rates == pytest.approx([0.125, 0.225])
 
@@ -2295,7 +2295,7 @@ def test_runtime_service_count_aggregate_edit_is_rejected():
     assert response.status == "data"
     assert response.transaction_result["applied"]["update"] == 0
     assert "Count-based aggregates cannot be edited" in response.transaction_result["warnings"][0]
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_usa_sales = sorted(
         row["sales"]
         for row in persisted_rows
@@ -2348,7 +2348,7 @@ def test_runtime_service_transaction_refresh_mode_none_returns_transaction_resul
     assert response.transaction_result["redoTransaction"]["update"] == [
         {"keys": {"region": "North", "country": "USA"}, "values": {"sales": 444}}
     ]
-    persisted_rows = adapter.controller.planner.con.table("sales_data").execute().to_dict("records")
+    persisted_rows = adapter.controller.con.table("sales_data").execute().to_dict("records")
     north_usa = next(row for row in persisted_rows if row["region"] == "North" and row["country"] == "USA")
     assert north_usa["sales"] == 444
 

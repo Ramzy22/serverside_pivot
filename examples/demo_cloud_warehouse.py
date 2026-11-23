@@ -13,7 +13,7 @@ Key Capabilities Demonstrated:
     (`is_cloud_or_remote`, `supports_ddl_materialization`, `supports_sql_mutations`,
     `supports_rowid`, `supports_ilike`, `param_style`, TTL schema cache).
   - Live Ibis SQL Pushdown Inspector showing the compiled SQL query generated
-    by `IbisPlanner` for the active pivot hierarchy.
+    by the semantic core for the active pivot hierarchy.
   - Governance & security controls (`RuntimeDatasetAuthorizer`, fail-closed
     read-only analytical pushdown vs opt-in remote SQL mutations).
 
@@ -158,11 +158,13 @@ def get_adapter() -> TanStackPivotAdapter:
 
 def compile_sample_pushdown_sql(profile_key: str = "snowflake") -> str:
     """
-    Compile a representative hierarchical pivot query via IbisPlanner and render
-    it in the selected cloud dialect when sqlglot/ibis supports transpilation.
+    Compile a representative hierarchical pivot query with the semantic core and
+    render it in the selected cloud dialect when sqlglot/ibis supports transpilation.
     """
+    from pivot_engine.core.exec import compile_query
+    from pivot_engine.transport.core_bridge import CoreUnsupported, spec_to_query
+
     adapter = get_adapter()
-    planner = adapter.controller.planner
     spec = PivotSpec(
         table=TABLE_NAME,
         rows=["customer_segment", "subscription_tier"],
@@ -175,13 +177,12 @@ def compile_sample_pushdown_sql(profile_key: str = "snowflake") -> str:
         limit=100,
         totals=False,
     )
-    plan_result = planner.plan(spec)
-    queries = plan_result.get("queries") or []
-    if not queries:
-        return "-- No query generated"
-    ibis_expr = queries[0] if not isinstance(queries[0], dict) else queries[0].get("ibis_expr")
-    if ibis_expr is None:
-        return "-- No Ibis expression available"
+    relation = adapter.controller.resolve_table(TABLE_NAME)
+    try:
+        query = spec_to_query(spec, [["__ALL__"]], relation.schema(), subtotals="none")
+        ibis_expr = compile_query(query, lambda _name: relation)
+    except CoreUnsupported as exc:
+        return f"-- Not expressible by the semantic core: {', '.join(exc.reasons)}"
 
     profile = CLOUD_WAREHOUSE_PROFILES.get(profile_key, CLOUD_WAREHOUSE_PROFILES["snowflake"])
     target_dialect = profile.get("sqlglot_dialect", "snowflake")

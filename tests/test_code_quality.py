@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pivot_engine')
 
 def test_no_duplicate_run_pivot_arrow():
     """QUAL-03: PivotController must define run_pivot_arrow exactly once."""
-    from pivot_engine.controller import PivotController
+    from pivot_engine import PivotController
     methods = [name for name, _ in inspect.getmembers(PivotController, predicate=inspect.isfunction)
                if name == 'run_pivot_arrow']
     assert len(methods) == 1, f"Expected 1 run_pivot_arrow, found {len(methods)}"

@@ -431,8 +431,8 @@ def test_list_valued_rls_is_membership_not_literal_list_equality_for_legacy_and_
     ids=["forbidden-dataset", "different-owner"],
 )
 def test_materialization_job_status_hides_forbidden_or_foreign_job_metadata(job):
+    # Materialization jobs were removed with the legacy hierarchy engine: no route may reveal job metadata.
     controller = MagicMock(spec=ScalablePivotController)
-    controller.get_materialization_status.return_value = job
     api = CompletePivotAPI(
         controller,
         dataset_authorizer=RuntimeDatasetAuthorizer(

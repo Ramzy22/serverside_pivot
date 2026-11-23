@@ -95,70 +95,7 @@ def test_controller_directly():
     print(f"[SUCCESS] Controller pivot operation successful")
     print(f"[SUCCESS] Returned {len(result['rows'])} rows")
 
-    # Test hierarchical pivot
-    import asyncio
-    hier_result = asyncio.run(controller.run_hierarchical_pivot(spec.to_dict()))
-    print(f"[SUCCESS] Hierarchical pivot operation successful")
-    print(f"[SUCCESS] Has expansion state: {{'expansion_state' in hier_result}}")
-
-    assert hier_result is not None
-
-
-def test_scalable_features():
-    """Test all scalable features"""
-    print("\nTesting scalable features...")
-    
-    controller = ScalablePivotController(
-        backend_uri=":memory:",
-        enable_streaming=True,
-        enable_incremental_views=True,
-        tile_size=50
-    )
-    
-    # Load sample data
-    import pyarrow as pa
-    sample_data = pa.table({
-        "region": ["North", "South", "East", "West"] * 100,
-        "product": ["A", "B", "C", "D"] * 100,
-        "sales": [100, 200, 150, 300] * 100,
-        "quarter": ["Q1", "Q2"] * 200
-    })
-    
-    controller.load_data_from_arrow("large_sales", sample_data)
-    
-    spec = PivotSpec(
-        table="large_sales",
-        rows=["region", "product", "quarter"],
-        measures=[Measure(field="sales", agg="sum", alias="total_sales")],
-        filters=[]
-    )
-    
-    # Test materialized hierarchies
-    mat_result = controller.run_materialized_hierarchy(spec)
-    print(f"[SUCCESS] Materialized hierarchy creation successful")
-
-    # Test pruned hierarchical pivot
-    pruned_result = controller.run_pruned_hierarchical_pivot(
-        spec, [["North"]], {"top_n": 5, "strategy": "top_n"}
-    )
-    print(f"[SUCCESS] Pruned hierarchical pivot successful")
-
-    # Test virtual scrolling
-    virtual_result = controller.run_virtual_scroll_hierarchical(
-        spec, start_row=0, end_row=50, expanded_paths=[["North"]]
-    )
-    print(f"[SUCCESS] Virtual scrolling successful")
-
-    # Test progressive loading
-    def dummy_callback(info):
-        pass  # Mock progress callback
-
-    progressive_result = controller.run_progressive_hierarchical_load(
-        spec, [["North"]], {"top_n": 5}, dummy_callback
-    )
-    print(f"[SUCCESS] Progressive hierarchical loading successful")
-
-    return True
+    assert result["rows"]
 
 
 async def main():

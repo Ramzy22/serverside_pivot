@@ -76,7 +76,7 @@ def test_memory_workload_cli_emits_rss_and_admission_metrics_without_large_fixtu
 
 
 @pytest.mark.asyncio
-async def test_async_standard_pivot_populates_the_diff_engine_cache():
+async def test_async_standard_pivot_populates_the_core_result_tier():
     controller = ScalablePivotController(
         backend_uri=":memory:",
         enable_streaming=False,
@@ -97,5 +97,6 @@ async def test_async_standard_pivot_populates_the_diff_engine_cache():
         second = await controller.run_pivot_async(spec, return_format="dict")
 
         assert first == second
+        assert controller.core_cache.hits >= 1
     finally:
         controller.close()

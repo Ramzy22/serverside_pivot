@@ -14,7 +14,7 @@ from typing import Any, Callable, Generator, Mapping, Optional, Protocol
 import pyarrow as pa
 import pyarrow.flight as fl
 
-from .controller import PivotController
+from .scalable_pivot_controller import ScalablePivotController
 from .production_security import resolve_runtime_environment
 from .runtime.dataset_authorization import (
     RuntimeDatasetAuthorizationError,
@@ -107,7 +107,7 @@ class PivotFlightServer(fl.FlightServerBase):
 
     def __init__(
         self,
-        controller: PivotController,
+        controller: ScalablePivotController,
         location: str = "grpc://0.0.0.0:8080",
         *,
         auth_token: Optional[str] = None,
@@ -122,7 +122,7 @@ class PivotFlightServer(fl.FlightServerBase):
         Initialize the server.
         
         Args:
-            controller: A PivotController instance.
+            controller: A ScalablePivotController instance.
             location: The location to host the server on.
         """
         production = resolve_runtime_environment() == "production"

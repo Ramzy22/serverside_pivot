@@ -3,10 +3,8 @@ tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot
 This bypasses the REST API and provides direct integration with TanStack components
 """
 
-from typing import Awaitable, Dict, Any, List, Optional, Callable, Union, Set
+from typing import Dict, Any, List, Optional, Union
 import asyncio
-import copy
-from functools import cmp_to_key
 import logging
 import math
 import os
@@ -21,20 +19,17 @@ from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService, TransactionAdapterMixin
 from .types.pivot_spec import PivotSpec, Measure, MeasureAxisConfig
 from .security import User, apply_rls_to_spec
-from .core.authority.scope import row_scoped, run_in_executor_scoped
+from .core.authority.scope import row_scoped
 from .formula_mixin import FormulaEngineMixin
 from .hierarchy_rows import (
-    build_visible_hierarchy_rows,
     finalize_hierarchy_rows,
     is_hierarchy_grand_total,
-    normalize_expanded_paths,
 )
 from .transport.contracts import TanStackOperation, TanStackRequest, TanStackResponse
 from .transport.request_mapper import TanStackRequestMapper
 from .transport.response_mapper import TanStackResponseMapper
 from .column_layout import (
-    LayoutRevisionStore, PivotColumnIdentity, UnknownLayoutRevision,
-    catalog_from_pivot_values, resolve_column_layout,
+    LayoutRevisionStore, PivotColumnIdentity, catalog_from_pivot_values, resolve_column_layout,
 )
 
 
@@ -243,9 +238,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     def _stable_json(value: Any) -> str:
         return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
 
-    def _request_structure_fingerprint(self, request: "TanStackRequest") -> str:
-        return self._viewport_keys.request_structure_fingerprint(request)
-
     @staticmethod
     def _request_with_row_scope(
         request: "TanStackRequest", row_scope: Any
@@ -279,12 +271,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         incorrectly reuse a catalog for a different pivot dimension.
         """
         return self._viewport_keys.pivot_column_catalog_key(spec)
-
-    @staticmethod
-    def _normalize_expanded_paths(
-        expanded_paths: Union[List[List[str]], bool, None],
-    ) -> tuple:
-        return normalize_expanded_paths(expanded_paths)
 
     @staticmethod
     def _clone_response(
@@ -332,22 +318,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 if include_profile and response.profile is not None
                 else None
             ),
-        )
-
-    @staticmethod
-    def _cache_lookup(cache: OrderedDict, key: str):
-        return AdapterViewportCache.lookup_entry(cache, key)
-
-    @staticmethod
-    def _cache_store(
-        cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float
-    ):
-        AdapterViewportCache.store_entry(
-            cache,
-            key,
-            value,
-            max_size=max_size,
-            ttl_seconds=ttl_seconds,
         )
 
     def _response_window_cache_key(
@@ -1281,38 +1251,11 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         ):
             return list(cached_catalog["values"])
 
-        order_measure = spec.measures[0] if spec.measures else None
-        col_query = self.controller.planner._build_column_values_query(
-            spec.table,
-            spec.columns,
-            spec.filters,
-            None,
-            order_measure,
-            spec.pivot_config.column_cursor if spec.pivot_config else None,
-            spec.column_sort_options,
-            spec.custom_dimensions,
-            measure_axis=spec.measure_axis,
-            measures=spec.measures,
-        )
+        from .transport.core_bridge import core_column_catalog, run_core_read
 
-        col_cache_key = self.controller._cache_key_for_query(col_query, spec)
-        cached_cols_table = self.controller.cache.get(col_cache_key)
-        if (
-            cached_cols_table is not None
-            and "_col_key" in cached_cols_table.column_names
-        ):
-            return cached_cols_table.to_pylist()
-
-        col_results_table = await self.controller._execute_ibis_expr_async(
-            col_query, spec.table
-        )
-        self.controller.cache.set(col_cache_key, col_results_table)
-        if (
-            col_results_table is None
-            or "_col_key" not in col_results_table.column_names
-        ):
-            return []
-        discovered_values = col_results_table.to_pylist()
+        # REQ-PIV-001/002: the ordered catalog from the core.
+        discovered_values = await run_core_read(
+            self.controller, spec.table, lambda resolve: core_column_catalog(resolve, spec))
         self._locked_cache_store(
             self._pivot_column_catalog_cache,
             local_cache_key,
@@ -1916,29 +1859,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         sort_col: Optional[str],
         sort_dir: str,
         text_filter: str,
-        legacy: Any = None,
     ) -> Dict[str, Any]:
         """Drill-through records from the core (an unsupported request raises ``CoreUnsupported``)."""
-        from .transport.core_bridge import core_drill_through, core_locked_call
+        from .transport.core_bridge import core_drill_through, run_core_read
 
-        resolve = self._core_resolver()
-        return await run_in_executor_scoped(
-            asyncio.get_running_loop(),
-            None,
-            lambda: core_locked_call(self.controller, spec.table, lambda: core_drill_through(
-                resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
-                sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
-            )),
-        )
-
-    def _core_resolver(self) -> Callable[[str], Any]:
-        """The scoped table resolver the core reads through (REQ-SEC-001)."""
-        from .transport.core_bridge import CoreUnsupported
-
-        resolve = getattr(self.controller, "resolve_table", None)
-        if resolve is None:
-            raise CoreUnsupported(["controller without resolve_table"])
-        return resolve
+        return await run_core_read(self.controller, spec.table, lambda resolve: core_drill_through(
+            resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
+            sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
+        ))
 
     async def handle_drill_through(
         self, request: TanStackRequest, drill_payload: Dict[str, Any]
@@ -1949,26 +1877,12 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         # 1. Convert request to spec to get base filters
         spec = self.convert_tanstack_request_to_pivot_spec(request)
 
-        # 2. Extract drill filters from payload
-        drill_filters_raw = drill_payload.get("filters", {})
-        payload_filters_raw = dict(drill_filters_raw or {})
+        # 2. The payload's own filters (the node path is read by the core from rowPath/rowFields)
+        payload_filters_raw = dict(drill_payload.get("filters", {}) or {})
         row_path = drill_payload.get("row_path") or drill_payload.get("rowPath") or ""
-        row_fields = (
-            drill_payload.get("row_fields") or drill_payload.get("pathFields") or []
-        )
+        row_fields = drill_payload.get("row_fields") or drill_payload.get("pathFields") or []
         if not isinstance(row_fields, list):
             row_fields = []
-        path_parts = str(row_path).split("|||") if row_path else []
-
-        for index, field in enumerate(row_fields):
-            if index < len(path_parts) and path_parts[index]:
-                drill_filters_raw = {
-                    **(drill_filters_raw or {}),
-                    field: {
-                        "type": "eq",
-                        "value": path_parts[index],
-                    },
-                }
 
         # Convert frontend filter format to pivot engine format
         # This mirrors logic in convert_tanstack_request_to_pivot_spec
@@ -1988,8 +1902,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     )
             return converted
 
-        drill_filters = _convert_drill_filters(drill_filters_raw)
-
         page = max(int(drill_payload.get("page", 0) or 0), 0)
         page_size_raw = drill_payload.get(
             "page_size", drill_payload.get("pageSize", 100)
@@ -2003,18 +1915,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if text_filter is None:
             text_filter = drill_payload.get("filterText", "")
 
-        # 3. Call the core and/or the controller (dict with 'rows' and 'total_rows')
-        async def _legacy_drill() -> Dict[str, Any]:
-            return await self.controller.get_drill_through_data(
-                spec,
-                drill_filters,
-                limit=page_size,
-                offset=page * page_size,
-                sort_col=sort_col,
-                sort_dir="desc" if sort_dir == "desc" else "asc",
-                text_filter=str(text_filter or ""),
-            )
-
+        # 3. The core answers (dict with 'rows' and 'total_rows')
         result = await self._drill_routed(
             spec,
             _convert_drill_filters(payload_filters_raw),
@@ -2024,7 +1925,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             sort_col=sort_col,
             sort_dir="desc" if sort_dir == "desc" else "asc",
             text_filter=str(text_filter or ""),
-            legacy=_legacy_drill,
         )
         return {
             "rows": result.get("rows", []),
@@ -2148,203 +2048,21 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             # Signal to load all levels/nodes
             target_paths = [["__ALL__"]]
 
-        if hasattr(self.controller, "run_hierarchy_view"):
 
-            async def _legacy_full_view() -> Dict[str, Any]:
-                return await self.controller.run_hierarchy_view(pivot_spec, target_paths)
-
-            # The whole visible tree (no window), from the core when it can serve it.
-            hierarchy_view = await self._hierarchy_view_routed(
-                pivot_spec, target_paths, 0, None,
-                include_grand_total=False, legacy=_legacy_full_view,
-            )
-            tanstack_result = self.convert_pivot_result_to_tanstack_format(
-                hierarchy_view.get("rows", []), request
-            )
-            if hierarchy_view.get("total_rows") is not None:
-                tanstack_result.total_rows = hierarchy_view["total_rows"]
-            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
-            self._log_response("handle_hierarchical_request", tanstack_result.data)
-            return tanstack_result
-
-        # We use the batch loading method which is more efficient for multiple levels
-        # and returns the {path_key: [nodes]} format expected by the traversal.
-        try:
-            if hasattr(self.controller, "run_hierarchical_pivot_batch_load"):
-                hierarchy_result = (
-                    await self.controller.run_hierarchical_pivot_batch_load(
-                        pivot_spec.to_dict(),
-                        target_paths,
-                        max_levels=len(pivot_spec.rows),
-                    )
-                )
-            else:
-                # Fallback to direct query or other method
-                hierarchy_result = self.controller.run_progressive_hierarchical_load(
-                    pivot_spec, target_paths, user_preferences=user_preferences
-                )
-                # If it's the levels/metadata format, we need to convert it
-                if isinstance(hierarchy_result, dict) and "levels" in hierarchy_result:
-                    new_result = {}
-                    for level_info in hierarchy_result["levels"]:
-                        path_key = "|||".join(str(v) for v in level_info["path"])
-                        data = level_info["data"]
-                        if hasattr(data, "to_pylist"):
-                            new_result[path_key] = data.to_pylist()
-                        else:
-                            new_result[path_key] = data
-                    hierarchy_result = new_result
-        except Exception as e:
-            print(f"Hierarchical load failed: {e}, falling back to direct query")
-            # Fallback to direct query without materialized hierarchies
-            result = self.controller.run_pivot_async(pivot_spec, return_format="dict")
-            if asyncio.iscoroutine(result):
-                hierarchy_result = await result
-            else:
-                hierarchy_result = result
-            tanstack_result = self.convert_pivot_result_to_tanstack_format(
-                hierarchy_result, request
-            )
-            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
-            return tanstack_result
-
-        visible_rows = build_visible_hierarchy_rows(
-            pivot_spec, hierarchy_result, target_paths
+        # The whole visible tree (no window), from the core.
+        hierarchy_view = await self._hierarchy_view_routed(
+            pivot_spec, target_paths, 0, None,
+            include_grand_total=False,
         )
         tanstack_result = self.convert_pivot_result_to_tanstack_format(
-            visible_rows, request
+            hierarchy_view.get("rows", []), request
         )
+        if hierarchy_view.get("total_rows") is not None:
+            tanstack_result.total_rows = hierarchy_view["total_rows"]
         tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
-
-        self._log_response("handle_hierarchical_request", visible_rows)
+        self._log_response("handle_hierarchical_request", tanstack_result.data)
         return tanstack_result
 
-    @staticmethod
-    def _slice_full_hierarchy_response_to_viewport(
-        response: TanStackResponse,
-        start_row: int,
-        end_row: int,
-    ) -> TanStackResponse:
-        rows = finalize_hierarchy_rows(response.data or [])
-        safe_start = max(int(start_row or 0), 0)
-        safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
-        response.data = rows[safe_start : safe_end + 1]
-        response.total_rows = len(rows)
-        if isinstance(response.pagination, dict):
-            response.pagination = {
-                **response.pagination,
-                "totalRows": len(rows),
-            }
-        return response
-
-    @staticmethod
-    def _filter_refs_measure_alias_local(
-        filter_spec: Any, measure_aliases: Set[str]
-    ) -> bool:
-        if not filter_spec or not measure_aliases:
-            return False
-        if isinstance(filter_spec, dict):
-            field = (
-                filter_spec.get("field")
-                or filter_spec.get("id")
-                or filter_spec.get("column")
-            )
-            if field in measure_aliases:
-                return True
-            return any(
-                TanStackPivotAdapter._filter_refs_measure_alias_local(
-                    value, measure_aliases
-                )
-                for value in filter_spec.values()
-            )
-        if isinstance(filter_spec, list):
-            return any(
-                TanStackPivotAdapter._filter_refs_measure_alias_local(
-                    item, measure_aliases
-                )
-                for item in filter_spec
-            )
-        return False
-
-    async def _count_flat_group_rows_by_materialization(self, spec: PivotSpec) -> int:
-        count_spec = spec.copy()
-        count_spec.limit = 0
-        count_spec.offset = 0
-        count_spec.totals = False
-        count_spec.sort = []
-        count_table = await self.controller.run_pivot_async(
-            count_spec,
-            return_format="arrow",
-            force_refresh=True,
-        )
-        return int(getattr(count_table, "num_rows", 0) or 0)
-
-    async def _count_flat_group_rows(
-        self,
-        spec: PivotSpec,
-        *,
-        first_page_row_count: Optional[int] = None,
-        requested_count: Optional[int] = None,
-        start_row: int = 0,
-    ) -> int:
-        if (
-            start_row == 0
-            and requested_count is not None
-            and first_page_row_count is not None
-            and first_page_row_count < requested_count
-        ):
-            return int(first_page_row_count)
-
-        grouping = [field for field in (spec.rows or []) if field]
-        if not grouping:
-            return 1
-
-        measure_aliases = {
-            str(measure.alias)
-            for measure in (spec.measures or [])
-            if getattr(measure, "alias", None)
-        }
-        controller_filter_checker = getattr(
-            self.controller, "_filter_refs_measure_alias", None
-        )
-        refs_measure_filter = any(
-            (
-                controller_filter_checker(filter_spec, measure_aliases)
-                if callable(controller_filter_checker)
-                else self._filter_refs_measure_alias_local(filter_spec, measure_aliases)
-            )
-            for filter_spec in (spec.filters or [])
-        )
-        if refs_measure_filter:
-            return await self._count_flat_group_rows_by_materialization(spec)
-
-        planner = getattr(self.controller, "planner", None)
-        con = getattr(planner, "con", None)
-        builder = getattr(planner, "builder", None)
-        execute_scalar = getattr(self.controller, "_execute_ibis_scalar_async", None)
-        if con is None or builder is None or not callable(execute_scalar):
-            return await self._count_flat_group_rows_by_materialization(spec)
-
-        try:
-            base_table = builder.apply_custom_dimensions(
-                con.table(spec.table),
-                getattr(spec, "custom_dimensions", []),
-            )
-            table_columns = set(getattr(base_table, "columns", []) or [])
-            if any(field not in table_columns for field in grouping):
-                return await self._count_flat_group_rows_by_materialization(spec)
-            if spec.filters:
-                filter_expr = builder.build_filter_expression(base_table, spec.filters)
-                if filter_expr is not None:
-                    base_table = base_table.filter(filter_expr)
-            count_expr = base_table.select(grouping).distinct().count()
-            return int(await execute_scalar(count_expr, spec.table))
-        except Exception as exc:
-            if self._debug:
-                _adapter_logger.debug(
-                    "Flat group row count fallback for %s: %s", spec.table, exc
-                )
-            return await self._count_flat_group_rows_by_materialization(spec)
 
     @staticmethod
     def _annotate_flat_group_rows(
@@ -2375,51 +2093,18 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             row["_has_children"] = False
             row["_is_expanded"] = False
 
-    async def _fetch_flat_grand_total_row(
-        self, pivot_spec: PivotSpec, request: TanStackRequest
-    ) -> Optional[Dict[str, Any]]:
-        total_spec = pivot_spec.copy()
-        total_spec.rows = []
-        total_spec.limit = 1
-        total_spec.offset = 0
-        total_spec.totals = False
-        total_spec.sort = []
-        total_table = await self.controller.run_pivot_async(
-            total_spec,
-            return_format="arrow",
-            force_refresh=True,
-        )
-        normalized = self.convert_pivot_result_to_tanstack_format(
-            total_table,
-            request,
-            version=request.version,
-        ).data
-        if not normalized:
-            return None
-        grand_total_row = dict(normalized[0])
-        grand_total_row["_id"] = "Grand Total"
-        grand_total_row["_isTotal"] = True
-        grand_total_row["_path"] = "__grand_total__"
-        grand_total_row["depth"] = 0
-        grand_total_row["_depth"] = 0
-        return grand_total_row
-
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
     @row_scoped
     async def _core_flat_view(self, pivot_spec: Any, start_row: int, end_row: int,
                               include_grand_total: bool) -> Optional[Dict[str, Any]]:
         """The flat tabular view from the core."""
-        from .transport.core_bridge import core_hierarchy_view, core_locked_call
+        from .transport.core_bridge import core_hierarchy_view, run_core_read
 
-        resolve = self._core_resolver()
-        cache = self.__dict__.setdefault("_core_total_rows_cache", {})
-        return await run_in_executor_scoped(
-            asyncio.get_running_loop(), None,
-            lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
-                resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
-                include_grand_total_row=include_grand_total, total_cache=cache, flat=True)),
-        )
+        cache = self._core_visible_counts()
+        return await run_core_read(self.controller, pivot_spec.table, lambda resolve: core_hierarchy_view(
+            resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
+            include_grand_total_row=include_grand_total, total_cache=cache, flat=True))
 
     async def hierarchy_view(
         self,
@@ -2430,16 +2115,15 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         *,
         include_grand_total: bool = False,
     ) -> Dict[str, Any]:
-        """The ``run_hierarchy_view`` contract for a scoped spec: the core, or legacy where it declines."""
+        """The ``run_hierarchy_view`` contract for a scoped spec, from the core."""
         target_paths = [["__ALL__"]] if expanded_paths is True else (expanded_paths or [])
-
-        async def _legacy_view() -> Dict[str, Any]:
-            return await self.controller.run_hierarchy_view(
-                pivot_spec, target_paths, start_row, end_row, include_grand_total_row=include_grand_total)
-
         return await self._hierarchy_view_routed(
-            pivot_spec, target_paths, start_row, end_row,
-            include_grand_total=include_grand_total, legacy=_legacy_view)
+            pivot_spec, target_paths, start_row, end_row, include_grand_total=include_grand_total)
+
+    def _core_visible_counts(self) -> Dict[str, int]:
+        """Visible-node counts by plan fingerprint: the controller's (cleared on every data change), else the adapter's."""
+        counts = getattr(self.controller, "core_visible_counts", None)
+        return counts if isinstance(counts, dict) else self.__dict__.setdefault("_core_total_rows_cache", {})
 
     async def _hierarchy_view_routed(
         self,
@@ -2450,22 +2134,16 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         *,
         include_grand_total: bool,
         tabular_subtotals: bool = False,
-        legacy: Any = None,
     ) -> Dict[str, Any]:
         """The hierarchy view from the core (an unsupported request raises ``CoreUnsupported``)."""
-        from .transport.core_bridge import core_hierarchy_view, core_locked_call
+        from .transport.core_bridge import core_hierarchy_view, run_core_read
 
-        resolve = self._core_resolver()
-        cache = self.__dict__.setdefault("_core_total_rows_cache", {})
-        return await run_in_executor_scoped(
-            asyncio.get_running_loop(),
-            None,
-            lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
-                resolve, pivot_spec, target_paths, start_row, end_row,
-                include_grand_total_row=include_grand_total, total_cache=cache,
-                tabular_subtotals=tabular_subtotals,
-            )),
-        )
+        cache = self._core_visible_counts()
+        return await run_core_read(self.controller, pivot_spec.table, lambda resolve: core_hierarchy_view(
+            resolve, pivot_spec, target_paths, start_row, end_row,
+            include_grand_total_row=include_grand_total, total_cache=cache,
+            tabular_subtotals=tabular_subtotals,
+        ))
 
     async def handle_virtual_scroll_request(
         self,
@@ -2931,151 +2609,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         # REQ-LAYOUT-002: the flat tabular layout is served by the core when it can
         # express the request; the hierarchy branch below builds the response from its view.
         _core_flat_view = await self._core_flat_view(pivot_spec, start_row, end_row, include_grand_total)             if _use_flat_path else None
-        if _core_flat_view is not None:
-            _use_flat_path = False
-        if _use_flat_path:
-            safe_start = max(int(start_row or 0), 0)
-            safe_end = max(
-                int(end_row if end_row is not None else safe_start), safe_start
-            )
-            requested_count = (safe_end - safe_start) + 1
-
-            flat_spec = pivot_spec.copy()
-            flat_spec.rows = list(request.grouping or [])
-            flat_spec.limit = requested_count
-            flat_spec.offset = safe_start
-            flat_spec.totals = False
-
-            flat_query_profile: Dict[str, Any] = {}
-            flat_query_started_at = time.perf_counter()
-            flat_table = await self.controller.run_pivot_async(
-                flat_spec,
-                return_format="arrow",
-                force_refresh=bool(getattr(request, "full_export", False)),
-                profile_sink=flat_query_profile if profiling else None,
-            )
-            flat_query_finished_at = time.perf_counter()
-
-            convert_started_at = time.perf_counter()
-            tanstack_result = self.convert_pivot_result_to_tanstack_format(
-                flat_table,
-                request,
-                version=request.version,
-            )
-            self._annotate_flat_group_rows(tanstack_result.data, request.grouping or [])
-            convert_finished_at = time.perf_counter()
-
-            count_started_at = time.perf_counter()
-            flat_row_count = await self._count_flat_group_rows(
-                flat_spec,
-                first_page_row_count=len(tanstack_result.data or []),
-                requested_count=requested_count,
-                start_row=safe_start,
-            )
-            count_finished_at = time.perf_counter()
-            total_rows = flat_row_count + (1 if request.totals else 0)
-            tanstack_result.total_rows = total_rows
-            if isinstance(tanstack_result.pagination, dict):
-                tanstack_result.pagination = {
-                    **tanstack_result.pagination,
-                    "totalRows": total_rows,
-                }
-
-            grand_total_started_at = None
-            grand_total_finished_at = None
-            natural_grand_total_in_window = bool(
-                request.totals
-                and not include_grand_total
-                and safe_start <= flat_row_count <= safe_end
-            )
-            if request.totals and (
-                include_grand_total or natural_grand_total_in_window
-            ):
-                grand_total_started_at = time.perf_counter()
-                grand_total_row = await self._fetch_flat_grand_total_row(
-                    pivot_spec, request
-                )
-                grand_total_finished_at = time.perf_counter()
-                if isinstance(grand_total_row, dict):
-                    existing_rows = tanstack_result.data or []
-                    if not any(_is_grand_total_row(row) for row in existing_rows):
-                        tanstack_result.data = [*existing_rows, grand_total_row]
-
-            tanstack_result.data = finalize_hierarchy_rows(
-                tanstack_result.data, preserve_window_order=True
-            )
-            col_window_started_at = time.perf_counter()
-            windowed_response = self._apply_col_windowing(
-                tanstack_result,
-                request,
-                col_start,
-                col_end,
-                needs_col_schema,
-                requested_center_ids=requested_center_ids,
-                discovered_center_ids=discovered_center_ids,
-                discovered_layout=discovered_layout,
-                pinned_center_ids=pinned_center_ids,
-                layout_revision=resolved_layout_revision,
-            )
-            col_window_finished_at = time.perf_counter()
-            completed_response = self._complete_virtual_scroll_response(
-                windowed_response,
-                response_cache_key,
-                request,
-                start_row,
-                end_row,
-                expanded_paths,
-                col_start,
-                col_end,
-                include_grand_total,
-                _allow_prefetch,
-                requested_center_ids,
-            )
-            return (
-                self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="flat_no_subtotals",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(
-                            cache_lookup_started_at, cache_lookup_finished_at
-                        ),
-                        "pivotSpecMs": self._profile_ms(
-                            pivot_spec_started_at, pivot_spec_finished_at
-                        ),
-                        "columnCatalogMs": self._profile_ms(
-                            column_catalog_started_at, column_catalog_finished_at
-                        ),
-                        "flatQueryMs": self._profile_ms(
-                            flat_query_started_at, flat_query_finished_at
-                        ),
-                        "flatCountMs": self._profile_ms(
-                            count_started_at, count_finished_at
-                        ),
-                        "grandTotalMs": self._profile_ms(
-                            grand_total_started_at, grand_total_finished_at
-                        ),
-                        "convertMs": self._profile_ms(
-                            convert_started_at, convert_finished_at
-                        ),
-                        "colWindowingMs": self._profile_ms(
-                            col_window_started_at, col_window_finished_at
-                        ),
-                    },
-                    extra=flat_query_profile if profiling else None,
-                )
-                if profiling
-                else completed_response
-            )
-
         _hier_show_subtotal_footers = (
             _show_subtotal_footers and _request_layout_mode != "tabular"
         )
@@ -3089,382 +2622,134 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             # when the incoming expansion map is empty or contains overrides.
             target_paths = [["__ALL__"]]
 
-        if hasattr(self.controller, "run_hierarchy_view"):
 
-            async def _legacy_hierarchy_view() -> Dict[str, Any]:
-                try:
-                    return await self.controller.run_hierarchy_view(
-                        pivot_spec,
-                        target_paths,
-                        start_row,
-                        end_row,
-                        include_grand_total_row=include_grand_total,
-                        profiling=profiling,
-                        show_subtotal_footers=_hier_show_subtotal_footers,
-                        tabular_subtotals=_hier_tabular_subtotals,
-                    )
-                except TypeError:
-                    # Backward compatibility with older controller signatures.
-                    return await self.controller.run_hierarchy_view(
-                        pivot_spec, target_paths, start_row, end_row
+        hierarchy_view_started_at = time.perf_counter()
+        hierarchy_view = _core_flat_view if _core_flat_view is not None else await self._hierarchy_view_routed(
+            pivot_spec,
+            target_paths,
+            start_row,
+            end_row,
+            include_grand_total=include_grand_total,
+            # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
+            tabular_subtotals=_hier_tabular_subtotals,
+        )
+        hierarchy_view_finished_at = time.perf_counter()
+        convert_started_at = time.perf_counter()
+        tanstack_result = self.convert_pivot_result_to_tanstack_format(
+            hierarchy_view.get("rows", []), request, version=request.version
+        )
+        convert_finished_at = time.perf_counter()
+        if hierarchy_view.get("total_rows") is not None:
+            tanstack_result.total_rows = hierarchy_view["total_rows"]
+
+        if include_grand_total and request.totals:
+            grand_total_row = hierarchy_view.get("grand_total_row")
+            formula_source_rows = (
+                hierarchy_view.get("grand_total_formula_source_rows") or []
+            )
+            if isinstance(grand_total_row, dict):
+                normalized_total = self.convert_pivot_result_to_tanstack_format(
+                    [grand_total_row], request, version=request.version
+                ).data
+                if normalized_total:
+                    grand_total_row = normalized_total[0]
+            formula_ids = self._measure_formula_ids_from_request(request)
+            if (
+                isinstance(grand_total_row, dict)
+                and formula_source_rows
+                and formula_ids
+            ):
+                source_rows = self.convert_pivot_result_to_tanstack_format(
+                    formula_source_rows,
+                    request,
+                    version=request.version,
+                ).data
+                grand_total_row.update(
+                    self._build_formula_rollup_values(source_rows, formula_ids)
+                )
+            if isinstance(grand_total_row, dict):
+                existing_rows = tanstack_result.data or []
+                if not any(_is_grand_total_row(row) for row in existing_rows):
+                    tanstack_result.data = [*existing_rows, grand_total_row]
+                if not request.totals and tanstack_result.total_rows is not None:
+                    tanstack_result.total_rows = max(
+                        int(tanstack_result.total_rows) - 1, 0
                     )
 
-            hierarchy_view_started_at = time.perf_counter()
-            hierarchy_view = _core_flat_view if _core_flat_view is not None else await self._hierarchy_view_routed(
-                pivot_spec,
-                target_paths,
-                start_row,
-                end_row,
+        tanstack_result.data = finalize_hierarchy_rows(
+            tanstack_result.data, preserve_window_order=True
+        )
+        if hierarchy_view.get("color_scale_stats"):
+            tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
+        col_window_started_at = time.perf_counter()
+        windowed_response = self._apply_col_windowing(
+            tanstack_result,
+            request,
+            col_start,
+            col_end,
+            needs_col_schema,
+            requested_center_ids=requested_center_ids,
+            discovered_center_ids=discovered_center_ids,
+            discovered_layout=discovered_layout,
+            pinned_center_ids=pinned_center_ids,
+            layout_revision=resolved_layout_revision,
+        )
+        col_window_finished_at = time.perf_counter()
+        completed_response = self._complete_virtual_scroll_response(
+            windowed_response,
+            response_cache_key,
+            request,
+            start_row,
+            end_row,
+            expanded_paths,
+            col_start,
+            col_end,
+            include_grand_total,
+            _allow_prefetch,
+            requested_center_ids,
+        )
+        return (
+            self._attach_virtual_scroll_profile(
+                completed_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
                 include_grand_total=include_grand_total,
-                # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
-                tabular_subtotals=_hier_tabular_subtotals,
-                legacy=_legacy_hierarchy_view,
-            )
-            hierarchy_view_finished_at = time.perf_counter()
-            convert_started_at = time.perf_counter()
-            tanstack_result = self.convert_pivot_result_to_tanstack_format(
-                hierarchy_view.get("rows", []), request, version=request.version
-            )
-            convert_finished_at = time.perf_counter()
-            if hierarchy_view.get("total_rows") is not None:
-                tanstack_result.total_rows = hierarchy_view["total_rows"]
-
-            if include_grand_total and request.totals:
-                grand_total_row = hierarchy_view.get("grand_total_row")
-                formula_source_rows = (
-                    hierarchy_view.get("grand_total_formula_source_rows") or []
-                )
-                if isinstance(grand_total_row, dict):
-                    normalized_total = self.convert_pivot_result_to_tanstack_format(
-                        [grand_total_row], request, version=request.version
-                    ).data
-                    if normalized_total:
-                        grand_total_row = normalized_total[0]
-                formula_ids = self._measure_formula_ids_from_request(request)
-                if (
-                    isinstance(grand_total_row, dict)
-                    and formula_source_rows
-                    and formula_ids
-                ):
-                    source_rows = self.convert_pivot_result_to_tanstack_format(
-                        formula_source_rows,
-                        request,
-                        version=request.version,
-                    ).data
-                    grand_total_row.update(
-                        self._build_formula_rollup_values(source_rows, formula_ids)
-                    )
-                if isinstance(grand_total_row, dict):
-                    existing_rows = tanstack_result.data or []
-                    if not any(_is_grand_total_row(row) for row in existing_rows):
-                        tanstack_result.data = [*existing_rows, grand_total_row]
-                    if not request.totals and tanstack_result.total_rows is not None:
-                        tanstack_result.total_rows = max(
-                            int(tanstack_result.total_rows) - 1, 0
-                        )
-
-            tanstack_result.data = finalize_hierarchy_rows(
-                tanstack_result.data, preserve_window_order=True
-            )
-            if hierarchy_view.get("color_scale_stats"):
-                tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
-            col_window_started_at = time.perf_counter()
-            windowed_response = self._apply_col_windowing(
-                tanstack_result,
-                request,
-                col_start,
-                col_end,
-                needs_col_schema,
-                requested_center_ids=requested_center_ids,
-                discovered_center_ids=discovered_center_ids,
-                discovered_layout=discovered_layout,
-                pinned_center_ids=pinned_center_ids,
-                layout_revision=resolved_layout_revision,
-            )
-            col_window_finished_at = time.perf_counter()
-            completed_response = self._complete_virtual_scroll_response(
-                windowed_response,
-                response_cache_key,
-                request,
-                start_row,
-                end_row,
-                expanded_paths,
-                col_start,
-                col_end,
-                include_grand_total,
-                _allow_prefetch,
-                requested_center_ids,
-            )
-            return (
-                self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="hierarchy_view",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(
-                            cache_lookup_started_at, cache_lookup_finished_at
-                        ),
-                        "pivotSpecMs": self._profile_ms(
-                            pivot_spec_started_at, pivot_spec_finished_at
-                        ),
-                        "columnCatalogMs": self._profile_ms(
-                            column_catalog_started_at, column_catalog_finished_at
-                        ),
-                        "hierarchyViewMs": self._profile_ms(
-                            hierarchy_view_started_at, hierarchy_view_finished_at
-                        ),
-                        "convertMs": self._profile_ms(
-                            convert_started_at, convert_finished_at
-                        ),
-                        "colWindowingMs": self._profile_ms(
-                            col_window_started_at, col_window_finished_at
-                        ),
-                    },
-                    extra=(
-                        hierarchy_view.get("profile")
-                        if isinstance(hierarchy_view.get("profile"), dict)
-                        else None
+                response_cache_key=response_cache_key,
+                path="hierarchy_view",
+                stages={
+                    "cacheLookupMs": self._profile_ms(
+                        cache_lookup_started_at, cache_lookup_finished_at
                     ),
-                )
-                if profiling
-                else completed_response
+                    "pivotSpecMs": self._profile_ms(
+                        pivot_spec_started_at, pivot_spec_finished_at
+                    ),
+                    "columnCatalogMs": self._profile_ms(
+                        column_catalog_started_at, column_catalog_finished_at
+                    ),
+                    "hierarchyViewMs": self._profile_ms(
+                        hierarchy_view_started_at, hierarchy_view_finished_at
+                    ),
+                    "convertMs": self._profile_ms(
+                        convert_started_at, convert_finished_at
+                    ),
+                    "colWindowingMs": self._profile_ms(
+                        col_window_started_at, col_window_finished_at
+                    ),
+                },
+                extra=(
+                    hierarchy_view.get("profile")
+                    if isinstance(hierarchy_view.get("profile"), dict)
+                    else None
+                ),
             )
-
-        # Use the controller's virtual scrolling method
-        if hasattr(self.controller, "run_virtual_scroll_hierarchical"):
-            # For hierarchical virtual scrolling
-            try:
-                virtual_result = self.controller.run_virtual_scroll_hierarchical(
-                    pivot_spec, start_row, end_row, target_paths
-                )
-
-                # Convert result to TanStack format (even if empty)
-                tanstack_result = self.convert_pivot_result_to_tanstack_format(
-                    virtual_result, request, version=request.version
-                )
-
-                # Override total_rows with the ACTUAL count of all visible (expanded) hierarchical rows
-                if hasattr(self.controller, "virtual_scroll_manager"):
-                    total_visible = self.controller.virtual_scroll_manager.get_total_visible_row_count(
-                        pivot_spec, target_paths
-                    )
-                    if total_visible > 0:
-                        tanstack_result.total_rows = total_visible
-
-                # The legacy manager already returns a viewport window; preserve that order.
-                tanstack_result.data = finalize_hierarchy_rows(
-                    tanstack_result.data, preserve_window_order=True
-                )
-                col_window_started_at = time.perf_counter()
-                windowed_response = self._apply_col_windowing(
-                    tanstack_result,
-                    request,
-                    col_start,
-                    col_end,
-                    needs_col_schema,
-                    requested_center_ids=requested_center_ids,
-                    discovered_center_ids=discovered_center_ids,
-                    discovered_layout=discovered_layout,
-                    pinned_center_ids=pinned_center_ids,
-                    layout_revision=resolved_layout_revision,
-                )
-                col_window_finished_at = time.perf_counter()
-                completed_response = self._complete_virtual_scroll_response(
-                    windowed_response,
-                    response_cache_key,
-                    request,
-                    start_row,
-                    end_row,
-                    expanded_paths,
-                    col_start,
-                    col_end,
-                    include_grand_total,
-                    _allow_prefetch,
-                    requested_center_ids,
-                )
-                return (
-                    self._attach_virtual_scroll_profile(
-                        completed_response,
-                        started_at=request_started_at,
-                        request=request,
-                        start_row=start_row,
-                        end_row=end_row,
-                        col_start=col_start,
-                        col_end=col_end,
-                        needs_col_schema=needs_col_schema,
-                        include_grand_total=include_grand_total,
-                        response_cache_key=response_cache_key,
-                        path="legacy_virtual_scroll",
-                        stages={
-                            "cacheLookupMs": self._profile_ms(
-                                cache_lookup_started_at, cache_lookup_finished_at
-                            ),
-                            "pivotSpecMs": self._profile_ms(
-                                pivot_spec_started_at, pivot_spec_finished_at
-                            ),
-                            "columnCatalogMs": self._profile_ms(
-                                column_catalog_started_at, column_catalog_finished_at
-                            ),
-                            "colWindowingMs": self._profile_ms(
-                                col_window_started_at, col_window_finished_at
-                            ),
-                        },
-                    )
-                    if profiling
-                    else completed_response
-                )
-
-            except Exception as e:
-                print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
-                # Fallback to direct hierarchical load which is un-materialized but accurate
-                fallback_result = await self.handle_hierarchical_request(
-                    request,
-                    expanded_paths,
-                    user=user,
-                    row_scope=row_scope,
-                )
-                fallback_result = self._slice_full_hierarchy_response_to_viewport(
-                    fallback_result,
-                    start_row,
-                    end_row,
-                )
-                col_window_started_at = time.perf_counter()
-                windowed_response = self._apply_col_windowing(
-                    fallback_result,
-                    request,
-                    col_start,
-                    col_end,
-                    needs_col_schema,
-                    requested_center_ids=requested_center_ids,
-                    discovered_center_ids=discovered_center_ids,
-                    discovered_layout=discovered_layout,
-                    pinned_center_ids=pinned_center_ids,
-                    layout_revision=resolved_layout_revision,
-                )
-                col_window_finished_at = time.perf_counter()
-                completed_response = self._complete_virtual_scroll_response(
-                    windowed_response,
-                    response_cache_key,
-                    request,
-                    start_row,
-                    end_row,
-                    expanded_paths,
-                    col_start,
-                    col_end,
-                    include_grand_total,
-                    _allow_prefetch,
-                    requested_center_ids,
-                )
-                return (
-                    self._attach_virtual_scroll_profile(
-                        completed_response,
-                        started_at=request_started_at,
-                        request=request,
-                        start_row=start_row,
-                        end_row=end_row,
-                        col_start=col_start,
-                        col_end=col_end,
-                        needs_col_schema=needs_col_schema,
-                        include_grand_total=include_grand_total,
-                        response_cache_key=response_cache_key,
-                        path="legacy_virtual_scroll_fallback",
-                        stages={
-                            "cacheLookupMs": self._profile_ms(
-                                cache_lookup_started_at, cache_lookup_finished_at
-                            ),
-                            "pivotSpecMs": self._profile_ms(
-                                pivot_spec_started_at, pivot_spec_finished_at
-                            ),
-                            "columnCatalogMs": self._profile_ms(
-                                column_catalog_started_at, column_catalog_finished_at
-                            ),
-                            "colWindowingMs": self._profile_ms(
-                                col_window_started_at, col_window_finished_at
-                            ),
-                        },
-                    )
-                    if profiling
-                    else completed_response
-                )
-        else:
-            # Fallback: Use regular hierarchical method
-            fallback_result = await self.handle_hierarchical_request(
-                request,
-                expanded_paths,
-                user=user,
-                row_scope=row_scope,
-            )
-            fallback_result = self._slice_full_hierarchy_response_to_viewport(
-                fallback_result,
-                start_row,
-                end_row,
-            )
-            col_window_started_at = time.perf_counter()
-            windowed_response = self._apply_col_windowing(
-                fallback_result,
-                request,
-                col_start,
-                col_end,
-                needs_col_schema,
-                requested_center_ids=requested_center_ids,
-                discovered_center_ids=discovered_center_ids,
-                discovered_layout=discovered_layout,
-                pinned_center_ids=pinned_center_ids,
-                layout_revision=resolved_layout_revision,
-            )
-            col_window_finished_at = time.perf_counter()
-            completed_response = self._complete_virtual_scroll_response(
-                windowed_response,
-                response_cache_key,
-                request,
-                start_row,
-                end_row,
-                expanded_paths,
-                col_start,
-                col_end,
-                include_grand_total,
-                _allow_prefetch,
-                requested_center_ids,
-            )
-            return (
-                self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="hierarchical_fallback",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(
-                            cache_lookup_started_at, cache_lookup_finished_at
-                        ),
-                        "pivotSpecMs": self._profile_ms(
-                            pivot_spec_started_at, pivot_spec_finished_at
-                        ),
-                        "columnCatalogMs": self._profile_ms(
-                            column_catalog_started_at, column_catalog_finished_at
-                        ),
-                        "colWindowingMs": self._profile_ms(
-                            col_window_started_at, col_window_finished_at
-                        ),
-                    },
-                )
-                if profiling
-                else completed_response
-            )
+            if profiling
+            else completed_response
+        )
 
     def get_schema_info(self, table_name: str) -> Dict[str, Any]:
         """Get schema information for TanStack column configuration"""
@@ -3669,71 +2954,18 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if user or row_scope is not None:
             spec = apply_rls_to_spec(spec, user, row_scope=row_scope)
 
-        routed = await self._unique_values_routed(
+        return await self._unique_values_routed(
             spec, column_id, search=str(search or ""), limit=spec.limit, offset=spec.offset
         )
-        if routed is not None:
-            return routed
-        return await self._legacy_unique_values(spec, column_id, search)
-
-    async def _shadow_fingerprint(self, mode: str, spec: Any) -> Any:
-        """Fingerprint of the scoped dataset in shadow mode, so concurrent writes are detected (None otherwise)."""
-        if mode != "shadow":
-            return None
-        from .core.exec import dataset_fingerprint
-
-        resolve = getattr(self.controller, "resolve_table", None)
-        try:
-            return await run_in_executor_scoped(
-                asyncio.get_running_loop(), None, lambda: dataset_fingerprint(resolve(spec.table))
-            )
-        except Exception:  # noqa: BLE001 - an unreadable fingerprint only makes the pair incomparable
-            return object()
 
     async def _unique_values_routed(
         self, spec: Any, column_id: str, *, search: str, limit: int, offset: int
     ) -> Optional[tuple]:
         """Filter options from the core (an unsupported request raises ``CoreUnsupported``)."""
-        from .transport.core_bridge import core_locked_call, core_unique_values
+        from .transport.core_bridge import core_unique_values, run_core_read
 
-        resolve = self._core_resolver()
-        return await run_in_executor_scoped(
-            asyncio.get_running_loop(),
-            None,
-            lambda: core_locked_call(self.controller, spec.table, lambda: core_unique_values(
-                resolve, spec, column_id, search=search, limit=limit, offset=offset)),
-        )
-
-    async def _legacy_unique_values(self, spec: Any, column_id: str, search: Any) -> tuple:
-        # Use Ibis to get distinct values
-        table = self.controller.planner._table_for_spec(
-            self.controller.planner._prepare_measure_axis_spec(spec)
-        )
-        if column_id not in getattr(table, "columns", []):
-            return [], 0
-        filter_expr = self.controller.planner.builder.build_filter_expression(
-            table, spec.filters
-        )
-        if filter_expr is not None:
-            table = table.filter(filter_expr)
-
-        search_text = str(search or "").strip()
-        if search_text:
-            table = table.filter(
-                table[column_id].cast("string").lower().contains(search_text.lower())
-            )
-
-        # Get distinct values in stable sorted order, with explicit paging so
-        # large columns remain usable without shipping every option at once.
-        distinct_query = table.select(column_id).distinct()
-        total_result = distinct_query.count().execute()
-        try:
-            total_values = int(total_result)
-        except (TypeError, ValueError):
-            total_values = 0
-        query = distinct_query.order_by(column_id).limit(spec.limit, offset=spec.offset)
-        result = query.execute()
-        return result[column_id].tolist(), total_values
+        return await run_core_read(self.controller, spec.table, lambda resolve: core_unique_values(
+            resolve, spec, column_id, search=search, limit=limit, offset=offset))
 
     # ========== Live Streaming & Baseline Diff Facade ==========
 
@@ -3843,7 +3075,6 @@ def create_tanstack_adapter(
         backend_uri=backend_uri,
         enable_streaming=True,
         enable_incremental_views=True,
-        tile_size=100,
         cache_ttl=300,
         distributed_runtime=distributed_runtime,
     )
