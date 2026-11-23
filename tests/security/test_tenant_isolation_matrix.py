@@ -330,13 +330,12 @@ def test_cache_is_not_shared_across_tenants():
 
 @pytest.mark.parametrize("case", ["data", "drill", "drill_legacy_keys"])
 def test_core_serves_scoped_reads(case, monkeypatch):
-    """With PIVOT_CORE=on the core answers (not a legacy fallback) and stays scoped."""
-    from pivot_engine.runtime import core_shadow
+    """The core answers and stays scoped."""
+    from tests.core_spy import spy_core
 
-    monkeypatch.setenv("PIVOT_CORE", "on")
+    calls = spy_core(monkeypatch)
     kind = PROTOCOL_KIND[case]
-    served = f"core_served_{'drill' if kind == 'drill' else 'hierarchy'}"
-    before = core_shadow.STATS[served]
+    served = "core_drill_through" if kind == "drill" else "core_hierarchy_view"
     overrides, payload, trigger_prop = READ_CASES[case]
     adapter = _adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter)
@@ -350,19 +349,18 @@ def test_core_serves_scoped_reads(case, monkeypatch):
         needs_col_schema=True, include_grand_total=True, principal=principal, row_scope=grant,
     )
     outcome = asyncio.run(service.process_async(state, context))
-    assert core_shadow.STATS[served] > before, f"{case} was not served by the core"
+    assert calls[served], f"{case} was not served by the core"
     assert _rows_from(outcome), f"{case}: the core returned nothing"
     _assert_scoped_or_denied(f"core:{case}", outcome)
 
 
 @pytest.mark.parametrize("column", ["tenant", "region", "secret"])
 def test_core_serves_scoped_filter_options(column, monkeypatch):
-    """Filter options come from the core under PIVOT_CORE=on and expose only the grant's values."""
-    from pivot_engine.runtime import core_shadow
+    """Filter options come from the core and expose only the grant's values."""
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest
+    from tests.core_spy import spy_core
 
-    monkeypatch.setenv("PIVOT_CORE", "on")
-    before = core_shadow.STATS["core_served_unique_values"]
+    calls = spy_core(monkeypatch)
     adapter = _adapter()
     principal = Principal()
     grant = claims_authorizer().authorize(principal=principal, table=TABLE, operation="read")
@@ -373,18 +371,17 @@ def test_core_serves_scoped_filter_options(column, monkeypatch):
     )
     response = asyncio.run(adapter.handle_request(request, user=principal, row_scope=grant))
     values = [d.get("value") for d in (response.data or [])]
-    assert core_shadow.STATS["core_served_unique_values"] > before
+    assert calls["core_unique_values"]
     assert values, "the core returned no options"
     found = leaks(response, tenant_values=values if column == "tenant" else ())
     assert not found, f"core:filter_options:{column}: {found}"
 
 
 def test_core_serves_scoped_full_export(monkeypatch):
-    """A full (all rows) export is produced by the core under PIVOT_CORE=on and stays scoped."""
-    from pivot_engine.runtime import core_shadow
+    """A full (all rows) export is produced by the core and stays scoped."""
+    from tests.core_spy import spy_core
 
-    monkeypatch.setenv("PIVOT_CORE", "on")
-    before = core_shadow.STATS["core_served_hierarchy"]
+    calls = spy_core(monkeypatch)
     adapter = _adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter)
     principal = Principal()
@@ -396,5 +393,5 @@ def test_core_serves_scoped_full_export(monkeypatch):
         needs_col_schema=True, include_grand_total=True, principal=principal, row_scope=grant,
     )
     outcome = asyncio.run(service.process_async(state, context))
-    assert core_shadow.STATS["core_served_hierarchy"] > before, "the export was not served by the core"
+    assert calls["core_hierarchy_view"], "the export was not served by the core"
     _assert_scoped_or_denied("core:export", outcome)

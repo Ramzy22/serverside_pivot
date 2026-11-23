@@ -94,11 +94,8 @@ async def test_async_standard_pivot_populates_the_diff_engine_cache():
 
     try:
         first = await controller.run_pivot_async(spec, return_format="dict", force_refresh=True)
-        hits_before_repeat = controller._cache_hits
         second = await controller.run_pivot_async(spec, return_format="dict")
 
         assert first == second
-        if os.environ.get("PIVOT_CORE") != "on":  # the diff-engine cache is legacy-only (removed with it in M4)
-            assert controller._cache_hits > hits_before_repeat
     finally:
         controller.close()

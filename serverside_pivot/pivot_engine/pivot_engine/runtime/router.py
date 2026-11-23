@@ -109,6 +109,10 @@ class RuntimeRequestRouter:
         """Return a stable client error without serializing backend exception text."""
         if isinstance(exc, DatabaseExecutionError):
             return exc.code
+        from ..transport.core_bridge import CoreUnsupported
+
+        if isinstance(exc, CoreUnsupported):  # a request the semantic core does not express: a stable code
+            return "unsupported_query"
         return "database_execution_failed"
 
     @staticmethod
@@ -1166,12 +1170,10 @@ class RuntimeRequestRouter:
                 == "tabular"
                 and not bool(getattr(request, "show_subtotal_footers", False))
             )
-            from .core_shadow import core_mode
-
-            # With the semantic core serving, a hierarchical full export is the
-            # same windowed hierarchy request over every visible row, so it is
-            # produced (and scope-verified) by the core like any other read.
-            core_serves_export = core_mode() == "on" and not bool(getattr(request, "show_subtotal_footers", False))
+            # A hierarchical full export is the same windowed hierarchy request
+            # over every visible row, so it is produced (and scope-verified) by
+            # the core like any other read.
+            core_serves_export = not bool(getattr(request, "show_subtotal_footers", False))
             if is_tabular_without_subtotals or core_serves_export:
                 # Query the exact size first, then request that bounded range.
                 # This keeps the tabular path flat and avoids an artificial

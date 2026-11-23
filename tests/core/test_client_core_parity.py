@@ -3,7 +3,7 @@
 The client path is the real TypeScript code: ``ClientSqlPlanner.compile`` then
 ``runClientCore`` (``src/lib/runtime/core/clientCoreRuntime.ts``), whose
 DuckDB connection is this process's DuckDB (the engine DuckDB-Wasm embeds).
-The server path is ``PivotRuntimeService`` with ``PIVOT_CORE=on``.  For the
+The server path is ``PivotRuntimeService``.  For the
 same state over the same data both must return the same visible rows, in the
 same order, with the same values and the same grand total.
 """
@@ -114,28 +114,14 @@ def _table(records):
 
 
 def _server(state, table: pa.Table):
-    import os
-
-    from pivot_engine.runtime import core_shadow
-
-    previous = os.environ.get("PIVOT_CORE")
-    os.environ["PIVOT_CORE"] = "on"
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(TABLE, table)
     service = PivotRuntimeService(adapter_getter=lambda: adapter)
     view = PivotViewState(row_fields=state["rowFields"], col_fields=state["colFields"], val_configs=state["valConfigs"],
                           filters=state["filters"], sorting=state["sorting"], expanded=state["expanded"])
-    before = core_shadow.STATS["core_served_hierarchy"]
     ctx = PivotRequestContext(table=TABLE, trigger_prop="pivot.viewport", start_row=0, end_row=1000,
                               viewport_active=True, needs_col_schema=True, include_grand_total=True)
-    try:
-        out = asyncio.run(service.process_async(view, ctx))
-    finally:
-        if previous is None:
-            os.environ.pop("PIVOT_CORE", None)
-        else:
-            os.environ["PIVOT_CORE"] = previous
-    return out, core_shadow.STATS["core_served_hierarchy"] > before
+    return asyncio.run(service.process_async(view, ctx))
 
 
 def _same(a, b):
@@ -161,8 +147,7 @@ def test_client_mode_equals_server_mode(client, records, state):
     if "unsupported" in reply:  # a declared, exact fallback to the legacy client path
         event(f"unsupported: {reply['unsupported']}")
         return
-    server, served = _server(state, table)
-    assert served, "the server request was not answered by the core"
+    server = _server(state, table)
     s_body, s_gt = _split(server.data or [])
     c_body, c_gt = reply["result"]["rows"], reply["result"]["grandTotalRow"]
     assert [(r["_path"], r["depth"]) for r in c_body] == [(r["_path"], r["depth"]) for r in s_body]

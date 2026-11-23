@@ -161,16 +161,15 @@ async def test_measure_axis_hierarchy_first_and_last_levels_work_with_aggregate_
 
     # REQ-DIM-003: above the label the members' aggregations (sum, max) differ: no value.
     # Legacy summed them (157 = 150 + 7; finding F-AXIS-MIXED-PARENT).
-    core = os.environ.get("PIVOT_CORE") == "on"
     assert _amounts(measure_last[""], "region") == {
-        ("North",): None if core else 157.0,
-        ("South",): None if core else 109.0,
+        ("North",): None,
+        ("South",): None,
     }
     assert all("Measure Name" not in row for row in measure_last[""])
 
     assert _amounts(measure_last["North"], "desk") == {
-        ("Rates",): None if core else 107.0,
-        ("Credit",): None if core else 55.0,
+        ("Rates",): None,
+        ("Credit",): None,
     }
     assert all("Measure Name" not in row for row in measure_last["North"])
 

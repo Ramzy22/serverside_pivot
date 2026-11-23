@@ -1,7 +1,7 @@
 import pytest
 
 from pivot_engine.hierarchy_rows import build_hierarchy_row_window
-from pivot_engine.runtime.models import PivotRequestContext, PivotViewState
+from pivot_engine.runtime.models import PivotViewState
 from pivot_engine.runtime.tree_service import TreeRuntimeService
 from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 from pivot_engine.types.pivot_spec import Measure, PivotSpec
@@ -316,41 +316,3 @@ def test_connection_pool_health_check_runs_after_interval_under_active_load(monk
     assert len(created) == 2
 
 
-def test_unbalanced_duplicate_node_merge_preserves_pivoted_min_max_avg():
-    import asyncio
-    import pyarrow as pa
-    from pivot_engine.scalable_pivot_controller import ScalablePivotController
-
-    controller = ScalablePivotController(backend_uri=":memory:")
-    table = pa.table({
-        "l1": ["Alpha", None, None],
-        "l2": [None, "Alpha", "Alpha"],
-        "period": ["Q1", "Q1", "Q1"],
-        "val": [10.0, 40.0, 40.0],
-        "w": [1.0, 3.0, 1.0],
-    })
-    controller.load_data_from_arrow("unbal_agg_merge", table)
-
-    spec_dict = {
-        "table": "unbal_agg_merge",
-        "rows": ["l1", "l2"],
-        "columns": ["period"],
-        "pivot_config": {"enabled": True},
-        "measures": [
-            {"field": "val", "agg": "min", "alias": "val_min"},
-            {"field": "val", "agg": "max", "alias": "val_max"},
-            {"field": "val", "agg": "avg", "alias": "val_avg"},
-            {"field": "val", "agg": "weighted_avg", "weighted_field": "w", "alias": "val_wavg"},
-        ],
-        "totals": False,
-        "group_allow_unbalanced": True,
-    }
-    res = asyncio.run(controller.run_hierarchical_pivot_batch_load(spec_dict, [["__ALL__"]]))
-    alpha = next(row for row in res[""] if row["_id"] == "Alpha")
-    assert alpha["Q1_val_min"] == 10.0
-    assert alpha["Q1_val_max"] == 40.0
-    # True average of [10, 40, 40] = 30.0
-    assert abs(alpha["Q1_val_avg"] - 30.0) < 1e-6
-    # True weighted avg: (10*1 + 40*3 + 40*1) / (1 + 3 + 1) = 170 / 5 = 34.0
-    assert abs(alpha["Q1_val_wavg"] - 34.0) < 1e-6
-    assert not any("__unbal_w_" in k for k in alpha.keys())

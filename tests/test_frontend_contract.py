@@ -308,34 +308,20 @@ def create_test_data(adapter, rows=1000):
 
 # --- engine-neutral execution recorders ------------------------------------
 # These tests pin *how much work* a scroll does (window reuse, paged root
-# queries).  Under PIVOT_CORE=on the core serves the hierarchy view, so the
-# work is recorded at the core seam instead of the legacy controller.
-
-def _core_serving() -> bool:
-    return os.environ.get("PIVOT_CORE", "off").strip().lower() == "on"
-
+# queries), recorded at the core seam.
 
 def record_hierarchy_windows(adapter, monkeypatch):
-    """(start_row, end_row) of every hierarchy-view execution, whichever engine serves."""
+    """(start_row, end_row) of every hierarchy-view execution."""
+    from pivot_engine.transport import core_bridge
+
     calls = []
-    if _core_serving():
-        from pivot_engine.transport import core_bridge
+    original = core_bridge.core_hierarchy_view
 
-        original = core_bridge.core_hierarchy_view
+    def recording(resolve, spec, target_paths, start_row, end_row, **kwargs):
+        calls.append((start_row, end_row))
+        return original(resolve, spec, target_paths, start_row, end_row, **kwargs)
 
-        def recording(resolve, spec, target_paths, start_row, end_row, **kwargs):
-            calls.append((start_row, end_row))
-            return original(resolve, spec, target_paths, start_row, end_row, **kwargs)
-
-        monkeypatch.setattr(core_bridge, "core_hierarchy_view", recording)
-        return calls
-    original_run = adapter.controller.run_hierarchy_view
-
-    async def counting(*args, **kwargs):
-        calls.append((args[2], args[3]))
-        return await original_run(*args, **kwargs)
-
-    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting)
+    monkeypatch.setattr(core_bridge, "core_hierarchy_view", recording)
     return calls
 
 
@@ -1759,11 +1745,7 @@ async def test_wide_materialized_window_uses_sparse_materialized_pivot_path(adap
     profile = {}
     result = await adapter.controller.run_pivot_async(spec, return_format="arrow", force_refresh=True, profile_sink=profile)
 
-    if os.environ.get("PIVOT_CORE") == "on":  # the core serves the pivot; the legacy sparse path is not used
-        assert profile["planner"]["path"] == "core"
-    else:
-        assert profile["planner"]["path"] == "sparse_materialized"
-        assert profile["plannerExecution"]["mode"] == "sparse_materialized"
+    assert profile["planner"]["path"] == "core"
     assert result.num_rows == 10
     first_row = result.slice(0, 1).to_pylist()[0]
     assert first_row["row_id"] == 0
@@ -1829,8 +1811,7 @@ async def test_sparse_pivot_measure_sort_orders_mixed_sign_values(
         profile_sink=profile,
     )
 
-    # The core serves the pivot under PIVOT_CORE=on; the legacy sparse path is not used.
-    assert profile["planner"]["path"] == ("core" if os.environ.get("PIVOT_CORE") == "on" else "sparse_materialized")
+    assert profile["planner"]["path"] == "core"
     assert result.column("row_label").to_pylist() == expected_rows
     assert result.column("Sort_pnl_sum").to_pylist() == expected_values
 
@@ -2951,7 +2932,7 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
         return await original_run_pivot_async(spec, *args, **kwargs)
 
     monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
-    core_queries = record_core_queries(monkeypatch) if _core_serving() else None
+    core_queries = record_core_queries(monkeypatch)
 
     first = await adapter.handle_virtual_scroll_request(
         request,
@@ -2981,26 +2962,11 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
     assert deep.data[0]["row_id"] == 49900
     assert deep.data[-1]["row_id"] == 50099
 
-    if core_queries is not None:
-        # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
-        # offset + 1 because the core orders the grand total first).
-        assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
-            "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
-        )
-    else:
-        assert any(
-            call["rows"] == ["row_id"]
-            and call["limit"] is None
-            and call["offset"] == 0
-            and call["force_refresh"] is False
-            and call["root_filter"] == {
-                "op": "in",
-                "value_len": 200,
-                "first_value": 49900,
-                "last_value": 50099,
-            }
-            for call in recorded_specs
-        ), "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
+    # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
+    # offset + 1 because the core orders the grand total first).
+    assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
+        "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
+    )
 
 
 @pytest.mark.asyncio
@@ -3098,7 +3064,7 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
         return await original_run_pivot_async(spec, *args, **kwargs)
 
     monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
-    core_queries = record_core_queries(monkeypatch) if _core_serving() else None
+    core_queries = record_core_queries(monkeypatch)
 
     response = await adapter.handle_virtual_scroll_request(
         request,
@@ -3126,37 +3092,13 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
     assert response.total_rows == 100001
     assert second_response.total_rows == 100001
     assert any(row.get("_isTotal") for row in response.data)
-    if core_queries is not None:
-        # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
-        # offset + 1 because the core orders the grand total first).
-        assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
-            "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
-        )
-    else:
-        assert any(
-            call["rows"] == ["row_id"]
-            and call["limit"] is None
-            and call["offset"] == 0
-            and call["force_refresh"] is False
-            and call["root_filter"] == {
-                "op": "in",
-                "value_len": 200,
-                "first_value": 49900,
-                "last_value": 50099,
-            }
-            for call in recorded_specs
-        ), "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
-    if core_queries is not None:
-        # One grand-total query per request outside the first window (REQ-PAGE: the core orders it first).
-        assert sum(1 for q in core_queries if q["offset"] == 0 and q["limit"] == 1) == 2
-    else:
-        assert any(
-            call["rows"] == []
-            and call["limit"] == 1
-            and call["force_refresh"] is True
-            for call in recorded_specs
-        ), "Grand total should be fetched separately instead of disabling the paged root path"
-        assert sum(1 for call in recorded_specs if call["rows"] == [] and call["limit"] == 1) == 1
+    # The core pushes the requested root page into the aggregation query (LIMIT/OFFSET;
+    # offset + 1 because the core orders the grand total first).
+    assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
+        "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
+    )
+    # One grand-total query per request outside the first window (REQ-PAGE: the core orders it first).
+    assert sum(1 for q in core_queries if q["offset"] == 0 and q["limit"] == 1) == 2
 
 
 def test_collapsed_root_cache_keys_ignore_materialized_pivot_window(adapter):
@@ -3247,14 +3189,10 @@ async def test_topn_query_skips_column_discovery_when_materialized_values_are_pr
     )
 
     assert isinstance(result, pa.Table)
-    if os.environ.get("PIVOT_CORE") == "on":  # the core serves it: only the requested members become cells
-        assert profile_sink["planner"]["path"] == "core" and execute_calls == []
-        assert sorted(c for c in result.column_names if c.endswith("_sum")) == [
-            "Canada_cost_sum", "Canada_sales_sum", "USA_cost_sum", "USA_sales_sum"]
-    else:
-        assert len(execute_calls) == 1
-        assert profile_sink["plannerExecution"]["columnDiscoverySkipped"] is True
-        assert profile_sink["plannerExecution"]["materializedColumns"] == 2
+    # only the requested members become cells, with no column discovery
+    assert profile_sink["planner"]["path"] == "core" and execute_calls == []
+    assert sorted(c for c in result.column_names if c.endswith("_sum")) == [
+        "Canada_cost_sum", "Canada_sales_sum", "USA_cost_sum", "USA_sales_sum"]
 
 
 def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():

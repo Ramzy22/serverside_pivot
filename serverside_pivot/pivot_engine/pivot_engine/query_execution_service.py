@@ -131,24 +131,15 @@ class PivotQueryExecutor:
         )
 
     async def _core_table(self, spec: Any) -> Any:
-        """The pivot from the core (``PIVOT_CORE=on``), or None for the legacy planner."""
-        from .runtime import core_shadow
+        """The pivot from the core (an unsupported request raises ``CoreUnsupported``)."""
         from .transport.core_bridge import CoreUnsupported, core_locked_call, core_pivot_table
 
-        if core_shadow.core_mode() != "on":
-            return None
         resolve = getattr(self._controller, "resolve_table", None)
         if resolve is None:
-            return None
-        try:
-            table = await run_in_executor_scoped(asyncio.get_running_loop(), None,
-                                                 lambda: core_locked_call(self._controller, spec.table,
-                                                                          lambda: core_pivot_table(resolve, spec)))
-        except CoreUnsupported as exc:
-            core_shadow.record_unsupported(exc.reasons)
-            return None
-        core_shadow.record_served("pivot")
-        return table
+            raise CoreUnsupported(["controller without resolve_table"])
+        return await run_in_executor_scoped(asyncio.get_running_loop(), None,
+                                            lambda: core_locked_call(self._controller, spec.table,
+                                                                     lambda: core_pivot_table(resolve, spec)))
 
     async def _schedule_materialization_if_needed(
         self,

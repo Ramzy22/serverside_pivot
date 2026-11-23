@@ -1908,57 +1908,37 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     async def _drill_routed(
         self,
         spec: Any,
-        extra_filters: List[Dict[str, Any]],
-        drill_payload: Dict[str, Any],
+        extra_filters: Any,
+        drill_payload: Any,
         *,
         limit: int,
         offset: int,
         sort_col: Optional[str],
         sort_dir: str,
         text_filter: str,
-        legacy: Callable[[], Awaitable[Dict[str, Any]]],
+        legacy: Any = None,
     ) -> Dict[str, Any]:
-        """Drill-through from the core, legacy, or both (``PIVOT_CORE``, see runtime/core_shadow.py)."""
-        from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_drill_through
+        """Drill-through records from the core (an unsupported request raises ``CoreUnsupported``)."""
+        from .transport.core_bridge import core_drill_through, core_locked_call
 
-        mode = core_shadow.core_mode()
-        if mode == "off":
-            return await legacy()
+        resolve = self._core_resolver()
+        return await run_in_executor_scoped(
+            asyncio.get_running_loop(),
+            None,
+            lambda: core_locked_call(self.controller, spec.table, lambda: core_drill_through(
+                resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
+                sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
+            )),
+        )
+
+    def _core_resolver(self) -> Callable[[str], Any]:
+        """The scoped table resolver the core reads through (REQ-SEC-001)."""
+        from .transport.core_bridge import CoreUnsupported
+
         resolve = getattr(self.controller, "resolve_table", None)
         if resolve is None:
-            core_shadow.record_unsupported(["controller without resolve_table"])
-            return await legacy()
-        before = await self._shadow_fingerprint(mode, spec)
-        try:
-            core_result = await run_in_executor_scoped(
-                asyncio.get_running_loop(),
-                None,
-                lambda: core_locked_call(self.controller, spec.table, lambda: core_drill_through(
-                    resolve, spec, extra_filters, drill_payload, limit=limit, offset=offset,
-                    sort_col=sort_col, sort_dir=sort_dir, text_filter=text_filter,
-                )),
-            )
-        except CoreUnsupported as exc:
-            core_shadow.record_unsupported(exc.reasons)
-            return await legacy()
-        if mode == "on":
-            core_shadow.record_served("drill")
-            return core_result
-        legacy_result = await legacy()
-        after = await self._shadow_fingerprint(mode, spec)
-        try:
-            core_shadow.record_drill_shadow(
-                {"table": getattr(spec, "table", None), "sorted": bool(sort_col), "search": bool(text_filter),
-                 "concurrent_write": before != after,
-                 # Legacy reads only row_fields / pathFields; a rowFields-only payload loses its path.
-                 "row_fields_ignored": bool((drill_payload or {}).get("rowFields"))
-                 and not ((drill_payload or {}).get("row_fields") or (drill_payload or {}).get("pathFields"))},
-                legacy_result, core_result,
-            )
-        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
-            _adapter_logger.warning("core drill shadow comparison failed", exc_info=True)
-        return legacy_result
+            raise CoreUnsupported(["controller without resolve_table"])
+        return resolve
 
     async def handle_drill_through(
         self, request: TanStackRequest, drill_payload: Dict[str, Any]
@@ -2429,28 +2409,17 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     @row_scoped
     async def _core_flat_view(self, pivot_spec: Any, start_row: int, end_row: int,
                               include_grand_total: bool) -> Optional[Dict[str, Any]]:
-        """The flat tabular view from the core (``PIVOT_CORE=on``), or None for the legacy flat path."""
-        from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_hierarchy_view
+        """The flat tabular view from the core."""
+        from .transport.core_bridge import core_hierarchy_view, core_locked_call
 
-        if core_shadow.core_mode() != "on":
-            return None
-        resolve = getattr(self.controller, "resolve_table", None)
-        if resolve is None:
-            return None
+        resolve = self._core_resolver()
         cache = self.__dict__.setdefault("_core_total_rows_cache", {})
-        try:
-            view = await run_in_executor_scoped(
-                asyncio.get_running_loop(), None,
-                lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
-                    resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
-                    include_grand_total_row=include_grand_total, total_cache=cache, flat=True)),
-            )
-        except CoreUnsupported as exc:
-            core_shadow.record_unsupported(exc.reasons)
-            return None
-        core_shadow.record_served("hierarchy")
-        return view
+        return await run_in_executor_scoped(
+            asyncio.get_running_loop(), None,
+            lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
+                resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
+                include_grand_total_row=include_grand_total, total_cache=cache, flat=True)),
+        )
 
     async def hierarchy_view(
         self,
@@ -2481,54 +2450,22 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         *,
         include_grand_total: bool,
         tabular_subtotals: bool = False,
-        legacy: Callable[[], Awaitable[Dict[str, Any]]],
+        legacy: Any = None,
     ) -> Dict[str, Any]:
-        """Serve the hierarchy view from the core, the legacy engines, or both (shadow).
+        """The hierarchy view from the core (an unsupported request raises ``CoreUnsupported``)."""
+        from .transport.core_bridge import core_hierarchy_view, core_locked_call
 
-        See ``runtime/core_shadow.py``: ``PIVOT_CORE=off|shadow|on``.  Anything
-        the core cannot express is served by legacy, with the reason counted.
-        """
-        from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_hierarchy_view
-
-        mode = core_shadow.core_mode()
-        if mode == "off":
-            return await legacy()
-        resolve = getattr(self.controller, "resolve_table", None)
-        if resolve is None:
-            core_shadow.record_unsupported(["controller without resolve_table"])
-            return await legacy()
+        resolve = self._core_resolver()
         cache = self.__dict__.setdefault("_core_total_rows_cache", {})
-        capture: Optional[Dict[str, Any]] = {} if mode == "shadow" and core_shadow.capture_enabled() else None
-        before = await self._shadow_fingerprint(mode, pivot_spec)
-        try:
-            core_view = await run_in_executor_scoped(
-                asyncio.get_running_loop(),
-                None,
-                lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
-                    resolve, pivot_spec, target_paths, start_row, end_row,
-                    include_grand_total_row=include_grand_total, total_cache=cache, capture=capture,
-                    tabular_subtotals=tabular_subtotals,
-                )),
-            )
-        except CoreUnsupported as exc:
-            core_shadow.record_unsupported(exc.reasons)
-            return await legacy()
-        if mode == "on":
-            core_shadow.record_served("hierarchy")
-            return core_view
-        legacy_view = await legacy()
-        after = await self._shadow_fingerprint(mode, pivot_spec)
-        try:
-            summary = core_shadow.summarize_spec(pivot_spec)
-            summary["concurrent_write"] = before != after
-            summary["has_case_variants"] = _has_case_variant_siblings(core_view.get("rows") or [])
-            summary.update(totals=bool(getattr(pivot_spec, "totals", False)), include_grand_total=include_grand_total,
-                           window=[start_row, end_row], expanded=repr(target_paths)[:200])
-            core_shadow.record_shadow(summary, legacy_view, core_view, capture)
-        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
-            _adapter_logger.warning("core shadow comparison failed", exc_info=True)
-        return legacy_view
+        return await run_in_executor_scoped(
+            asyncio.get_running_loop(),
+            None,
+            lambda: core_locked_call(self.controller, pivot_spec.table, lambda: core_hierarchy_view(
+                resolve, pivot_spec, target_paths, start_row, end_row,
+                include_grand_total_row=include_grand_total, total_cache=cache,
+                tabular_subtotals=tabular_subtotals,
+            )),
+        )
 
     async def handle_virtual_scroll_request(
         self,
@@ -3756,37 +3693,16 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     async def _unique_values_routed(
         self, spec: Any, column_id: str, *, search: str, limit: int, offset: int
     ) -> Optional[tuple]:
-        """Filter options from the core when ``PIVOT_CORE`` is on (shadow compares); ``None`` = legacy."""
-        from .runtime import core_shadow
-        from .transport.core_bridge import CoreUnsupported, core_locked_call, core_unique_values
+        """Filter options from the core (an unsupported request raises ``CoreUnsupported``)."""
+        from .transport.core_bridge import core_locked_call, core_unique_values
 
-        mode = core_shadow.core_mode()
-        resolve = getattr(self.controller, "resolve_table", None)
-        if mode == "off" or resolve is None:
-            return None
-        before = await self._shadow_fingerprint(mode, spec)
-        try:
-            core_result = await run_in_executor_scoped(
-                asyncio.get_running_loop(),
-                None,
-                lambda: core_locked_call(self.controller, spec.table, lambda: core_unique_values(
-                    resolve, spec, column_id, search=search, limit=limit, offset=offset)),
-            )
-        except CoreUnsupported as exc:
-            core_shadow.record_unsupported(exc.reasons)
-            return None
-        if mode == "on":
-            core_shadow.record_served("unique_values")
-            return core_result
-        legacy_result = await self._legacy_unique_values(spec, column_id, search)
-        after = await self._shadow_fingerprint(mode, spec)
-        try:
-            core_shadow.record_unique_shadow({"table": getattr(spec, "table", None), "column": column_id,
-                                              "concurrent_write": before != after},
-                                             legacy_result, core_result)
-        except Exception:  # noqa: BLE001 - shadow comparison must never affect the served response
-            _adapter_logger.warning("core unique-values shadow comparison failed", exc_info=True)
-        return legacy_result
+        resolve = self._core_resolver()
+        return await run_in_executor_scoped(
+            asyncio.get_running_loop(),
+            None,
+            lambda: core_locked_call(self.controller, spec.table, lambda: core_unique_values(
+                resolve, spec, column_id, search=search, limit=limit, offset=offset)),
+        )
 
     async def _legacy_unique_values(self, spec: Any, column_id: str, search: Any) -> tuple:
         # Use Ibis to get distinct values

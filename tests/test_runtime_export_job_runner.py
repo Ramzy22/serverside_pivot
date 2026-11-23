@@ -971,7 +971,7 @@ def test_real_backend_failure_cannot_publish_an_empty_successful_bounded_export(
         return await execute({"sql": "SELECT CAST('not-a-number' AS INTEGER)"}, **kwargs)
 
     monkeypatch.setattr(backend, "execute_async", invalid_native_statement)
-    # The same real backend failure on the core read path (PIVOT_CORE=on serves the export's pivot).
+    # The same real backend failure on the core read path.
     import duckdb
     from pivot_engine.transport import core_bridge
 

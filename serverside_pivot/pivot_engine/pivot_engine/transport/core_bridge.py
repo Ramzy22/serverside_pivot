@@ -59,7 +59,10 @@ _MEASURE_FILTER_OPS = {"=", "!=", "<", "<=", ">", ">="}
 
 
 class CoreUnsupported(Exception):
-    """The request uses features the core does not express (yet); serve it elsewhere."""
+    """The request uses features the semantic core does not express: a typed client error
+    (``unsupported_query``), never a fallback to another engine."""
+
+    code = "unsupported_query"
 
     def __init__(self, reasons: Sequence[str]) -> None:
         self.reasons: Tuple[str, ...] = tuple(sorted(set(reasons)))
@@ -136,15 +139,26 @@ def _filters(spec: Any, aliases: FrozenSet[str], families: Mapping[str, str], de
     for f in spec.filters or []:
         fields = set(_flatten_fields(f))
         if fields & aliases:
-            # REQ-TOT-007: a level-less measure filter applies at the deepest row level.
-            if "conditions" in f or not fields <= aliases:
+            # REQ-TOT-007: a level-less measure filter applies at the deepest row level.  A conjunction of
+            # measure conditions (a column filter menu's AND group) is one measure filter per condition.
+            terms = [f]
+            if "conditions" in f:
+                group_op = str(f.get("op") or f.get("operator") or "AND").upper()
+                terms = list(f.get("conditions") or [])
+                if (group_op != "AND" and len(terms) > 1) or any(
+                        not isinstance(t, dict) or "conditions" in t for t in terms):
+                    reasons.append("compound measure filter")
+                    continue
+            if not fields <= aliases:
                 reasons.append("compound measure filter")
                 continue
-            op = str(f.get("op") or "=")
-            if op not in _MEASURE_FILTER_OPS or depth == 0:
-                reasons.append(f"measure filter {op!r}" if depth else "measure filter without row levels")
-                continue
-            measure_filters.append(MeasureFilter(depth, str(f["field"]), op, _coerce(f.get("value"), "floating")))
+            for term in terms:
+                op = str(term.get("op") or "=")
+                if op not in _MEASURE_FILTER_OPS or depth == 0:
+                    reasons.append(f"measure filter {op!r}" if depth else "measure filter without row levels")
+                    continue
+                measure_filters.append(MeasureFilter(depth, str(term["field"]), op,
+                                                     _coerce(term.get("value"), "floating")))
             continue
         mapped = _dimension_filter(f, families, reasons)
         if mapped is not None:

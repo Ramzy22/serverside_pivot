@@ -59,3 +59,11 @@ def test_legacy_precomputation_endpoints_are_gone():
     client = _client()
     assert client.post("/pivot/materialized-hierarchy", json=SPEC).status_code == 404
     assert client.get("/pivot/jobs/x").status_code == 404
+
+
+def test_a_request_the_core_does_not_express_is_a_typed_422():
+    spec = {**SPEC, "filters": [{"field": "region", "op": "regex", "value": "N"}]}
+    response = _client().post("/pivot/hierarchical", json={"spec": spec, "expanded_paths": []})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "unsupported_query"
+    assert response.json()["detail"]["reasons"] == ["filter operator 'regex'"]

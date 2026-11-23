@@ -10,11 +10,8 @@ sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
 sys.path.append(os.path.join(os.getcwd(), "serverside_pivot"))
 
 from pivot_engine.runtime import PivotRuntimeService
-from pivot_engine.runtime import core_shadow
 
 
-def _core_on() -> bool:
-    return core_shadow.core_mode() == "on"
 from pivot_engine.tanstack_adapter import (  # noqa: E402
     TanStackOperation,
     TanStackRequest,
@@ -1114,18 +1111,12 @@ async def test_pivot_formula_totals_sum_materialized_formula_values():
 
     assert north_row["France_formula_1"] == pytest.approx(0.4)
     assert north_row["Germany_formula_1"] == pytest.approx(0.2)
-    if _core_on():
-        # REQ-AGG-010: a total is the formula of the total's own measures, (200 - 140) / 200
-        assert north_row["__RowTotal__formula_1"] == pytest.approx(0.3)
-        assert grand_total_row["France_formula_1"] == pytest.approx(100 / 180)
-        assert grand_total_row["Germany_formula_1"] == pytest.approx(50 / 220)
-        assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(150 / 400)
-        return
-    # Legacy sums the rendered formula cells across and down (finding F-FORMULA-TOTALS).
-    assert north_row["__RowTotal__formula_1"] == pytest.approx(0.6)
-    assert grand_total_row["France_formula_1"] == pytest.approx(1.15)
-    assert grand_total_row["Germany_formula_1"] == pytest.approx(0.45)
-    assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(1.6)
+    # REQ-AGG-010: a total is the formula of the total's own measures, (200 - 140) / 200
+    # (legacy summed the rendered formula cells across and down: F-FORMULA-TOTALS).
+    assert north_row["__RowTotal__formula_1"] == pytest.approx(0.3)
+    assert grand_total_row["France_formula_1"] == pytest.approx(100 / 180)
+    assert grand_total_row["Germany_formula_1"] == pytest.approx(50 / 220)
+    assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(150 / 400)
 
 
 @pytest.mark.asyncio
@@ -1286,14 +1277,10 @@ async def test_virtual_scroll_grand_total_formula_uses_full_top_level_rollup_not
         if row.get("_isTotal")
     )
 
-    if _core_on():  # REQ-AGG-010: the grand total's own measures, independent of the row window
-        assert grand_total_row["France_formula_1"] == pytest.approx(100 / 180)
-        assert grand_total_row["Germany_formula_1"] == pytest.approx(50 / 220)
-        assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(150 / 400)
-        return
-    assert grand_total_row["France_formula_1"] == pytest.approx(1.15)
-    assert grand_total_row["Germany_formula_1"] == pytest.approx(0.45)
-    assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(1.6)
+    # REQ-AGG-010: the grand total's own measures, independent of the row window
+    assert grand_total_row["France_formula_1"] == pytest.approx(100 / 180)
+    assert grand_total_row["Germany_formula_1"] == pytest.approx(50 / 220)
+    assert grand_total_row["__RowTotal__formula_1"] == pytest.approx(150 / 400)
 
 
 @pytest.mark.asyncio
@@ -1512,5 +1499,5 @@ async def test_formula_sorted_virtual_scroll_orders_by_and_totals_the_formula():
     regular = [(row["region"], row["formula_1"]) for row in rows if not row.get("_isTotal")]
     assert regular == [("South", pytest.approx(90 / 200)), ("North", pytest.approx(60 / 200))]
     total = next(row for row in rows if row.get("_isTotal"))
-    expected_total = 150 / 400 if _core_on() else 90 / 200 + 60 / 200  # legacy sums (F-FORMULA-TOTALS)
+    expected_total = 150 / 400  # the formula of the totals (legacy summed the rows: F-FORMULA-TOTALS)
     assert total["formula_1"] == pytest.approx(expected_total)

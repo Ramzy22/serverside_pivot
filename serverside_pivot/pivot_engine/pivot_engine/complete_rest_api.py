@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.export_limits import ExportLimitError
 from pivot_engine.types.pivot_spec import PivotSpec
+from pivot_engine.transport.core_bridge import CoreUnsupported
 from pivot_engine.config import get_config
 from pivot_engine.security import (
     authenticate_user_credentials,
@@ -340,6 +341,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -379,6 +382,8 @@ class CompletePivotAPI:
                 raise HTTPException(status_code=413, detail="Export exceeds the configured limit.") from exc
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -413,6 +418,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -451,6 +458,8 @@ class CompletePivotAPI:
                 return APIResponse(status="success", data=result)
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -486,6 +495,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -511,6 +522,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
 
@@ -529,6 +542,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -563,6 +578,8 @@ class CompletePivotAPI:
                 )
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+            except CoreUnsupported as e:  # a request the semantic core does not express
+                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         
@@ -593,6 +610,8 @@ class CompletePivotAPI:
             return APIResponse(status="success", data=data, metadata=metadata)
         except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
             raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
+        except CoreUnsupported as e:  # a request the semantic core does not express
+            raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
         except Exception as e:
             raise HTTPException(status_code=500, detail="Internal server error.") from e
 

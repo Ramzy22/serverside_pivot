@@ -10,6 +10,8 @@ import pytest
 
 from pivot_engine.core.ir import Expr, MeasureFilter, MeasureRef, Predicate, PredicateGroup, SortKey, Window
 from pivot_engine.transport.core_bridge import CoreUnsupported, core_hierarchy_view, spec_to_query
+
+from .contract_snapshots import assert_contract
 from pivot_engine.types.pivot_spec import Measure, MeasureAxisConfig, PivotConfig, PivotSpec
 
 
@@ -242,12 +244,11 @@ def test_absolute_sort_maps_and_orders_by_magnitude():  # REQ-SORT-002
     assert q.sort == (SortKey("v_sum", True, True),)
 
 
-def _drill(mode, payload, monkeypatch):
+def _drill(payload):
     import asyncio
 
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
-    monkeypatch.setenv("PIVOT_CORE", mode)
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow("d", pa.table({"region": ["North", "North", "South"], "v": [1, 2, 3]}))
     request = TanStackRequest(operation=TanStackOperation.GET_DATA, table="d", columns=[{"id": "v_sum", "aggregationField": "v",
@@ -256,18 +257,14 @@ def _drill(mode, payload, monkeypatch):
     return result.get("total_rows", result.get("totalRows"))
 
 
-@pytest.mark.parametrize("mode", [
-    pytest.param("off", marks=pytest.mark.xfail(strict=True, reason="F-DRILL-FIELDS: legacy ignores rowFields")),
-    "on",
-])
-def test_legacy_drill_honours_row_fields(mode, monkeypatch):  # REQ-DET-001
-    assert _drill(mode, {"rowPath": "North", "rowFields": ["region"]}, monkeypatch) == 2
-    assert _drill(mode, {"row_path": "North", "row_fields": ["region"]}, monkeypatch) == 2
+def test_drill_honours_row_fields():  # REQ-DET-001 (legacy ignored rowFields: F-DRILL-FIELDS)
+    assert _drill({"rowPath": "North", "rowFields": ["region"]}) == 2
+    assert _drill({"row_path": "North", "row_fields": ["region"]}) == 2
 
 
 @pytest.mark.parametrize("totals", [False, True])
 @pytest.mark.parametrize("window", [(0, 99), (0, 2), (3, 6), (5, 9)])
-def test_tabular_subtotals_post_order_matches_legacy(totals, window):
+def test_tabular_subtotals_post_order_matches_legacy(totals, window, request):
     """REQ-LAYOUT-001: tabular subtotals are the post-order of the fully expanded tree (grand total last)."""
     import asyncio
     import os
@@ -276,80 +273,58 @@ def test_tabular_subtotals_post_order_matches_legacy(totals, window):
 
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
-    def run(mode):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
-                "region": ["North", "North", "South", "East"], "country": ["USA", "Canada", "Brazil", "Japan"],
-                "sales": [1.0, 2.0, 4.0, 8.0]}))
-            request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA, table="s",
-                columns=[{"id": "region"}, {"id": "country"},
-                         {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
-                filters={}, sorting=[], grouping=["region", "country"], aggregations=[],
-                pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=True,
-                layout_mode="tabular", show_subtotal_footers=True)
-            response = asyncio.run(adapter.handle_virtual_scroll_request(
-                request, window[0], window[1], expanded_paths=[["North"]]))  # expansion is ignored
-            return response.total_rows, [(r.get("_path"), bool(r.get("_isTabularSubtotal")), bool(r.get("_isTotal")),
-                                          r.get("sales_sum")) for r in response.data]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run():
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
+            "region": ["North", "North", "South", "East"], "country": ["USA", "Canada", "Brazil", "Japan"],
+            "sales": [1.0, 2.0, 4.0, 8.0]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="s",
+            columns=[{"id": "region"}, {"id": "country"},
+                     {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+            filters={}, sorting=[], grouping=["region", "country"], aggregations=[],
+            pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=True,
+            layout_mode="tabular", show_subtotal_footers=True)
+        response = asyncio.run(adapter.handle_virtual_scroll_request(
+            request, window[0], window[1], expanded_paths=[["North"]]))  # expansion is ignored
+        return response.total_rows, [(r.get("_path"), bool(r.get("_isTabularSubtotal")), bool(r.get("_isTotal")),
+                                      r.get("sales_sum")) for r in response.data]
 
-    from pivot_engine.runtime import core_shadow
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = run("on")
-    assert core_shadow.STATS["core_served_hierarchy"] > served, "the core must serve the tabular subtotal layout"
-    assert core == run("off")
+    core = run()
+    assert_contract(request, core)
 
 
 @pytest.mark.parametrize("order", ["asc", "desc"])
-def test_member_key_sort_is_core_served_and_matches_legacy(order):
+def test_member_key_sort_is_core_served_and_matches_legacy(order, request):
     """REQ-SORT-003: a sortKeyField orders members by MIN(key) (tenor labels by days), served by the core."""
     import asyncio
     import os
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import core_shadow
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
     pillars = [("1D", 1), ("1M", 30), ("10M", 304), ("1Y", 365), ("10Y", 3650), ("100Y", 36500)]
 
-    def run(mode):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
-                "pillar": [p for p, _ in pillars] * 2, "__sortkey__pillar": [d for _, d in pillars] * 2,
-                "desk": ["X"] * len(pillars) + ["Y"] * len(pillars), "pv": [float(i) for i in range(2 * len(pillars))]}))
-            request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA, table="t",
-                columns=[{"id": "desk"}, {"id": "pillar"}, {"id": "pv_sum", "aggregationField": "pv", "aggregationFn": "sum"}],
-                filters={}, sorting=[{"id": "pillar", "desc": order == "desc", "sortKeyField": "__sortkey__pillar"}],
-                grouping=["desk", "pillar"], aggregations=[], pagination={"pageIndex": 0, "pageSize": 100}, totals=False)
-            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["X"], ["Y"]]))
-            return [(r.get("_path"), r.get("pv_sum")) for r in response.data]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run():
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+            "pillar": [p for p, _ in pillars] * 2, "__sortkey__pillar": [d for _, d in pillars] * 2,
+            "desk": ["X"] * len(pillars) + ["Y"] * len(pillars), "pv": [float(i) for i in range(2 * len(pillars))]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="t",
+            columns=[{"id": "desk"}, {"id": "pillar"}, {"id": "pv_sum", "aggregationField": "pv", "aggregationFn": "sum"}],
+            filters={}, sorting=[{"id": "pillar", "desc": order == "desc", "sortKeyField": "__sortkey__pillar"}],
+            grouping=["desk", "pillar"], aggregations=[], pagination={"pageIndex": 0, "pageSize": 100}, totals=False)
+        response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["X"], ["Y"]]))
+        return [(r.get("_path"), r.get("pv_sum")) for r in response.data]
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = run("on")
-    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
+    core = run()
     labels = [path.split("|||")[1] for path, _ in core if path and "|||" in path and path.startswith("X")]
     expected = [p for p, _ in pillars]
     assert labels == (expected if order == "asc" else expected[::-1])
-    assert core == run("off")
+    assert_contract(request, core)
 
 
 CUSTOM_DIMENSION = {
@@ -370,45 +345,33 @@ CUSTOM_DIMENSION = {
     (["region", "__custom_category__sales_band"], [{"id": "__custom_category__sales_band", "desc": True,
                                                     "sortKeyField": "__sortkey____custom_category__sales_band"}]),
 ])
-def test_custom_dimension_is_core_served_and_matches_legacy(rows, sort):
+def test_custom_dimension_is_core_served_and_matches_legacy(rows, sort, request):
     """REQ-DIM-001: first matching rule's label, else the fallback; creation order via the hidden key."""
     import asyncio
     import os
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import core_shadow
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
-    def run(mode):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            # A NULL region only where region is not a row level: legacy drops a NULL leaf and renders
-            # a NULL root as the grand total (F-NULL-LEAF / F-NULL-GT); the core keeps both.
-            null_region = None if "region" not in rows else "Central"
-            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
-                "region": ["West", "East", "North", null_region, "East", "South"],
-                "sales": [150.0, 50.0, 5.0, 1.0, 99.5, 120.0]}))
-            request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA, table="t",
-                columns=[*({"id": r} for r in rows), {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
-                filters={}, sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
-                totals=True, custom_dimensions=[CUSTOM_DIMENSION])
-            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
-            return response.total_rows, [(r.get("_path"), r.get("sales_sum")) for r in response.data]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run():
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        # A NULL region only where region is not a row level: legacy drops a NULL leaf and renders
+        # a NULL root as the grand total (F-NULL-LEAF / F-NULL-GT); the core keeps both.
+        null_region = None if "region" not in rows else "Central"
+        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+            "region": ["West", "East", "North", null_region, "East", "South"],
+            "sales": [150.0, 50.0, 5.0, 1.0, 99.5, 120.0]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="t",
+            columns=[*({"id": r} for r in rows), {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+            filters={}, sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+            totals=True, custom_dimensions=[CUSTOM_DIMENSION])
+        response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
+        return response.total_rows, [(r.get("_path"), r.get("sales_sum")) for r in response.data]
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = run("on")
-    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
-    legacy = run("off")
-    assert core == legacy, (core, legacy)
+    core = run()
+    assert_contract(request, core)
 
 
 def test_custom_dimension_keeps_a_null_member_below_a_category():
@@ -427,93 +390,71 @@ def test_custom_dimension_keeps_a_null_member_below_a_category():
 
 @pytest.mark.parametrize("field", ["pnl_sum", "__RowTotal__pnl_sum", "Q1_pnl_sum", "Q2_pnl_sum", "Q9_pnl_sum"])
 @pytest.mark.parametrize("desc", [False, True])
-def test_column_pivot_sorts_are_core_served_and_match_legacy(field, desc):
+def test_column_pivot_sorts_are_core_served_and_match_legacy(field, desc, request):
     """REQ-SORT-004: row total and pivot-cell sorts (NULL last); a plain alias or an absent member is ignored."""
     import os
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, core_shadow
+    from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState
     from pivot_engine.tanstack_adapter import create_tanstack_adapter
 
     data = {"region": ["A", "A", "B", "B", "C", "C", "D"], "q": ["Q1", "Q2", "Q1", "Q2", "Q1", "Q2", "Q2"],
             "pnl": [5.0, 1.0, 1.0, 9.0, 3.0, 3.0, 4.0]}
 
-    def run(mode):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict(data))
-            service = PivotRuntimeService(adapter_getter=lambda: adapter)
-            state = PivotViewState(row_fields=["region"], col_fields=["q"], val_configs=[{"field": "pnl", "agg": "sum"}],
-                                   sorting=[{"id": field, "desc": desc}], expanded={}, show_col_totals=False,
-                                   show_row_totals=True)
-            ctx = PivotRequestContext.from_frontend(table="t", trigger_prop="p.runtimeRequest", viewport={
-                "start": 0, "end": 50, "window_seq": 1, "state_epoch": 1, "session_id": "s", "client_instance": "c",
-                "intent": "structural"})
-            return [(r.get("region"), r.get("Q1_pnl_sum"), r.get("Q2_pnl_sum")) for r in (service.process(state, ctx).data or [])]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run():
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict(data))
+        service = PivotRuntimeService(adapter_getter=lambda: adapter)
+        state = PivotViewState(row_fields=["region"], col_fields=["q"], val_configs=[{"field": "pnl", "agg": "sum"}],
+                               sorting=[{"id": field, "desc": desc}], expanded={}, show_col_totals=False,
+                               show_row_totals=True)
+        ctx = PivotRequestContext.from_frontend(table="t", trigger_prop="p.runtimeRequest", viewport={
+            "start": 0, "end": 50, "window_seq": 1, "state_epoch": 1, "session_id": "s", "client_instance": "c",
+            "intent": "structural"})
+        return [(r.get("region"), r.get("Q1_pnl_sum"), r.get("Q2_pnl_sum")) for r in (service.process(state, ctx).data or [])]
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = run("on")
-    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
-    assert core == run("off")
+    core = run()
+    assert_contract(request, core)
 
 
 @pytest.mark.parametrize("totals", [False, True])
 @pytest.mark.parametrize("window", [(0, 99), (0, 1), (2, 4), (4, 9)])
 @pytest.mark.parametrize("sorting", [[], [{"id": "sales_sum", "desc": True}], [{"id": "country", "desc": True}]])
-def test_flat_tabular_layout_is_core_served_and_matches_legacy(totals, window, sorting):
+def test_flat_tabular_layout_is_core_served_and_matches_legacy(totals, window, sorting, request):
     """REQ-LAYOUT-002: tabular without subtotals = the leaves in sort order, grand total last."""
     import asyncio
     import os
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import core_shadow
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
-    def run(mode):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
-                "region": ["North", "North", "South", "East", "East"], "country": ["USA", "Canada", "Brazil", "Japan", "Korea"],
-                "sales": [1.0, 2.0, 4.0, 8.0, 3.0]}))
-            request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA, table="s",
-                columns=[{"id": "region"}, {"id": "country"},
-                         {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
-                filters={}, sorting=sorting, grouping=["region", "country"], aggregations=[],
-                pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=False,
-                layout_mode="tabular", show_subtotal_footers=False)
-            response = asyncio.run(adapter.handle_virtual_scroll_request(request, window[0], window[1], expanded_paths=[]))
-            return response.total_rows, [(r.get("_path"), bool(r.get("_isTotal")), r.get("sales_sum"), r.get("depth"),
-                                          bool(r.get("_has_children"))) for r in response.data]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run():
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("s", pa.Table.from_pydict({
+            "region": ["North", "North", "South", "East", "East"], "country": ["USA", "Canada", "Brazil", "Japan", "Korea"],
+            "sales": [1.0, 2.0, 4.0, 8.0, 3.0]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="s",
+            columns=[{"id": "region"}, {"id": "country"},
+                     {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"}],
+            filters={}, sorting=sorting, grouping=["region", "country"], aggregations=[],
+            pagination={"pageIndex": 0, "pageSize": 100}, totals=totals, include_subtotals=False,
+            layout_mode="tabular", show_subtotal_footers=False)
+        response = asyncio.run(adapter.handle_virtual_scroll_request(request, window[0], window[1], expanded_paths=[]))
+        return response.total_rows, [(r.get("_path"), bool(r.get("_isTotal")), r.get("sales_sum"), r.get("depth"),
+                                      bool(r.get("_has_children"))) for r in response.data]
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = run("on")
-    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
-    legacy = run("off")
-    assert core == legacy, (core, legacy)
+    core = run()
+    assert_contract(request, core)
 
 
 @pytest.mark.parametrize("subtotals", [True, False])
 @pytest.mark.parametrize("rows", [["region", "Measure Name", "desk"], ["Measure Name", "region"], ["region", "Measure Name"]])
 @pytest.mark.parametrize("agg", ["sum", "avg", "min", "count"])
 @pytest.mark.parametrize("variant", ["plain", "suppress_empty", "reversed_order", "label_desc"])
-def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subtotals):
+def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subtotals, request):
     """REQ-DIM-002: one common aggregation over plain measures = legacy's unpivot, exactly.
 
     Every level carries a sort entry: with only the label sorted, legacy leaves the other
@@ -525,7 +466,6 @@ def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subt
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import core_shadow
     from pivot_engine.runtime.service import PivotRuntimeService
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
@@ -534,45 +474,30 @@ def test_measure_axis_is_core_served_and_matches_legacy(rows, agg, variant, subt
     sort = [{"id": "Measure Name", "desc": variant == "label_desc", "sortKeyField": "__sortkey__Measure Name"},
             *({"id": r, "desc": False} for r in rows if r != "Measure Name")]
 
-    def run(mode, include_subtotals):
-        previous = os.environ.get("PIVOT_CORE")
-        os.environ["PIVOT_CORE"] = mode
-        try:
-            adapter = create_tanstack_adapter(backend_uri=":memory:")
-            adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
-                "region": ["North", "North", "South", "South", "East"], "desk": ["Rates", "Credit", "Rates", "Credit", "Rates"],
-                "sales": [100.0, 50.0, 80.0, 20.0, 7.0], "cost": [40.0, None, 30.0, 5.0, None]}))
-            request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA, table="t",
-                columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
-                filters={}, custom_dimensions=[],
-                measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount",
-                              "suppressEmptyMembers": variant == "suppress_empty",
-                              "members": [{"measureAlias": f"sales_{agg}", "label": "Sales", "order": orders[0]},
-                                          {"measureAlias": f"cost_{agg}", "label": "Cost", "order": orders[1]}]},
-                sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
-                totals=True, row_totals=False, include_subtotals=include_subtotals, version=2)
-            response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
-            return response.total_rows, [(r.get("_path"), r.get("Amount"), r.get("depth")) for r in response.data]
-        finally:
-            if previous is None:
-                os.environ.pop("PIVOT_CORE", None)
-            else:
-                os.environ["PIVOT_CORE"] = previous
+    def run(include_subtotals):
+        adapter = create_tanstack_adapter(backend_uri=":memory:")
+        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+            "region": ["North", "North", "South", "South", "East"], "desk": ["Rates", "Credit", "Rates", "Credit", "Rates"],
+            "sales": [100.0, 50.0, 80.0, 20.0, 7.0], "cost": [40.0, None, 30.0, 5.0, None]}))
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_DATA, table="t",
+            columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
+            filters={}, custom_dimensions=[],
+            measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount",
+                          "suppressEmptyMembers": variant == "suppress_empty",
+                          "members": [{"measureAlias": f"sales_{agg}", "label": "Sales", "order": orders[0]},
+                                      {"measureAlias": f"cost_{agg}", "label": "Cost", "order": orders[1]}]},
+            sorting=sort, grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+            totals=True, row_totals=False, include_subtotals=include_subtotals, version=2)
+        response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
+        return response.total_rows, [(r.get("_path"), r.get("Amount"), r.get("depth")) for r in response.data]
 
     def split(view):
         total_rows, data = view
         return total_rows, [r for r in data if r[0] != "__grand_total__"], [r for r in data if r[0] == "__grand_total__"]
 
-    served = core_shadow.STATS["core_served_hierarchy"]
-    core = split(run("on", subtotals))
-    assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
-    legacy = split(run("off", subtotals))
-    assert core[:2] == legacy[:2], (core, legacy)
-    if subtotals:
-        assert core[2] == legacy[2]
-    else:  # F-AXIS-FLAT-GT: the core's flat grand total is the hierarchy's
-        assert core[2] == split(run("off", True))[2], (core[2], legacy[2])
+    core = split(run(subtotals))
+    assert_contract(request, core)
 
 
 def test_first_last_without_an_order_field_is_a_typed_error():
@@ -634,41 +559,30 @@ def test_per_member_measure_axis_is_exact_below_the_label_and_blank_above(rows):
 
     import pyarrow as pa
 
-    from pivot_engine.runtime import core_shadow
     from pivot_engine.runtime.service import PivotRuntimeService
     from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest, create_tanstack_adapter
 
     val_configs = [{"field": "sales", "agg": "sum", "alias": "sales_sum"},
                    {"field": "peak", "agg": "max", "alias": "peak_max"},
                    {"field": "price", "agg": "weighted_avg", "alias": "px", "weightField": "qty"}]
-    previous = os.environ.get("PIVOT_CORE")
-    os.environ["PIVOT_CORE"] = "on"
-    try:
-        adapter = create_tanstack_adapter(backend_uri=":memory:")
-        adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
-            "region": ["North", "North", "South", "South"], "desk": ["Rates", "Credit", "Rates", "Credit"],
-            "sales": [100.0, 50.0, 80.0, 20.0], "peak": [7.0, 5.0, 9.0, 4.0],
-            "price": [10.0, 20.0, 30.0, 40.0], "qty": [1.0, 3.0, 1.0, 1.0]}))
-        request = TanStackRequest(
-            operation=TanStackOperation.GET_DATA, table="t",
-            columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
-            filters={}, custom_dimensions=[],
-            measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount", "members": [
-                {"measureAlias": "sales_sum", "label": "Sales", "order": 0},
-                {"measureAlias": "peak_max", "label": "Peak", "order": 1},
-                {"measureAlias": "px", "label": "Price", "order": 2}]},
-            sorting=[{"id": "Measure Name", "desc": False, "sortKeyField": "__sortkey__Measure Name"},
-                     *({"id": r, "desc": False} for r in rows if r != "Measure Name")],
-            grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
-            totals=True, row_totals=False, include_subtotals=True, version=2)
-        served = core_shadow.STATS["core_served_hierarchy"]
-        response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
-        assert core_shadow.STATS["core_served_hierarchy"] > served, dict(core_shadow.UNSUPPORTED)
-    finally:
-        if previous is None:
-            os.environ.pop("PIVOT_CORE", None)
-        else:
-            os.environ["PIVOT_CORE"] = previous
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("t", pa.Table.from_pydict({
+        "region": ["North", "North", "South", "South"], "desk": ["Rates", "Credit", "Rates", "Credit"],
+        "sales": [100.0, 50.0, 80.0, 20.0], "peak": [7.0, 5.0, 9.0, 4.0],
+        "price": [10.0, 20.0, 30.0, 40.0], "qty": [1.0, 3.0, 1.0, 1.0]}))
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA, table="t",
+        columns=PivotRuntimeService._build_request_columns([r for r in rows if r != "Measure Name"], [], val_configs),
+        filters={}, custom_dimensions=[],
+        measure_axis={"placement": "rows", "labelField": "Measure Name", "valueField": "Amount", "members": [
+            {"measureAlias": "sales_sum", "label": "Sales", "order": 0},
+            {"measureAlias": "peak_max", "label": "Peak", "order": 1},
+            {"measureAlias": "px", "label": "Price", "order": 2}]},
+        sorting=[{"id": "Measure Name", "desc": False, "sortKeyField": "__sortkey__Measure Name"},
+                 *({"id": r, "desc": False} for r in rows if r != "Measure Name")],
+        grouping=rows, aggregations=[], pagination={"pageIndex": 0, "pageSize": 100},
+        totals=True, row_totals=False, include_subtotals=True, version=2)
+    response = asyncio.run(adapter.handle_virtual_scroll_request(request, 0, 99, expanded_paths=[["__ALL__"]]))
     got = {r["_path"]: r.get("Amount") for r in response.data}
     if rows[0] == "region":
         assert got["North"] is None and got["North|||Rates"] is None and got["__grand_total__"] is None
@@ -845,3 +759,14 @@ def test_nulls_first_and_keyed_sorts_with_a_sort_type_map_to_the_core():  # REQ-
     q = spec_to_query(spec(sort=[{"field": "r", "sortKeyField": "v", "sortType": "tenor", "absoluteSort": True}]),
                       [], SCHEMA)
     assert q.sort == (SortKey("r", False, False, "v"),)  # the supplied key is the order
+
+
+def test_an_and_group_of_measure_conditions_is_one_measure_filter_each():  # REQ-TOT-007
+    group = {"op": "AND", "conditions": [{"field": "v_sum", "op": ">", "value": 1},
+                                         {"field": "v_sum", "op": "<", "value": 9}]}
+    q = spec_to_query(spec(filters=[group]), [], SCHEMA)
+    assert q.measure_filters == (MeasureFilter(2, "v_sum", ">", 1.0), MeasureFilter(2, "v_sum", "<", 9.0))
+    single_or = {"op": "OR", "conditions": [{"field": "v_sum", "op": ">", "value": 1}]}
+    assert spec_to_query(spec(filters=[single_or]), [], SCHEMA).measure_filters == (MeasureFilter(2, "v_sum", ">", 1.0),)
+    with pytest.raises(CoreUnsupported, match="compound measure filter"):
+        spec_to_query(spec(filters=[{"op": "OR", "conditions": group["conditions"]}]), [], SCHEMA)
