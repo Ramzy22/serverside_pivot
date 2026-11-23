@@ -638,7 +638,7 @@ def _expanded(target_paths: Any, rows: Sequence[str], families: Mapping[str, str
 _SPEC_FIELDS = {"table", "rows", "columns", "measures", "filters", "custom_dimensions", "sort", "offset", "cursor",
                 "totals", "having", "subtotals", "grouping_config", "pivot_config", "measure_axis", "drill_paths",
                 "group_allow_unbalanced", "unbalanced_values",  # REQ-DIM-005: a ragged hierarchy
-                "full_rows",  # checked below: only the displayed rows themselves (a no-op) are served
+                "full_rows",  # checked below: the rows extended with known fields (a no-op) are served
                 "limit",  # the hierarchy view is windowed by start/end rows
                 "column_sort_options",  # orders the column catalog only; cells are keyed by member
                 "formulas"}  # REQ-AGG-010
@@ -721,8 +721,11 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
         if getattr(spec, attr, None):
             reasons.append(label)
     full_rows = [str(r) for r in getattr(spec, "full_rows", None) or []]
-    if full_rows and full_rows != [str(r) for r in spec.rows or []]:
-        reasons.append("spec field 'full_rows'")  # visual totals over hidden deeper levels
+    shown_rows = [str(r) for r in spec.rows or []]
+    if full_rows and (full_rows[: len(shown_rows)] != shown_rows or any(f not in families for f in full_rows)):
+        # A hierarchy deeper than the shown rows changes no node value (REQ-TOT-001: a node is agg(E∩n)),
+        # so only a full_rows that extends the rows with known fields is a no-op.
+        reasons.append("spec field 'full_rows'")
     axis = _measure_axis(spec, families, reasons)  # REQ-DIM-002
     if axis is None and reasons and getattr(getattr(spec, "measure_axis", None), "placement", "none") != "none":
         raise CoreUnsupported(reasons)  # the rest of the spec names the axis columns: only the axis reasons count
@@ -811,6 +814,10 @@ def spec_to_query(spec: Any, target_paths: Any, schema: Mapping[str, Any], *, st
             alias = max((a for a in aliases if field_text.endswith(f"_{a}")), key=len)
             cell_sorts.append((len(sort), field_text[: -len(alias) - 1], alias,
                                str(s.get("order", "asc")).lower() == "desc", absolute))
+        elif s.get("field") not in columns and (
+                s.get("field") in families
+                or s.get("field") in {f"{m.field}_{m.agg}" for m in spec.measures or [] if m.field}):
+            continue  # a source field or a measure's field_agg name is no column of the view: ignored (legacy)
         else:
             reasons.append(f"sort on {s.get('field')!r}")
 
@@ -960,7 +967,7 @@ def core_hierarchy_view(
     spec: Any,
     target_paths: Any,
     start_row: int,
-    end_row: int,
+    end_row: Optional[int],
     *,
     include_grand_total_row: bool = False,
     total_cache: Optional[Dict[str, int]] = None,
@@ -1001,6 +1008,8 @@ def core_hierarchy_view(
         return _legacy_row(record, query, keys, totals_column)
 
     nodes = _visible_node_count(query, relation, total_cache) - 1
+    if end_row is None:  # the whole flattened list
+        end_row = nodes
     if tabular_subtotals or flat:
         return _post_order_view(query, resolver, legacy, nodes, int(start_row), int(end_row), totals,
                                 include_grand_total_row, started, flat=flat)

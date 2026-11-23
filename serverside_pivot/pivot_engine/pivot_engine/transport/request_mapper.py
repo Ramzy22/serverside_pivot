@@ -482,9 +482,15 @@ class TanStackRequestMapper(FormulaEngineMixin):
         # The hierarchy column has id="hierarchy" in the frontend but the backend
         # needs the actual first row dimension field name.
         pivot_sort = []
+        # A display-column formula is evaluated on the rendered rows: only the adapter can order by it.
+        column_formula_ids = {
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if self._is_column_formula_column(col) and col.get("id")
+        }
         for sort_spec in request.sorting:
             col_id = sort_spec["id"]
-            if not col_id or col_id == "__row_number__":
+            if not col_id or col_id == "__row_number__" or col_id in column_formula_ids:
                 continue
             if col_id == "hierarchy" and request.grouping:
                 col_id = request.grouping[0]

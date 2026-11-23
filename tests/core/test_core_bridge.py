@@ -769,3 +769,18 @@ def test_formula_totals_are_the_formula_of_the_total_measures():  # REQ-AGG-010
         ("South", pytest.approx(90 / 200)), ("North", pytest.approx(60 / 200)),
         ("__grand_total__", pytest.approx(150 / 400))]
     assert view["grand_total_formula_source_rows"] == []
+
+
+def test_sorts_naming_no_column_of_the_view_are_ignored():  # REQ-SORT-004
+    schema = ibis.schema({"r": "string", "c": "string", "s": "float64"})
+
+    def sort(entries, columns=()):
+        spec = PivotSpec(table="t", rows=["r"], columns=list(columns), pivot_config=PivotConfig(enabled=True),
+                         measures=[Measure(field="s", agg="sum", alias="revenue")], sort=entries)
+        return spec_to_query(spec, [["__ALL__"]], schema).sort
+
+    assert sort([{"field": "s", "order": "desc"}]) == ()  # a source field that is not a row
+    assert sort([{"field": "s_sum", "order": "desc"}], columns=["c"]) == ()  # field_agg, not the alias
+    assert sort([{"field": "revenue", "order": "desc"}]) == (SortKey("revenue", True),)
+    with pytest.raises(CoreUnsupported, match="sort on 'nope'"):
+        sort([{"field": "nope"}])

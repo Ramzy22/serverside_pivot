@@ -1478,3 +1478,39 @@ async def test_structural_formula_response_keeps_columns_and_col_schema_in_sync(
         and not row.get("_isTotal")
     )
     assert windowed_row["formula_1"] == pytest.approx(60.0)
+
+
+@pytest.mark.asyncio
+async def test_formula_sorted_virtual_scroll_orders_by_and_totals_the_formula():  # REQ-AGG-010
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict({
+            "region": ["North", "North", "South", "South"],
+            "sales": [100, 100, 80, 120],
+            "cost": [60, 80, 20, 90],
+        }),
+    )
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+            {"id": "formula_1", "header": "Margin %", "formulaExpr": "(sales - cost) / sales",
+             "formulaLabel": "Margin %", "isFormula": True},
+        ],
+        filters={},
+        sorting=[{"id": "formula_1", "desc": True}],
+        grouping=["region"],
+        aggregations=[],
+        totals=True,
+    )
+    response = await adapter.handle_virtual_scroll_request(request, 0, 10, [], include_grand_total=True)
+    rows = [row for row in response.data if isinstance(row, dict)]
+    regular = [(row["region"], row["formula_1"]) for row in rows if not row.get("_isTotal")]
+    assert regular == [("South", pytest.approx(90 / 200)), ("North", pytest.approx(60 / 200))]
+    total = next(row for row in rows if row.get("_isTotal"))
+    expected_total = 150 / 400 if _core_on() else 90 / 200 + 60 / 200  # legacy sums (F-FORMULA-TOTALS)
+    assert total["formula_1"] == pytest.approx(expected_total)

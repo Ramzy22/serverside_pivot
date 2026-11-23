@@ -2169,8 +2169,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             target_paths = [["__ALL__"]]
 
         if hasattr(self.controller, "run_hierarchy_view"):
-            hierarchy_view = await self.controller.run_hierarchy_view(
-                pivot_spec, target_paths
+
+            async def _legacy_full_view() -> Dict[str, Any]:
+                return await self.controller.run_hierarchy_view(pivot_spec, target_paths)
+
+            # The whole visible tree (no window), from the core when it can serve it.
+            hierarchy_view = await self._hierarchy_view_routed(
+                pivot_spec, target_paths, 0, None,
+                include_grand_total=False, legacy=_legacy_full_view,
             )
             tanstack_result = self.convert_pivot_result_to_tanstack_format(
                 hierarchy_view.get("rows", []), request
@@ -2451,7 +2457,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         pivot_spec: Any,
         target_paths: Any,
         start_row: int,
-        end_row: int,
+        end_row: Optional[int],
         *,
         include_grand_total: bool,
         tabular_subtotals: bool = False,
