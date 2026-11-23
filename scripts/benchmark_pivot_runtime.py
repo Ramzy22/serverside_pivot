@@ -159,8 +159,8 @@ def run_benchmark(row_count: int, repeat_runs: int) -> Dict[str, Any]:
                 ),
             },
             "cache": {
-                "hits": int(controller.core_cache.hits),
-                "misses": int(controller.core_cache.misses),
+                "hits": int(getattr(getattr(controller, "core_cache", None), "hits", 0)),
+                "misses": int(getattr(getattr(controller, "core_cache", None), "misses", 0)),
             },
             "viewportRows": len(viewport_result.get("rows", [])),
             "repeatRuns": repeat_runs,
