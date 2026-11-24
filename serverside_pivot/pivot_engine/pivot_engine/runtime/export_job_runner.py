@@ -15,7 +15,8 @@ import time
 import uuid
 
 from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease, current_workload_account
-from .export_jobs import ExportJobSnapshot, EXPORT_JOB_TERMINAL_PHASES
+from .export_jobs import ExportJobSnapshot, EXPORT_JOB_ERROR_CODES, EXPORT_JOB_TERMINAL_PHASES
+from ..export_limits import ExportLimitError
 from .models import PivotRequestContext, PivotViewState
 from .export_service import ExportWriteControl, current_export_write
 from ..core.authority.scope import submit_with_scope
@@ -40,6 +41,7 @@ class _Execution:
     resources_released: bool = False
     finalized: bool = False
     cleanup_last_logged: float = 0
+    error_code: str | None = None
 
 
 class ExportJobRunner:
@@ -243,6 +245,10 @@ class ExportJobRunner:
             execution.control.checkpoint()
         response = await self.service._router.process_async(state, execution.context, export_lease=execution.lease)
         if response.status != "export" or not response.export_payload:
+            limit_code = (response.export_payload or {}).get("limitCode") if response.status == "error" else None
+            if limit_code in EXPORT_JOB_ERROR_CODES:
+                execution.error_code = limit_code
+                raise ExportLimitError(str(response.message or limit_code), limit_code=limit_code)
             raise RuntimeError("Export failed before publication")
         execution.control.checkpoint()
         payload = response.export_payload
@@ -254,6 +260,8 @@ class ExportJobRunner:
         account_token = current_workload_account.set(execution.context.accounting_account)
         try:
             asyncio.run(self._execute(execution, state))
+        except ExportLimitError:
+            log.info("Export %s stopped at a server limit: %s", job_id, execution.error_code)
         except BaseException:
             if not execution.control.cancelled.is_set():
                 log.exception("Export execution failed: %s", job_id)
@@ -262,10 +270,15 @@ class ExportJobRunner:
             current_export_write.reset(token)
             current_workload_account.reset(account_token)
 
-    def _acknowledge_stopped(self, job, epoch):
+    def _acknowledge_stopped(self, job, epoch, *, error_code=None):
         current = self.job_store.get(job.job_id, job.subject, job.table)
         if current and current.phase not in EXPORT_JOB_TERMINAL_PHASES:
-            self.job_store.advance(job.job_id, epoch, "cancelled" if current.phase == "cancelling" else "failed")
+            if current.phase == "cancelling":
+                self.job_store.advance(job.job_id, epoch, "cancelled")
+            elif error_code is not None:
+                self.job_store.advance(job.job_id, epoch, {"phase": "failed", "error_code": error_code})
+            else:
+                self.job_store.advance(job.job_id, epoch, "failed")
 
     def _finalize(self, execution):
         with self._lock:
@@ -281,7 +294,7 @@ class ExportJobRunner:
                     execution.lease.release()
                     self._capacity.release()
                     execution.resources_released = True
-                self._acknowledge_stopped(execution.job, execution.epoch)
+                self._acknowledge_stopped(execution.job, execution.epoch, error_code=execution.error_code)
                 self._active.pop(execution.job.job_id, None)
                 execution.finalized = True
             except Exception:

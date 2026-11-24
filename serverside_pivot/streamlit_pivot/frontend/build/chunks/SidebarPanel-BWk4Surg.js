@@ -1,6 +1,6 @@
-import { j as e, I as E, $ as ke, a0 as Ot, a1 as Ht, a2 as wr, a3 as ir, a4 as Nt, a5 as Ut, a6 as Vt, a7 as He, a8 as sr, a9 as dr, G as Kt, aa as Yt, ab as Zt, ac as Gt, ad as Je, ae as ut, af as Xt, ag as qr, T as ne, ah as qt, ai as Jt, aj as Qt, ak as Jr, al as en, am as rn } from "./index-D4WX8QbF.js";
+import { j as e, I as E, a1 as ke, a2 as Or, a3 as Nr, a4 as wt, a5 as it, a6 as Hr, a7 as Ur, a8 as Vr, a9 as Ne, aa as st, ab as dt, G as Kr, ac as Yr, ad as Zr, ae as Gr, af as Je, ag as ur, ah as Xr, ai as qt, T as ne, aj as qr, ak as Jr, al as Qr, am as Jt, an as en, ao as tn } from "./index-D68SRNaU.js";
 import { a as de, R as u } from "./charts-DthW1Q8W.js";
-const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: k, onLoadMoreOptions: y, onOpen: F }) => {
+const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: j, onLoadMoreOptions: y, onOpen: F }) => {
   const [s, b] = de.useState(!1), W = l && (l.conditions || l.value), P = () => b(!1), M = () => {
     const $ = !s;
     b($), $ && typeof F == "function" && F(t.id);
@@ -26,50 +26,50 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       }
     ),
     s && /* @__PURE__ */ e.jsx("div", { style: { padding: "8px", borderBottom: `1px solid ${n.border}44` }, children: /* @__PURE__ */ e.jsx(
-      Ot,
+      Or,
       {
         column: t,
         onFilter: o,
         currentFilter: l,
         options: x,
         optionMeta: f,
-        onSearchOptions: k,
+        onSearchOptions: j,
         onLoadMoreOptions: y,
         theme: n,
         onClose: P
       }
     ) })
   ] });
-}, kr = ({ title: t, children: n, items: i, renderItem: o, theme: l, styles: x, initialExpanded: f = !0, count: k, onDrop: y, sectionId: F }) => {
-  const [s, b] = de.useState(f), [W, P] = de.useState(f), [M, $] = de.useState(f), [h, R] = de.useState(!1), A = de.useRef(null);
+}, kt = ({ title: t, children: n, items: i, renderItem: o, theme: l, styles: x, initialExpanded: f = !0, count: j, onDrop: y, sectionId: F }) => {
+  const [s, b] = de.useState(f), [W, P] = de.useState(f), [M, $] = de.useState(f), [h, C] = de.useState(!1), D = de.useRef(null);
   de.useEffect(() => {
     if (s) {
       P(!0);
-      const C = setTimeout(() => $(!0), 220);
-      return () => clearTimeout(C);
+      const w = setTimeout(() => $(!0), 220);
+      return () => clearTimeout(w);
     }
     $(!1);
-    const w = setTimeout(() => P(!1), 220);
-    return () => clearTimeout(w);
+    const k = setTimeout(() => P(!1), 220);
+    return () => clearTimeout(k);
   }, [s]);
-  const T = Ht({
+  const I = Nr({
     count: i ? i.length : 0,
-    getScrollElement: () => A.current,
+    getScrollElement: () => D.current,
     estimateSize: () => 32,
     overscan: 10,
     enabled: !!i && (s || W)
-  }), U = (w) => {
-    w.preventDefault(), R(!0);
-  }, D = () => {
-    R(!1);
-  }, O = (w) => {
-    w.preventDefault(), R(!1);
-    const C = w.dataTransfer.getData("text/plain");
-    y && C && y(C, F);
-  }, a = (w) => {
-    (w.key === "Enter" || w.key === " ") && (w.preventDefault(), b(
+  }), N = (k) => {
+    k.preventDefault(), C(!0);
+  }, R = () => {
+    C(!1);
+  }, O = (k) => {
+    k.preventDefault(), C(!1);
+    const w = k.dataTransfer.getData("text/plain");
+    y && w && y(w, F);
+  }, a = (k) => {
+    (k.key === "Enter" || k.key === " ") && (k.preventDefault(), b(
       /** @param {any} [prev] @returns {any} */
-      (C) => !C
+      (w) => !w
     ));
   };
   return /* @__PURE__ */ e.jsxs(
@@ -87,8 +87,8 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
         boxShadow: h ? `inset 0 0 0 1.5px ${l.primary}` : void 0,
         transition: "background-color 140ms ease, box-shadow 140ms ease"
       },
-      onDragOver: U,
-      onDragLeave: D,
+      onDragOver: N,
+      onDragLeave: R,
       onDrop: O,
       children: [
         /* @__PURE__ */ e.jsxs(
@@ -111,7 +111,7 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                 transition: "transform 160ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))"
               }, children: /* @__PURE__ */ e.jsx(E.ChevronRight, {}) }),
               /* @__PURE__ */ e.jsx("span", { style: { flex: 1 }, children: t }),
-              k !== void 0 && /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", opacity: 0.7, background: l.hover, padding: "2px 7px", borderRadius: "10px", fontVariantNumeric: "tabular-nums" }, children: k })
+              j !== void 0 && /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", opacity: 0.7, background: l.hover, padding: "2px 7px", borderRadius: "10px", fontVariantNumeric: "tabular-nums" }, children: j })
             ]
           }
         ),
@@ -124,7 +124,7 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
             children: /* @__PURE__ */ e.jsx(
               "div",
               {
-                ref: A,
+                ref: D,
                 className: "sp-disclosure-inner",
                 style: {
                   ...x.toolPanelList,
@@ -132,12 +132,12 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                   overflowY: s && M ? "auto" : "hidden"
                 },
                 children: i ? /* @__PURE__ */ e.jsx("div", { style: {
-                  height: `${T.getTotalSize()}px`,
+                  height: `${I.getTotalSize()}px`,
                   width: "100%",
                   position: "relative"
-                }, children: T.getVirtualItems().map(
+                }, children: I.getVirtualItems().map(
                   /** @param {any} [virtualRow] @returns {any} */
-                  (w) => /* @__PURE__ */ e.jsx(
+                  (k) => /* @__PURE__ */ e.jsx(
                     "div",
                     {
                       style: {
@@ -145,12 +145,12 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                         top: 0,
                         left: 0,
                         width: "100%",
-                        height: `${w.size}px`,
-                        transform: `translateY(${w.start}px)`
+                        height: `${k.size}px`,
+                        transform: `translateY(${k.start}px)`
                       },
-                      children: o(i[w.index], w.index)
+                      children: o(i[k.index], k.index)
                     },
-                    w.index
+                    k.index
                   )
                 ) }) : n
               }
@@ -160,85 +160,102 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       ]
     }
   );
-}, pt = ({ column: t, level: n, theme: i, styles: o, handlePinColumn: l, colSearch: x, selectedCols: f, setSelectedCols: k, onDrop: y, sectionId: F }) => {
-  const [s, b] = de.useState(n < 1), [W, P] = de.useState(!1), [M, $] = de.useState(!1), h = de.useRef(null), R = t.columns && t.columns.length > 0, A = t.columnDef.header;
-  let T = typeof A == "string" ? A : t.id;
-  typeof T == "string" && T.startsWith("group_") && (T = t.id.replace("group_", "").split("|||").pop() || T), t.headerVal && (T = t.headerVal), T = ke(T);
-  const U = t.getIsPinned(), D = t.getIsVisible(), O = R ? wr(t) : [t.id], a = O.length > 0 && O.every((v) => f.has(v)), w = !a && O.some((v) => f.has(v));
+}, pr = ({ column: t, level: n, theme: i, styles: o, handlePinColumn: l, colSearch: x, selectedCols: f, setSelectedCols: j, onDrop: y, sectionId: F }) => {
+  const [s, b] = de.useState(n < 1), [W, P] = de.useState(!1), [M, $] = de.useState(!1), h = de.useRef(null), C = t.columns && t.columns.length > 0, D = t.columnDef.header;
+  let I = typeof D == "string" ? D : t.id;
+  typeof I == "string" && I.startsWith("group_") && (I = t.id.replace("group_", "").split("|||").pop() || I), t.headerVal && (I = t.headerVal), I = ke(I);
+  const N = t.getIsPinned(), R = t.getIsVisible(), O = C ? wt(t) : [t.id], a = O.length > 0 && O.every((A) => f.has(A)), k = !a && O.some((A) => f.has(A));
   if (de.useEffect(() => {
-    h.current && (h.current.indeterminate = w);
-  }, [w]), x && !T.toLowerCase().includes(x.toLowerCase()))
-    if (R) {
-      const v = (V) => {
-        const G = V.columnDef.header;
-        return (typeof G == "string" ? G : V.id).toLowerCase().includes(x.toLowerCase()) ? !0 : V.columns ? V.columns.some(v) : !1;
+    h.current && (h.current.indeterminate = k);
+  }, [k]), x && !I.toLowerCase().includes(x.toLowerCase()))
+    if (C) {
+      const A = (H) => {
+        const Z = H.columnDef.header;
+        return (typeof Z == "string" ? Z : H.id).toLowerCase().includes(x.toLowerCase()) ? !0 : H.columns ? H.columns.some(A) : !1;
       };
-      if (!v(t)) return null;
+      if (!A(t)) return null;
     } else
       return null;
-  const C = (v) => {
-    v.stopPropagation();
-    const V = new Set(f), G = R ? wr(t) : [t.id];
-    G.every(
+  const w = (A) => {
+    A.stopPropagation();
+    const H = new Set(f), Z = C ? wt(t) : [t.id];
+    Z.every(
       /** @param {any} [id] @returns {any} */
-      (Q) => V.has(Q)
-    ) ? G.forEach(
+      (U) => H.has(U)
+    ) ? Z.forEach(
       /** @param {any} [id] @returns {any} */
-      (Q) => V.delete(Q)
-    ) : G.forEach(
+      (U) => H.delete(U)
+    ) : Z.forEach(
       /** @param {any} [id] @returns {any} */
-      (Q) => V.add(Q)
-    ), k(V);
-  }, B = (v) => {
-    if (v.stopPropagation(), R) {
-      const V = Nt(t), G = V.some(
+      (U) => H.add(U)
+    ), j(H);
+  }, B = (A) => {
+    if (A.stopPropagation(), C) {
+      const H = Hr(t), Z = H.some(
         /** @param {any} [c] @returns {any} */
-        (K) => !K.getIsVisible()
+        (Q) => !Q.getIsVisible()
       );
-      V.forEach(
+      H.forEach(
         /** @param {any} [c] @returns {any} */
-        (K) => K.toggleVisibility(G)
+        (Q) => Q.toggleVisibility(Z)
       );
     } else
       t.toggleVisibility();
-  }, _ = (v, V) => {
-    v.stopPropagation(), l(t.id, V);
-  }, N = (v) => {
-    $(!0), v.dataTransfer.setData("text/plain", t.id), v.dataTransfer.effectAllowed = "move";
+  }, _ = (A, H) => {
+    A.stopPropagation(), l(t.id, H);
+  }, Y = (A) => {
+    $(!0), A.dataTransfer.setData("text/plain", t.id), A.dataTransfer.effectAllowed = "move";
   }, L = () => {
     $(!1);
-  }, g = (v) => {
-    v.preventDefault(), v.stopPropagation();
-    const V = v.dataTransfer.getData("text/plain");
-    V && y && V !== t.id && y(V, F, t.id);
-  }, z = (v) => {
-    v.key === "Enter" ? B(v) : v.key === " " ? (v.preventDefault(), C(v)) : v.altKey && v.key === "ArrowLeft" ? (v.preventDefault(), l(t.id, "left")) : v.altKey && v.key === "ArrowRight" ? (v.preventDefault(), l(t.id, "right")) : v.altKey && v.key === "ArrowDown" && (v.preventDefault(), l(t.id, !1));
-  };
+  }, g = (A) => {
+    A.preventDefault(), A.stopPropagation();
+    const H = A.dataTransfer.getData("text/plain");
+    H && y && H !== t.id && y(H, F, t.id);
+  }, z = (A) => {
+    A.key === "Enter" ? B(A) : A.key === " " ? (A.preventDefault(), w(A)) : A.altKey && A.key === "ArrowLeft" ? (A.preventDefault(), l(t.id, "left")) : A.altKey && A.key === "ArrowRight" ? (A.preventDefault(), l(t.id, "right")) : A.altKey && A.key === "ArrowDown" && (A.preventDefault(), l(t.id, !1));
+  }, V = (A) => ({
+    width: "20px",
+    height: "20px",
+    padding: "2px",
+    background: A ? i.primary : "transparent",
+    border: "none",
+    cursor: "pointer",
+    borderRadius: "4px",
+    color: A ? "#fff" : i.textSec,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: A ? 1 : 0.72,
+    transition: "background-color var(--sp-dur-fast, 140ms) ease, color var(--sp-dur-fast, 140ms) ease, opacity var(--sp-dur-fast, 140ms) ease"
+  });
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
       style: { display: "flex", flexDirection: "column", opacity: M ? 0.5 : 1 },
-      draggable: !R,
-      onDragStart: N,
+      draggable: !C,
+      onDragStart: Y,
       onDragEnd: L,
-      onDragOver: (v) => v.preventDefault(),
+      onDragOver: (A) => A.preventDefault(),
       onDrop: g,
       role: "treeitem",
-      "aria-selected": a || w,
+      "aria-selected": a || k,
       "aria-expanded": s,
       children: [
         /* @__PURE__ */ e.jsxs(
           "div",
           {
+            className: "sp-col-tree-row",
             style: {
               ...o.columnItem,
-              paddingLeft: `${n * 12 + 8}px`,
-              // Reduced indentation step
-              background: a || w ? i.select : W ? i.hover : "transparent",
-              borderLeft: U ? `3px solid ${i.primary}` : "3px solid transparent"
+              gap: "5px",
+              paddingRight: "6px",
+              paddingLeft: `${n * 12 + 6}px`,
+              minWidth: 0,
+              background: a || k ? i.select : W ? i.hover : "transparent",
+              borderLeft: N ? `3px solid ${i.primary}` : "3px solid transparent"
             },
-            onMouseEnter: (v) => !(a || w) && P(!0),
-            onMouseLeave: (v) => !(a || w) && P(!1),
+            onMouseEnter: () => !(a || k) && P(!0),
+            onMouseLeave: () => !(a || k) && P(!1),
             tabIndex: 0,
             onKeyDown: z,
             children: [
@@ -248,101 +265,101 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                   ref: h,
                   type: "checkbox",
                   checked: a,
-                  onChange: C,
-                  onClick: (v) => v.stopPropagation(),
-                  style: { margin: 0, cursor: "pointer", pointerEvents: "auto" },
+                  onChange: w,
+                  onClick: (A) => A.stopPropagation(),
+                  style: { margin: 0, cursor: "pointer", pointerEvents: "auto", flexShrink: 0 },
                   tabIndex: -1
                 }
               ),
-              !R && /* @__PURE__ */ e.jsx("span", { style: { cursor: "grab", display: "flex", opacity: 0.7, marginRight: "4px" }, children: /* @__PURE__ */ e.jsx(E.DragIndicator, {}) }),
-              R ? /* @__PURE__ */ e.jsx(
+              !C && /* @__PURE__ */ e.jsx("span", { style: { cursor: "grab", display: "inline-flex", opacity: 0.55, flexShrink: 0 }, children: /* @__PURE__ */ e.jsx(E.DragIndicator, {}) }),
+              C && /* @__PURE__ */ e.jsx(
                 "span",
                 {
                   role: "button",
                   tabIndex: 0,
                   "aria-expanded": s,
-                  "aria-label": s ? `Collapse ${T}` : `Expand ${T}`,
+                  "aria-label": s ? `Collapse ${I}` : `Expand ${I}`,
                   onClick: () => b(!s),
-                  onKeyDown: (v) => {
-                    (v.key === "Enter" || v.key === " ") && (v.preventDefault(), b(!s));
+                  onKeyDown: (A) => {
+                    (A.key === "Enter" || A.key === " ") && (A.preventDefault(), b(!s));
                   },
-                  style: { cursor: "pointer", display: "flex", opacity: 0.7, marginRight: "4px" },
+                  style: { cursor: "pointer", display: "inline-flex", opacity: 0.75, flexShrink: 0 },
                   children: s ? /* @__PURE__ */ e.jsx(E.ChevronDown, {}) : /* @__PURE__ */ e.jsx(E.ChevronRight, {})
                 }
-              ) : /* @__PURE__ */ e.jsx("span", { style: { width: "20px" } }),
+              ),
               /* @__PURE__ */ e.jsx(
                 "span",
                 {
                   onClick: B,
                   style: {
                     cursor: "pointer",
-                    display: "flex",
-                    color: D ? i.primary : i.textSec,
-                    opacity: D ? 1 : 0.5,
-                    marginRight: "4px"
+                    display: "inline-flex",
+                    color: R ? i.primary : i.textSec,
+                    opacity: R ? 1 : 0.5,
+                    flexShrink: 0
                   },
-                  title: D ? "Hide Column" : "Show Column",
-                  "aria-label": D ? "Hide Column" : "Show Column",
-                  children: D ? /* @__PURE__ */ e.jsx(E.Visibility, {}) : /* @__PURE__ */ e.jsx(E.VisibilityOff, {})
+                  title: R ? "Hide Column" : "Show Column",
+                  "aria-label": R ? "Hide Column" : "Show Column",
+                  children: R ? /* @__PURE__ */ e.jsx(E.Visibility, {}) : /* @__PURE__ */ e.jsx(E.VisibilityOff, {})
                 }
               ),
               /* @__PURE__ */ e.jsxs(
                 "span",
                 {
                   style: {
-                    flex: 1,
+                    flex: "1 1 0%",
+                    minWidth: 0,
                     overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontWeight: R ? 600 : 400,
-                    cursor: R ? "pointer" : "default",
-                    color: D ? i.text : i.textSec,
-                    opacity: D ? 1 : 0.6,
+                    fontWeight: C ? 600 : 400,
+                    cursor: C ? "pointer" : "default",
+                    color: R ? i.text : i.textSec,
+                    opacity: R ? 1 : 0.6,
                     display: "flex",
-                    alignItems: "center"
+                    alignItems: "center",
+                    gap: "4px"
                   },
-                  onClick: () => R && b(!s),
-                  title: T,
+                  onClick: () => C && b(!s),
+                  title: I,
                   children: [
-                    R && /* @__PURE__ */ e.jsx(E.Group, { style: { marginRight: "6px", fontSize: "14px", opacity: 0.8 } }),
-                    T
+                    C && /* @__PURE__ */ e.jsx(E.Group, { style: { fontSize: "13px", opacity: 0.8, flexShrink: 0 } }),
+                    /* @__PURE__ */ e.jsx("span", { style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: I })
                   ]
                 }
               ),
-              !R && /* @__PURE__ */ e.jsxs("div", { className: "pin-controls", children: [
-                /* @__PURE__ */ e.jsx("button", { onClick: (v) => _(v, "left"), title: "Pin Column Left", "aria-label": "Pin Column Left", children: /* @__PURE__ */ e.jsx(E.PinLeft, {}) }),
-                /* @__PURE__ */ e.jsx("button", { onClick: (v) => _(v, !1), title: "Unpin Column", "aria-label": "Unpin Column", children: /* @__PURE__ */ e.jsx(E.Unpin, {}) }),
-                /* @__PURE__ */ e.jsx("button", { onClick: (v) => _(v, "right"), title: "Pin Column Right", "aria-label": "Pin Column Right", children: /* @__PURE__ */ e.jsx(E.PinRight, {}) })
+              !C && /* @__PURE__ */ e.jsxs("div", { className: "pin-controls sp-col-pin-controls", "data-pinned": N || void 0, children: [
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "left"), onClick: (A) => _(A, "left"), title: "Pin Column Left", "aria-label": "Pin Column Left", children: /* @__PURE__ */ e.jsx(E.PinLeft, {}) }),
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(!N), onClick: (A) => _(A, !1), title: "Unpin Column", "aria-label": "Unpin Column", children: /* @__PURE__ */ e.jsx(E.Unpin, {}) }),
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "right"), onClick: (A) => _(A, "right"), title: "Pin Column Right", "aria-label": "Pin Column Right", children: /* @__PURE__ */ e.jsx(E.PinRight, {}) })
               ] })
             ]
           }
         ),
-        R && s && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: t.columns.filter(
+        C && s && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: t.columns.filter(
           /** @param {any} [child] @returns {any} */
-          (v) => ir(v, F)
+          (A) => it(A, F)
         ).map(
           /** @param {any} [child] @returns {any} */
-          (v) => /* @__PURE__ */ e.jsx(
-            pt,
+          (A) => /* @__PURE__ */ e.jsx(
+            pr,
             {
-              column: v,
+              column: A,
               level: n + 1,
               theme: i,
               styles: o,
               handlePinColumn: l,
               colSearch: x,
               selectedCols: f,
-              setSelectedCols: k,
+              setSelectedCols: j,
               onDrop: y,
               sectionId: F
             },
-            v.id
+            A.id
           )
         ) })
       ]
     }
   );
-}, xt = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, ft = /^[A-Za-z_][A-Za-z0-9_]*$/, cr = /\[([^\]]+)\]/g, nn = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), ln = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Ee = {
+}, xr = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, fr = /^[A-Za-z_][A-Za-z0-9_]*$/, ct = /\[([^\]]+)\]/g, nn = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), ln = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Ee = {
   type: "line",
   metric: "last",
   showCurrentValue: !0,
@@ -353,7 +370,7 @@ const tn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
   source: "pivot",
   displayMode: "trend"
 };
-function gt(t) {
+function gr(t) {
   return String(t || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function Me(t, n = "formula") {
@@ -365,12 +382,12 @@ function J(t) {
     t.formulaRef || Me(t.label || "", t.field || "formula") || t.field || ""
   ).trim();
 }
-function Ne(t) {
+function He(t) {
   const n = String(t || "").trim().toLowerCase();
   return ["columns", "display", "displayed", "displayed_columns", "rendered", "rendered_columns"].includes(n) ? "columns" : "measures";
 }
 function ze(t) {
-  return Ne(t) === "columns";
+  return He(t) === "columns";
 }
 const on = [
   { value: "eq", label: "Equals" },
@@ -386,30 +403,30 @@ const on = [
   { value: "not_in", label: "Not in list" },
   { value: "is_null", label: "Is empty" },
   { value: "is_not_null", label: "Is not empty" }
-], Qr = /* @__PURE__ */ new Set(["in", "not_in"]), an = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
-function yt(t) {
+], Qt = /* @__PURE__ */ new Set(["in", "not_in"]), an = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
+function yr(t) {
   return { field: t && t[0] || "", operator: "eq", value: "", values: [], caseSensitive: !1 };
 }
-function bt(t, n = 0) {
+function br(t, n = 0) {
   return {
     id: `rule-${Date.now().toString(36)}-${n}`,
     label: n === 0 ? "Group A" : `Group ${n + 1}`,
-    condition: { op: "AND", clauses: [yt(t)] }
+    condition: { op: "AND", clauses: [yr(t)] }
   };
 }
-function et(t, n = null) {
+function er(t, n = null) {
   if (n) {
-    const o = He([n])[0] || n;
+    const o = Ne([n])[0] || n;
     return { ...JSON.parse(JSON.stringify(o)), __editingField: o.field, __editingId: o.id };
   }
-  const i = sr(`category_${Date.now().toString(36)}`);
+  const i = st(`category_${Date.now().toString(36)}`);
   return {
     id: i,
-    field: dr(i),
+    field: dt(i),
     name: "New Category",
     fallbackLabel: "Other",
     order: "creation",
-    rules: [bt(t, 0)],
+    rules: [br(t, 0)],
     __isNew: !0
   };
 }
@@ -427,19 +444,19 @@ function sn(t, n) {
         const f = x.trim();
         if (!f) continue;
         if (Number.isFinite(Number(f))) return "number";
-        const k = Date.parse(f);
-        return !Number.isNaN(k) && /[-/T:]/.test(f) ? "date" : "string";
+        const j = Date.parse(f);
+        return !Number.isNaN(j) && /[-/T:]/.test(f) ? "date" : "string";
       }
     }
   }
   return "string";
 }
-const ar = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => sn(t, o) === i);
+const at = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => sn(t, o) === i);
 function dn(t, n) {
-  const o = ar(n, t, "date")[0] || t[0] || "", l = sr(`${o || "date"}_month`);
+  const o = at(n, t, "date")[0] || t[0] || "", l = st(`${o || "date"}_month`);
   return {
     id: l,
-    field: dr(l),
+    field: dt(l),
     kind: "date_group",
     name: o ? `${ke(o)} Month` : "Date Month",
     sourceField: o,
@@ -450,10 +467,10 @@ function dn(t, n) {
   };
 }
 function cn(t, n) {
-  const o = ar(n, t, "number")[0] || t[0] || "", l = sr(`${o || "number"}_bins`);
+  const o = at(n, t, "number")[0] || t[0] || "", l = st(`${o || "number"}_bins`);
   return {
     id: l,
-    field: dr(l),
+    field: dt(l),
     kind: "number_group",
     name: o ? `${ke(o)} Bins` : "Number Bins",
     sourceField: o,
@@ -465,9 +482,9 @@ function cn(t, n) {
     __isNew: !0
   };
 }
-const rt = (t) => String(t || "").split(",").map((n) => n.trim()).filter(Boolean), tt = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase(), ht = (t) => t && (t.__editingField || t.field) ? t.__editingField || t.field : "";
+const tr = (t) => String(t || "").split(",").map((n) => n.trim()).filter(Boolean), rr = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase(), hr = (t) => t && (t.__editingField || t.field) ? t.__editingField || t.field : "";
 function un(t, n) {
-  const i = Array.isArray(t) ? t : [], o = ht(n);
+  const i = Array.isArray(t) ? t : [], o = hr(n);
   if (!o) return i;
   const l = i.findIndex(
     /** @param {any} [dimension] @returns {any} */
@@ -475,7 +492,7 @@ function un(t, n) {
   );
   return l >= 0 ? i.slice(0, l) : i;
 }
-function nt(t) {
+function nr(t) {
   const n = [];
   return (t && Array.isArray(t.rules) ? t.rules : []).forEach(
     /** @param {any} [rule] @returns {any} */
@@ -491,7 +508,7 @@ function nt(t) {
 }
 function pn(t, n) {
   const i = (Array.isArray(t) ? t : []).filter((o) => o && typeof o == "object").filter((o) => !o._isTotal && o._path !== "__grand_total__" && o._path !== "__color_scale_stats__");
-  return Ut(i, n || []);
+  return Ur(i, n || []);
 }
 function xn(t, n) {
   return !Array.isArray(t) || t.length === 0 || !Array.isArray(n) || n.length === 0 ? !1 : n.every((i) => t.some((o) => o && Object.prototype.hasOwnProperty.call(o, i)));
@@ -502,17 +519,17 @@ const fn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
     label: i && i.label ? i.label : "Rule",
     count: t.reduce(
       /** @param {any} [matches] @param {any} [row] @returns {any} */
-      (o, l) => Vt(l, i.condition) ? o + 1 : o,
+      (o, l) => Vr(l, i.condition) ? o + 1 : o,
       0
     )
   })
 ), gn = u.lazy(() => import(
   /* webpackChunkName: "pivot-report-editor" */
-  "./ReportEditor-B7oSCB3F.js"
+  "./ReportEditor-C_ZAjb_a.js"
 ).then((t) => ({
   default: t.ReportEditor
 }))), yn = (t) => /* @__PURE__ */ e.jsx(u.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(gn, { ...t }) });
-function lt({
+function lr({
   availableFields: t,
   customDimensions: n,
   setCustomDimensions: i,
@@ -520,49 +537,49 @@ function lt({
   theme: l,
   showNotification: x,
   getFieldLabel: f,
-  onDeleteField: k
+  onDeleteField: j
 }) {
   const y = u.useMemo(
     () => (t || []).filter(
       /** @param {any} [field] @returns {any} */
-      (a) => a && !ut(a)
+      (a) => a && !ur(a)
     ),
     [t]
   ), F = u.useMemo(
-    () => He(n || []),
+    () => Ne(n || []),
     [n]
   ), [s, b] = u.useState(null), W = u.useMemo(
     () => un(F, s),
     [s, F]
   ), P = u.useMemo(() => {
-    const a = /* @__PURE__ */ new Set(), w = [];
+    const a = /* @__PURE__ */ new Set(), k = [];
     return y.forEach(
       /** @param {any} [field] @returns {any} */
-      (C) => {
-        C && !a.has(C) && (a.add(C), w.push(C));
+      (w) => {
+        w && !a.has(w) && (a.add(w), k.push(w));
       }
     ), W.forEach(
       /** @param {any} [dimension] @returns {any} */
-      (C) => {
-        C && C.field && !a.has(C.field) && (a.add(C.field), w.push(C.field));
+      (w) => {
+        w && w.field && !a.has(w.field) && (a.add(w.field), k.push(w.field));
       }
-    ), w;
+    ), k;
   }, [W, y]), M = u.useMemo(
     () => {
-      const a = ar(o, y, "date");
+      const a = at(o, y, "date");
       return a.length > 0 ? a : y;
     },
     [y, o]
   ), $ = u.useMemo(
     () => {
-      const a = ar(o, y, "number");
+      const a = at(o, y, "number");
       return a.length > 0 ? a : y;
     },
     [y, o]
   ), h = u.useMemo(
     () => pn(o, W),
     [W, o]
-  ), R = u.useMemo(() => ({
+  ), C = u.useMemo(() => ({
     border: `1px solid ${l.border}`,
     background: l.background,
     color: l.text,
@@ -571,7 +588,7 @@ function lt({
     padding: "7px 8px",
     outline: "none",
     minWidth: 0
-  }), [l.background, l.border, l.text]), A = u.useCallback((a = "default") => ({
+  }), [l.background, l.border, l.text]), D = u.useCallback((a = "default") => ({
     border: a === "primary" ? `1px solid ${l.primary}` : `1px solid ${l.border}`,
     background: a === "primary" ? l.primary || "#2563EB" : l.hover || "#F8FAFC",
     color: a === "primary" ? "#fff" : l.text,
@@ -586,31 +603,31 @@ function lt({
   }), [l.border, l.hover, l.primary, l.text]);
   u.useEffect(() => {
     if (!s) return;
-    const a = (w) => {
-      w.key === "Escape" && (w.preventDefault(), b(null));
+    const a = (k) => {
+      k.key === "Escape" && (k.preventDefault(), b(null));
     };
     return window.addEventListener("keydown", a), () => window.removeEventListener("keydown", a);
   }, [s]);
-  const T = u.useCallback((a, w) => {
+  const I = u.useCallback((a, k) => {
     b(
       /** @param {any} [current] @returns {any} */
-      (C) => {
-        if (!C) return C;
-        const B = [...C.rules || []];
-        return B[a] = typeof w == "function" ? w(B[a]) : w, { ...C, rules: B };
+      (w) => {
+        if (!w) return w;
+        const B = [...w.rules || []];
+        return B[a] = typeof k == "function" ? k(B[a]) : k, { ...w, rules: B };
       }
     );
-  }, []), U = u.useCallback((a, w, C) => {
-    T(
+  }, []), N = u.useCallback((a, k, w) => {
+    I(
       a,
       /** @param {any} [rule] @returns {any} */
       (B) => {
-        const _ = B.condition || { op: "AND", clauses: [] }, N = [..._.clauses || []];
-        return N[w] = { ...N[w], ...C }, { ...B, condition: { ..._, clauses: N } };
+        const _ = B.condition || { op: "AND", clauses: [] }, Y = [..._.clauses || []];
+        return Y[k] = { ...Y[k], ...w }, { ...B, condition: { ..._, clauses: Y } };
       }
     );
-  }, [T]), D = u.useCallback(() => {
-    const a = He([s])[0];
+  }, [I]), R = u.useCallback(() => {
+    const a = Ne([s])[0];
     if (!a || !a.name) {
       x && x("A grouped field needs a name.", "warning");
       return;
@@ -623,24 +640,24 @@ function lt({
       x && x("Choose the source field to group.", "warning");
       return;
     }
-    const w = ht(s), C = tt(a.name);
+    const k = hr(s), w = rr(a.name);
     if (F.some(
       /** @param {any} [dimension] @returns {any} */
-      (_) => _ && _.field !== w && tt(_.name) === C
+      (_) => _ && _.field !== k && rr(_.name) === w
     )) {
       x && x(`A category named "${a.name}" already exists.`, "warning");
       return;
     }
     if (a.kind === "category") {
       const _ = new Set(P);
-      if (nt(a).find(
+      if (nr(a).find(
         /** @param {any} [field] @returns {any} */
         (g) => !_.has(g)
       )) {
         x && x("A category can only use base fields or categories defined before it.", "warning");
         return;
       }
-      const L = nt(a);
+      const L = nr(a);
       if (xn(h, L)) {
         const g = fn(h, a).find(
           /** @param {any} [summary] @returns {any} */
@@ -668,21 +685,21 @@ function lt({
     }
     i(
       /** @param {any} [previous] @returns {any} */
-      (_) => [...He(_ || []).filter(
+      (_) => [...Ne(_ || []).filter(
         /** @param {any} [dimension] @returns {any} */
-        (g) => g.id !== a.id && g.field !== a.field && g.field !== w
+        (g) => g.id !== a.id && g.field !== a.field && g.field !== k
       ), a]
     ), b(null), x && x(`Applied ${a.name}.`, "success");
   }, [P, M, s, F, $, i, x, h]), O = u.useCallback((a) => {
-    const w = He([a])[0];
-    w && (i(
+    const k = Ne([a])[0];
+    k && (i(
       /** @param {any} [previous] @returns {any} */
-      (C) => He(C || []).filter(
+      (w) => Ne(w || []).filter(
         /** @param {any} [item] @returns {any} */
-        (B) => B.field !== w.field
+        (B) => B.field !== k.field
       )
-    ), typeof k == "function" && k(w.field), s && s.field === w.field && b(null), x && x(`Removed ${w.name}.`, "success"));
-  }, [s, k, i, x]);
+    ), typeof j == "function" && j(k.field), s && s.field === k.field && b(null), x && x(`Removed ${k.name}.`, "success"));
+  }, [s, j, i, x]);
   return /* @__PURE__ */ e.jsxs("div", { style: {
     border: `1px solid ${l.border}`,
     background: l.headerBg || l.surfaceInset || l.background,
@@ -702,8 +719,8 @@ function lt({
         "button",
         {
           type: "button",
-          onClick: () => b(et(P)),
-          style: { ...A("primary"), whiteSpace: "nowrap", flexShrink: 0 },
+          onClick: () => b(er(P)),
+          style: { ...D("primary"), whiteSpace: "nowrap", flexShrink: 0 },
           children: "+ Category"
         }
       )
@@ -715,7 +732,7 @@ function lt({
           type: "button",
           onClick: () => b(dn(y, o)),
           disabled: M.length === 0,
-          style: { ...A(), opacity: M.length === 0 ? 0.5 : 1, cursor: M.length === 0 ? "not-allowed" : "pointer" },
+          style: { ...D(), opacity: M.length === 0 ? 0.5 : 1, cursor: M.length === 0 ? "not-allowed" : "pointer" },
           title: M.length === 0 ? "No date fields detected" : "Create date buckets",
           children: [
             /* @__PURE__ */ e.jsx(E.Group, {}),
@@ -729,7 +746,7 @@ function lt({
           type: "button",
           onClick: () => b(cn(y, o)),
           disabled: $.length === 0,
-          style: { ...A(), opacity: $.length === 0 ? 0.5 : 1, cursor: $.length === 0 ? "not-allowed" : "pointer" },
+          style: { ...D(), opacity: $.length === 0 ? 0.5 : 1, cursor: $.length === 0 ? "not-allowed" : "pointer" },
           title: $.length === 0 ? "No numeric fields detected" : "Create numeric bins",
           children: [
             /* @__PURE__ */ e.jsx(E.NumberFormat, {}),
@@ -741,7 +758,7 @@ function lt({
     F.length > 0 && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px" }, children: F.map(
       /** @param {any} [dimension] @returns {any} */
       (a) => {
-        const w = a.kind || "category", C = w === "date_group" ? `${f(a.sourceField)} by ${a.granularity}` : w === "number_group" ? `${f(a.sourceField)} every ${a.binSize}` : `${a.rules.length} rule${a.rules.length === 1 ? "" : "s"} | fallback: ${a.fallbackLabel}`;
+        const k = a.kind || "category", w = k === "date_group" ? `${f(a.sourceField)} by ${a.granularity}` : k === "number_group" ? `${f(a.sourceField)} every ${a.binSize}` : `${a.rules.length} rule${a.rules.length === 1 ? "" : "s"} | fallback: ${a.fallbackLabel}`;
         return /* @__PURE__ */ e.jsxs(
           "div",
           {
@@ -755,16 +772,16 @@ function lt({
               gap: "8px"
             },
             children: [
-              w === "number_group" ? /* @__PURE__ */ e.jsx(E.NumberFormat, {}) : /* @__PURE__ */ e.jsx(E.Branch, {}),
+              k === "number_group" ? /* @__PURE__ */ e.jsx(E.NumberFormat, {}) : /* @__PURE__ */ e.jsx(E.Branch, {}),
               /* @__PURE__ */ e.jsxs("div", { style: { minWidth: 0, flex: 1 }, children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "12px", fontWeight: 800, color: l.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: a.name }),
-                /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec }, children: C })
+                /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec }, children: w })
               ] }),
-              /* @__PURE__ */ e.jsxs("button", { type: "button", onClick: () => b(et(y, a)), style: A(), children: [
+              /* @__PURE__ */ e.jsxs("button", { type: "button", onClick: () => b(er(y, a)), style: D(), children: [
                 /* @__PURE__ */ e.jsx(E.Edit, {}),
                 " Edit"
               ] }),
-              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => O(a), style: { ...A(), color: "#B91C1C" }, children: /* @__PURE__ */ e.jsx(E.Delete, {}) })
+              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => O(a), style: { ...D(), color: "#B91C1C" }, children: /* @__PURE__ */ e.jsx(E.Delete, {}) })
             ]
           },
           a.field
@@ -819,7 +836,7 @@ function lt({
                   /* @__PURE__ */ e.jsx("div", { style: { fontSize: "13px", fontWeight: 900, color: l.text }, children: s.kind === "date_group" || s.kind === "number_group" ? s.__editingField ? "Edit Grouped Field" : "Add Grouped Field" : s.__editingField ? "Edit Custom Category" : "Add Custom Category" }),
                   /* @__PURE__ */ e.jsx("div", { style: { fontSize: "11px", color: l.textSec, marginTop: "2px" }, children: s.kind === "date_group" ? "Create calendar buckets from a date field." : s.kind === "number_group" ? "Create fixed-width numeric bins from a number field." : "Rules can use base fields and categories defined before this one." })
                 ] }),
-                /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: { ...A(), padding: "6px 8px" }, "aria-label": "Close category editor", children: /* @__PURE__ */ e.jsx(E.Close, {}) })
+                /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: { ...D(), padding: "6px 8px" }, "aria-label": "Close category editor", children: /* @__PURE__ */ e.jsx(E.Close, {}) })
               ] }),
               /* @__PURE__ */ e.jsxs("div", { style: {
                 padding: "14px",
@@ -837,10 +854,10 @@ function lt({
                       {
                         value: s.name || "",
                         onChange: (a) => {
-                          const w = a.target.value, C = s.id || sr(w);
-                          b({ ...s, name: w, id: C, field: s.field || dr(C) });
+                          const k = a.target.value, w = s.id || st(k);
+                          b({ ...s, name: k, id: w, field: s.field || dt(w) });
                         },
-                        style: R,
+                        style: C,
                         placeholder: "Example: Priority Segment"
                       }
                     )
@@ -852,7 +869,7 @@ function lt({
                       {
                         value: s.fallbackLabel || "",
                         onChange: (a) => b({ ...s, fallbackLabel: a.target.value }),
-                        style: R,
+                        style: C,
                         placeholder: "Other"
                       }
                     )
@@ -866,7 +883,7 @@ function lt({
                         "aria-label": "Member Order",
                         value: s.order || "creation",
                         onChange: (a) => b({ ...s, order: a.target.value }),
-                        style: { ...R, width: "100%" },
+                        style: { ...C, width: "100%" },
                         children: [
                           /* @__PURE__ */ e.jsx("option", { value: "creation", children: "Creation Order" }),
                           /* @__PURE__ */ e.jsx("option", { value: "alpha", children: "Alphabetical (A→Z)" }),
@@ -900,7 +917,7 @@ function lt({
                           sourceField: a.target.value,
                           name: s.__isNew ? `${f(a.target.value)} ${ke(s.granularity || "month")}` : s.name
                         }),
-                        style: { ...R, width: "100%" },
+                        style: { ...C, width: "100%" },
                         children: M.map(
                           /** @param {any} [field] @returns {any} */
                           (a) => /* @__PURE__ */ e.jsx("option", { value: a, children: f(a) }, a)
@@ -917,8 +934,8 @@ function lt({
                         "aria-label": "Date Part",
                         value: s.granularity || "month",
                         onChange: (a) => b({ ...s, granularity: a.target.value }),
-                        style: { ...R, width: "100%" },
-                        children: Array.from(Jt).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
+                        style: { ...C, width: "100%" },
+                        children: Array.from(Jr).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
                       }
                     )
                   ] }),
@@ -931,8 +948,8 @@ function lt({
                         "aria-label": "Fiscal Start",
                         value: s.fiscalYearStartMonth || 1,
                         onChange: (a) => b({ ...s, fiscalYearStartMonth: Number(a.target.value) }),
-                        style: { ...R, width: "100%" },
-                        children: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((a, w) => /* @__PURE__ */ e.jsx("option", { value: w + 1, children: a }, a))
+                        style: { ...C, width: "100%" },
+                        children: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((a, k) => /* @__PURE__ */ e.jsx("option", { value: k + 1, children: a }, a))
                       }
                     )
                   ] })
@@ -959,7 +976,7 @@ function lt({
                           sourceField: a.target.value,
                           name: s.__isNew ? `${f(a.target.value)} Bins` : s.name
                         }),
-                        style: { ...R, width: "100%" },
+                        style: { ...C, width: "100%" },
                         children: $.map(
                           /** @param {any} [field] @returns {any} */
                           (a) => /* @__PURE__ */ e.jsx("option", { value: a, children: f(a) }, a)
@@ -975,7 +992,7 @@ function lt({
                         type: "number",
                         value: s.binSize === void 0 ? "" : s.binSize,
                         onChange: (a) => b({ ...s, binSize: a.target.value }),
-                        style: R
+                        style: C
                       }
                     )
                   ] }),
@@ -987,7 +1004,7 @@ function lt({
                         type: "number",
                         value: s.minValue === null || s.minValue === void 0 ? "" : s.minValue,
                         onChange: (a) => b({ ...s, minValue: a.target.value }),
-                        style: R
+                        style: C
                       }
                     )
                   ] }),
@@ -999,7 +1016,7 @@ function lt({
                         type: "number",
                         value: s.maxValue === null || s.maxValue === void 0 ? "" : s.maxValue,
                         onChange: (a) => b({ ...s, maxValue: a.target.value }),
-                        style: R
+                        style: C
                       }
                     )
                   ] }),
@@ -1013,15 +1030,15 @@ function lt({
                         max: "8",
                         value: s.precision === null || s.precision === void 0 ? "" : s.precision,
                         onChange: (a) => b({ ...s, precision: a.target.value }),
-                        style: R
+                        style: C
                       }
                     )
                   ] })
                 ] }),
                 (!s.kind || s.kind === "category") && (s.rules || []).map(
                   /** @param {any} [rule] @param {any} [ruleIndex] @returns {any} */
-                  (a, w) => {
-                    const C = a.condition || { op: "AND", clauses: [] }, B = C.clauses || [];
+                  (a, k) => {
+                    const w = a.condition || { op: "AND", clauses: [] }, B = w.clauses || [];
                     return /* @__PURE__ */ e.jsxs("div", { style: {
                       border: `1px solid ${l.border}`,
                       borderRadius: "10px",
@@ -1036,8 +1053,8 @@ function lt({
                           "input",
                           {
                             value: a.label || "",
-                            onChange: (_) => T(w, { ...a, label: _.target.value }),
-                            style: R,
+                            onChange: (_) => I(k, { ...a, label: _.target.value }),
+                            style: C,
                             placeholder: "Category value"
                           }
                         ),
@@ -1046,9 +1063,9 @@ function lt({
                           {
                             size: "sm",
                             "aria-label": "Rule condition combiner",
-                            value: C.op || "AND",
-                            onChange: (_) => T(w, { ...a, condition: { ...C, op: _.target.value } }),
-                            style: R,
+                            value: w.op || "AND",
+                            onChange: (_) => I(k, { ...a, condition: { ...w, op: _.target.value } }),
+                            style: C,
                             children: [
                               /* @__PURE__ */ e.jsx("option", { value: "AND", children: "AND" }),
                               /* @__PURE__ */ e.jsx("option", { value: "OR", children: "OR" })
@@ -1061,9 +1078,9 @@ function lt({
                             type: "button",
                             onClick: () => b({ ...s, rules: (s.rules || []).filter(
                               /** @param {any} [_] @param {any} [index] @returns {any} */
-                              (_, N) => N !== w
+                              (_, Y) => Y !== k
                             ) }),
-                            style: { ...A(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
+                            style: { ...D(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
                             title: "Remove rule",
                             children: /* @__PURE__ */ e.jsx(E.Close, {})
                           }
@@ -1071,8 +1088,8 @@ function lt({
                       ] }),
                       B.map(
                         /** @param {any} [clause] @param {any} [clauseIndex] @returns {any} */
-                        (_, N) => {
-                          const L = an.has(_.operator), g = Qr.has(_.operator);
+                        (_, Y) => {
+                          const L = an.has(_.operator), g = Qt.has(_.operator);
                           return /* @__PURE__ */ e.jsxs("div", { style: { display: "grid", gridTemplateColumns: L ? "1fr 130px 28px" : "1fr 130px 1fr 28px", gap: "6px", alignItems: "center" }, children: [
                             /* @__PURE__ */ e.jsx(
                               ne,
@@ -1080,8 +1097,8 @@ function lt({
                                 size: "sm",
                                 "aria-label": "Clause field",
                                 value: _.field || "",
-                                onChange: (z) => U(w, N, { field: z.target.value }),
-                                style: { ...R, width: "100%" },
+                                onChange: (z) => N(k, Y, { field: z.target.value }),
+                                style: { ...C, width: "100%" },
                                 children: P.map(
                                   /** @param {any} [field] @returns {any} */
                                   (z) => /* @__PURE__ */ e.jsx("option", { value: z, children: f(z) }, z)
@@ -1095,13 +1112,13 @@ function lt({
                                 "aria-label": "Clause operator",
                                 value: _.operator || "eq",
                                 onChange: (z) => {
-                                  const v = z.target.value;
-                                  U(w, N, {
-                                    operator: v,
-                                    values: Qr.has(v) ? _.values && _.values.length ? _.values : rt(_.value) : _.values
+                                  const V = z.target.value;
+                                  N(k, Y, {
+                                    operator: V,
+                                    values: Qt.has(V) ? _.values && _.values.length ? _.values : tr(_.value) : _.values
                                   });
                                 },
-                                style: { ...R, width: "100%" },
+                                style: { ...C, width: "100%" },
                                 children: on.map((z) => /* @__PURE__ */ e.jsx("option", { value: z.value, children: z.label }, z.value))
                               }
                             ),
@@ -1109,8 +1126,8 @@ function lt({
                               "input",
                               {
                                 value: g ? (_.values || []).join(", ") : _.value || "",
-                                onChange: (z) => U(w, N, g ? { values: rt(z.target.value), value: z.target.value } : { value: z.target.value }),
-                                style: R,
+                                onChange: (z) => N(k, Y, g ? { values: tr(z.target.value), value: z.target.value } : { value: z.target.value }),
+                                style: C,
                                 placeholder: g ? "A, B, C" : "Value"
                               }
                             ),
@@ -1118,40 +1135,40 @@ function lt({
                               "button",
                               {
                                 type: "button",
-                                onClick: () => T(w, {
+                                onClick: () => I(k, {
                                   ...a,
                                   condition: {
-                                    ...C,
+                                    ...w,
                                     clauses: B.filter(
                                       /** @param {any} [_] @param {any} [index] @returns {any} */
-                                      (z, v) => v !== N
+                                      (z, V) => V !== Y
                                     )
                                   }
                                 }),
-                                style: { ...A(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
+                                style: { ...D(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
                                 title: "Remove condition",
                                 children: /* @__PURE__ */ e.jsx(E.Close, {})
                               }
                             )
-                          ] }, `${a.id || w}:${N}`);
+                          ] }, `${a.id || k}:${Y}`);
                         }
                       ),
                       /* @__PURE__ */ e.jsx(
                         "button",
                         {
                           type: "button",
-                          onClick: () => T(w, {
+                          onClick: () => I(k, {
                             ...a,
                             condition: {
-                              ...C,
-                              clauses: [...B, yt(P)]
+                              ...w,
+                              clauses: [...B, yr(P)]
                             }
                           }),
-                          style: { ...A(), alignSelf: "flex-start" },
+                          style: { ...D(), alignSelf: "flex-start" },
                           children: "+ Condition"
                         }
                       )
-                    ] }, a.id || w);
+                    ] }, a.id || k);
                   }
                 ),
                 (!s.kind || s.kind === "category") && /* @__PURE__ */ e.jsx(
@@ -1160,15 +1177,15 @@ function lt({
                     type: "button",
                     onClick: () => b({
                       ...s,
-                      rules: [...s.rules || [], bt(P, (s.rules || []).length)]
+                      rules: [...s.rules || [], br(P, (s.rules || []).length)]
                     }),
-                    style: { ...A(), alignSelf: "flex-start" },
+                    style: { ...D(), alignSelf: "flex-start" },
                     children: "+ Rule"
                   }
                 ),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px" }, children: [
-                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: A(), children: "Cancel" }),
-                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: D, style: A("primary"), children: s.kind === "date_group" || s.kind === "number_group" ? "Apply Group" : "Apply Category" })
+                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: D(), children: "Cancel" }),
+                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: R, style: D("primary"), children: s.kind === "date_group" || s.kind === "number_group" ? "Apply Group" : "Apply Category" })
                 ] })
               ] })
             ]
@@ -1178,24 +1195,24 @@ function lt({
     )
   ] });
 }
-function mt(t) {
+function mr(t) {
   const n = [], i = /* @__PURE__ */ new Set();
-  return String(t || "").replace(cr, (o, l) => {
+  return String(t || "").replace(ct, (o, l) => {
     const x = String(l || "").trim();
     return x && !i.has(x) && (n.push(x), i.add(x)), "";
   }), n;
 }
-function ot(t, n = []) {
+function or(t, n = []) {
   const i = String(t || ""), o = [], l = /* @__PURE__ */ new Set(), x = (y) => {
     const F = String(y || "").trim();
     !F || l.has(F) || (o.push(F), l.add(F));
   };
-  mt(i).forEach(x);
-  let f = i.replace(cr, " ");
-  return (Array.isArray(n) ? n : Array.from(n || [])).map((y) => String(y || "").trim()).filter((y) => y && !ft.test(y)).sort((y, F) => F.length - y.length).forEach(
+  mr(i).forEach(x);
+  let f = i.replace(ct, " ");
+  return (Array.isArray(n) ? n : Array.from(n || [])).map((y) => String(y || "").trim()).filter((y) => y && !fr.test(y)).sort((y, F) => F.length - y.length).forEach(
     /** @param {any} [reference] @returns {any} */
     (y) => {
-      const F = new RegExp(`(^|[^A-Za-z0-9_])${gt(y)}(?=$|[^A-Za-z0-9_])`, "g");
+      const F = new RegExp(`(^|[^A-Za-z0-9_])${gr(y)}(?=$|[^A-Za-z0-9_])`, "g");
       f = f.replace(
         F,
         /** @param {any} [match] @param {any} [prefix] @returns {any} */
@@ -1203,7 +1220,7 @@ function ot(t, n = []) {
       );
     }
   ), f.replace(
-    xt,
+    xr,
     /** @param {any} [token] @param {any} [offset] @returns {any} */
     (y, F) => {
       const s = f.slice(F + y.length).trimStart();
@@ -1217,11 +1234,11 @@ function se(t) {
 }
 function Fe(t) {
   const n = String(t || "").trim();
-  return n ? ft.test(n) ? n : `[${n}]` : "";
+  return n ? fr.test(n) ? n : `[${n}]` : "";
 }
 function bn(t, n, i = "formula") {
   const o = Me(t, i), l = new Set(
-    (Array.isArray(n) ? n : []).map((k) => k ? k.agg === "formula" ? J(k) : k.field : null).filter(Boolean).map((k) => String(k).toLowerCase())
+    (Array.isArray(n) ? n : []).map((j) => j ? j.agg === "formula" ? J(j) : j.field : null).filter(Boolean).map((j) => String(j).toLowerCase())
   );
   if (!l.has(o)) return o;
   let x = 2, f = `${o}${x}`;
@@ -1232,12 +1249,12 @@ function bn(t, n, i = "formula") {
 function hn(t, n, i) {
   if (!t || !n || n === i) return t;
   const o = Fe(i), l = [];
-  let f = String(t).replace(cr, (k, y) => String(y || "").trim() === n ? o : (l.push(k), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${gt(n)}\\b`, "g"), o);
-  return l.forEach((k, y) => {
-    f = f.replace(`@@${y}@@`, k);
+  let f = String(t).replace(ct, (j, y) => String(y || "").trim() === n ? o : (l.push(j), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${gr(n)}\\b`, "g"), o);
+  return l.forEach((j, y) => {
+    f = f.replace(`@@${y}@@`, j);
   }), f;
 }
-function Cr(t, n, i) {
+function Ct(t, n, i) {
   t(
     /** @param {any} [prev] @returns {any} */
     (o) => {
@@ -1246,7 +1263,7 @@ function Cr(t, n, i) {
     }
   );
 }
-function it(t) {
+function ir(t) {
   return !t || typeof t.closest != "function" ? !1 : !!t.closest('button, input, select, textarea, [contenteditable="true"]');
 }
 function mn(t) {
@@ -1254,8 +1271,8 @@ function mn(t) {
   const n = t.field === void 0 || t.field === null ? "" : String(t.field), i = t.agg === void 0 || t.agg === null ? "" : String(t.agg);
   return `${n}::${i}`;
 }
-function Rr(t) {
-  const n = rn(t);
+function Rt(t) {
+  const n = tn(t);
   return n ? {
     ...Ee,
     ...n,
@@ -1285,7 +1302,7 @@ function vn(t) {
     l && (i[o] = l);
   }), Number.isFinite(Number(n.areaOpacity)) && (i.areaOpacity = Math.max(0.02, Math.min(0.45, Number(n.areaOpacity)))), i;
 }
-function vt(t, n = []) {
+function vr(t, n = []) {
   const i = String(t && t.agg || "").trim().toLowerCase(), o = Array.isArray(n) && n.length > 0, l = i === "array_agg", x = i !== "array_agg" && o;
   return {
     canUseFieldSeries: l,
@@ -1294,22 +1311,22 @@ function vt(t, n = []) {
     defaultSource: l ? "field" : x ? "pivot" : null
   };
 }
-function Ar(t, n) {
+function At(t, n) {
   return !n || !n.canUseAny ? !1 : t === "field" ? n.canUseFieldSeries : n.canUsePivotSeries;
 }
-function St(t, n) {
+function Sr(t, n) {
   const i = vn(t);
-  return !n || !n.canUseAny ? null : Ar(i.source, n) ? i : {
+  return !n || !n.canUseAny ? null : At(i.source, n) ? i : {
     ...i,
     source: n.defaultSource
   };
 }
-function Dr(t) {
+function Dt(t) {
   if (!Array.isArray(t) || t.length === 0) return "";
   const n = t.map((i) => i && Fe(i.field)).filter(Boolean);
   return n.length === 0 ? "" : n.length === 1 ? `${n[0]} * 100` : `${n[0]} - ${n[1]}`;
 }
-function at(t) {
+function ar(t) {
   const n = (Array.isArray(t) ? t : []).map((i) => i && i.id).filter(Boolean);
   return n.length === 0 ? "" : n.length === 1 ? `${se(n[0])} * 100` : `${se(n[0])} - ${se(n[1])}`;
 }
@@ -1322,35 +1339,35 @@ function Sn(t) {
   return `formula_${i}`;
 }
 function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
-  const k = String(t || "").trim(), y = ze(l);
-  if (!k)
+  const j = String(t || "").trim(), y = ze(l);
+  if (!j)
     return {
       tone: "warning",
       text: y ? "Enter a formula using bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]" : "Enter a formula using value fields. Example: sales - [day pnl]"
     };
   let F = 0;
-  for (const D of k)
-    if (D === "(" && (F += 1), D === ")" && (F -= 1), F < 0)
+  for (const R of j)
+    if (R === "(" && (F += 1), R === ")" && (F -= 1), F < 0)
       return { tone: "warning", text: "Parentheses are unbalanced." };
   if (F !== 0)
     return { tone: "warning", text: "Parentheses are unbalanced." };
   if (y) {
-    const D = Array.isArray(x) ? x : [], O = new Set(
-      D.map(
+    const R = Array.isArray(x) ? x : [], O = new Set(
+      R.map(
         /** @param {any} [option] @returns {any} */
         (B) => B && B.id
       ).filter(Boolean)
-    ), a = mt(k);
+    ), a = mr(j);
     if (a.length === 0)
       return {
         tone: "warning",
         text: "Insert at least one rendered column reference like [column_id]."
       };
-    const w = k.replace(cr, ""), C = Array.from(new Set(w.match(xt) || []));
-    if (C.length > 0)
+    const k = j.replace(ct, ""), w = Array.from(new Set(k.match(xr) || []));
+    if (w.length > 0)
       return {
         tone: "warning",
-        text: `Rendered columns must use brackets: ${C.join(", ")}`
+        text: `Rendered columns must use brackets: ${w.join(", ")}`
       };
     if (O.size > 0) {
       const B = a.filter(
@@ -1371,7 +1388,7 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
       text: `Using rendered columns: ${a.join(", ")}`
     };
   }
-  const s = Array.isArray(n) ? n.filter((D) => D && D.field) : [];
+  const s = Array.isArray(n) ? n.filter((R) => R && R.field) : [];
   if (s.length === 0)
     return {
       tone: "warning",
@@ -1379,93 +1396,93 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
     };
   const b = s.filter(
     /** @param {any} [config] @returns {any} */
-    (D) => D.agg === "formula"
+    (R) => R.agg === "formula"
   ), W = /* @__PURE__ */ new Map();
   b.forEach(
     /** @param {any} [config] @returns {any} */
-    (D) => {
-      const O = D.field === i ? Me(o || J(D), D.field) : J(D);
+    (R) => {
+      const O = R.field === i ? Me(o || J(R), R.field) : J(R);
       O && (W.set(O, O), W.set(O.toLowerCase(), O));
     }
   );
   const P = s.filter(
     /** @param {any} [config] @returns {any} */
-    (D) => D.agg !== "formula"
+    (R) => R.agg !== "formula"
   ).map(
     /** @param {any} [config] @returns {any} */
-    (D) => D.field
+    (R) => R.field
   ).filter(Boolean), M = new Set(P), $ = /* @__PURE__ */ new Set([...P, ...b.map(
     /** @param {any} [config] @returns {any} */
-    (D) => D.field === i ? Me(o || J(D), D.field) : J(D)
-  ).filter(Boolean), ...Array.isArray(f) ? f : []]), h = Array.from($), R = ot(k, h), A = R.map(
+    (R) => R.field === i ? Me(o || J(R), R.field) : J(R)
+  ).filter(Boolean), ...Array.isArray(f) ? f : []]), h = Array.from($), C = or(j, h), D = C.map(
     /** @param {any} [token] @returns {any} */
-    (D) => W.get(D) || W.get(D.toLowerCase()) || D
-  ), T = A.filter(
+    (R) => W.get(R) || W.get(R.toLowerCase()) || R
+  ), I = D.filter(
     /** @param {any} [token] @returns {any} */
-    (D) => !$.has(D) && !M.has(D)
+    (R) => !$.has(R) && !M.has(R)
   );
-  if (T.length > 0)
+  if (I.length > 0)
     return {
       tone: "warning",
-      text: `Unknown fields: ${T.join(", ")}`
+      text: `Unknown fields: ${I.join(", ")}`
     };
-  const U = i ? Me(o || i, i) : null;
-  if (i && U && s.some(
+  const N = i ? Me(o || i, i) : null;
+  if (i && N && s.some(
     /** @param {any} [config] @returns {any} */
     (O) => {
       if (!O || O.field === i) return !1;
       const a = O.agg === "formula" ? J(O) : O.field;
-      return String(a || "").toLowerCase() === U.toLowerCase();
+      return String(a || "").toLowerCase() === N.toLowerCase();
     }
   ))
     return {
       tone: "warning",
-      text: `Reference key "${U}" is already in use.`
+      text: `Reference key "${N}" is already in use.`
     };
-  if (U && A.includes(U))
+  if (N && D.includes(N))
     return {
       tone: "warning",
       text: "A formula cannot reference itself."
     };
-  if (i && U) {
-    const D = {};
+  if (i && N) {
+    const R = {};
     b.forEach(
       /** @param {any} [config] @returns {any} */
-      (C) => {
-        const B = C.field === i ? U : J(C), _ = C.field === i ? k : String(C.formula || ""), N = ot(_, h).map(
+      (w) => {
+        const B = w.field === i ? N : J(w), _ = w.field === i ? j : String(w.formula || ""), Y = or(_, h).map(
           /** @param {any} [token] @returns {any} */
           (L) => W.get(L) || W.get(L.toLowerCase()) || L
         ).filter(
           /** @param {any} [token] @returns {any} */
           (L) => L !== B && b.some(
             /** @param {any} [candidate] @returns {any} */
-            (g) => J(g) === L || g.field === i && U === L
+            (g) => J(g) === L || g.field === i && N === L
           )
         );
-        D[B] = N;
+        R[B] = Y;
       }
     );
-    const O = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), w = (C) => {
-      if (O.has(C)) return !0;
-      if (a.has(C)) return !1;
-      O.add(C);
-      const B = D[C] || [];
+    const O = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), k = (w) => {
+      if (O.has(w)) return !0;
+      if (a.has(w)) return !1;
+      O.add(w);
+      const B = R[w] || [];
       for (const _ of B)
-        if (w(_)) return !0;
-      return O.delete(C), a.add(C), !1;
+        if (k(_)) return !0;
+      return O.delete(w), a.add(w), !1;
     };
-    if (w(U))
+    if (k(N))
       return {
         tone: "warning",
         text: "Circular formula reference detected."
       };
   }
-  return R.length === 0 ? {
+  return C.length === 0 ? {
     tone: "warning",
     text: "Insert at least one measure or formula reference."
   } : {
     tone: "success",
-    text: `Using ${A.join(", ")}`
+    text: `Using ${D.join(", ")}`
   };
 }
 function kn(t) {
@@ -1507,29 +1524,29 @@ function Cn(t, n) {
 }
 function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], onClose: x }) {
   const f = u.useMemo(
-    () => Rr(t && t.sparkline) || { ...Ee },
+    () => Rt(t && t.sparkline) || { ...Ee },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [t && t.sparkline]
-  ), k = u.useMemo(
-    () => vt(t, l),
+  ), j = u.useMemo(
+    () => vr(t, l),
     [l, t]
   ), y = u.useMemo(() => {
     const h = [];
-    return k.canUsePivotSeries && h.push({ value: "pivot", label: "Linked pivot" }), k.canUseFieldSeries && h.push({ value: "field", label: "Series field" }), h;
-  }, [k]), F = Ar(f.source || "pivot", k) ? f.source || "pivot" : k.defaultSource, s = u.useCallback((h) => {
-    Cr(
+    return j.canUsePivotSeries && h.push({ value: "pivot", label: "Linked pivot" }), j.canUseFieldSeries && h.push({ value: "field", label: "Series field" }), h;
+  }, [j]), F = At(f.source || "pivot", j) ? f.source || "pivot" : j.defaultSource, s = u.useCallback((h) => {
+    Ct(
       i,
       n,
       /** @param {any} [current] @returns {any} */
-      (R) => {
-        const A = Rr(R.sparkline) || { ...Ee }, T = St({ ...A, ...h }, k);
-        return T ? {
-          ...R,
-          sparkline: T
-        } : R;
+      (C) => {
+        const D = Rt(C.sparkline) || { ...Ee }, I = Sr({ ...D, ...h }, j);
+        return I ? {
+          ...C,
+          sparkline: I
+        } : C;
       }
     );
-  }, [k, n, i]), b = u.useCallback((h) => h.stopPropagation(), []), W = [
+  }, [j, n, i]), b = u.useCallback((h) => h.stopPropagation(), []), W = [
     { value: "line", label: "Line" },
     { value: "area", label: "Area" },
     { value: "column", label: "Column" },
@@ -1594,7 +1611,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
               y.length > 0 ? /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: y.map(
                   /** @param {any} p0 @returns {any} */
-                  ({ value: h, label: R }) => /* @__PURE__ */ e.jsx(
+                  ({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
@@ -1610,7 +1627,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                         background: F === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
                         color: F === h ? o.primary : o.textSec
                       },
-                      children: R
+                      children: C
                     },
                     h
                   )
@@ -1638,7 +1655,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
               /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: [
                 { value: "trend", label: "Trendline" },
                 { value: "value", label: "Value" }
-              ].map(({ value: h, label: R }) => /* @__PURE__ */ e.jsx(
+              ].map(({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   type: "button",
@@ -1654,7 +1671,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     background: (f.displayMode || "trend") === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
                     color: (f.displayMode || "trend") === h ? o.primary : o.textSec
                   },
-                  children: R
+                  children: C
                 },
                 h
               )) }),
@@ -1662,7 +1679,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: $, children: [
               /* @__PURE__ */ e.jsx("span", { style: M, children: "Chart type" }),
-              /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: W.map(({ value: h, label: R }) => /* @__PURE__ */ e.jsx(
+              /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: W.map(({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   type: "button",
@@ -1678,7 +1695,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     background: f.type === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
                     color: f.type === h ? o.primary : o.textSec
                   },
-                  children: R
+                  children: C
                 },
                 h
               )) })
@@ -1712,17 +1729,17 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 { key: "showDelta", label: "Delta label" },
                 { key: "compact", label: "Compact cell" },
                 { key: "hideColumns", label: "Hide source values" }
-              ].map(({ key: h, label: R }) => /* @__PURE__ */ e.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: o.text, cursor: "pointer", userSelect: "none" }, children: [
+              ].map(({ key: h, label: C }) => /* @__PURE__ */ e.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: o.text, cursor: "pointer", userSelect: "none" }, children: [
                 /* @__PURE__ */ e.jsx(
                   "input",
                   {
                     type: "checkbox",
                     checked: !!f[h],
-                    onChange: (A) => s({ [h]: A.target.checked }),
+                    onChange: (D) => s({ [h]: D.target.checked }),
                     style: { accentColor: o.primary, width: "13px", height: "13px", cursor: "pointer" }
                   }
                 ),
-                R
+                C
               ] }, h)) }),
               f.hideColumns && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: `${o.primary}10`, border: `1px solid ${o.primary}30`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns are hidden; the trend column remains." }),
               !f.hideColumns && F === "pivot" && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns stay numeric; the trend column is added beside them." })
@@ -1737,15 +1754,15 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 { key: "color", label: "Line / fill color", always: !0 },
                 { key: "positiveColor", label: "Positive bar color", always: !1 },
                 { key: "negativeColor", label: "Negative bar color", always: !1 }
-              ].filter(({ always: h }) => h || f.type === "column" || f.type === "bar").map(({ key: h, label: R }) => /* @__PURE__ */ e.jsxs("div", { children: [
-                /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: o.textSec, marginBottom: "3px", display: "block" }, children: R }),
+              ].filter(({ always: h }) => h || f.type === "column" || f.type === "bar").map(({ key: h, label: C }) => /* @__PURE__ */ e.jsxs("div", { children: [
+                /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: o.textSec, marginBottom: "3px", display: "block" }, children: C }),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "5px", alignItems: "center" }, children: [
                   /* @__PURE__ */ e.jsx(
                     "input",
                     {
                       type: "color",
                       value: f[h] || (h === "negativeColor" ? "#B91C1C" : h === "positiveColor" ? "#2F855A" : "#2563EB"),
-                      onChange: (A) => s({ [h]: A.target.value }),
+                      onChange: (D) => s({ [h]: D.target.value }),
                       style: { width: "28px", height: "26px", padding: "1px 2px", border: `1px solid ${o.border}`, borderRadius: "4px", cursor: "pointer", background: "none" }
                     }
                   ),
@@ -1754,7 +1771,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     {
                       type: "text",
                       value: f[h] || "",
-                      onChange: (A) => s({ [h]: A.target.value }),
+                      onChange: (D) => s({ [h]: D.target.value }),
                       placeholder: "Auto",
                       style: { ...P, flex: 1 }
                     }
@@ -1830,39 +1847,39 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
     }
   );
 }
-function jt({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fixedSparklineValueKeySet: x = /* @__PURE__ */ new Set(), showNotification: f }) {
-  const [k, y] = u.useState(!1), F = Rr(t && t.sparkline), s = mn(t), b = !!(s && x && x.has(s)), W = u.useMemo(
-    () => vt(t, l),
+function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fixedSparklineValueKeySet: x = /* @__PURE__ */ new Set(), showNotification: f }) {
+  const [j, y] = u.useState(!1), F = Rt(t && t.sparkline), s = mn(t), b = !!(s && x && x.has(s)), W = u.useMemo(
+    () => vr(t, l),
     [l, t]
-  ), P = !!F, M = !!(F && Ar(F.source || "pivot", W)), $ = u.useCallback((T) => T.stopPropagation(), []), h = u.useCallback(() => {
-    let T = !1;
-    return Cr(
+  ), P = !!F, M = !!(F && At(F.source || "pivot", W)), $ = u.useCallback((I) => I.stopPropagation(), []), h = u.useCallback(() => {
+    let I = !1;
+    return Ct(
       i,
       n,
       /** @param {any} [current] @returns {any} */
-      (U) => {
-        const D = St(
-          U.sparkline || Ee,
+      (N) => {
+        const R = Sr(
+          N.sparkline || Ee,
           W
         );
-        return D ? (T = !0, { ...U, sparkline: D }) : U;
+        return R ? (I = !0, { ...N, sparkline: R }) : N;
       }
-    ), T;
-  }, [W, n, i]), R = u.useCallback((T) => {
-    if (T.stopPropagation(), P) {
+    ), I;
+  }, [W, n, i]), C = u.useCallback((I) => {
+    if (I.stopPropagation(), P) {
       if (b) {
         f && f("This trend is defined by the app. You can adjust its settings, but not remove it here.", "info");
         return;
       }
-      Cr(
+      Ct(
         i,
         n,
         /** @param {any} [current] @returns {any} */
-        (U) => ({ ...U, sparkline: !1 })
+        (N) => ({ ...N, sparkline: !1 })
       ), f && f("Removed trend column.", "info");
     } else W.canUseAny && h() ? (y(!0), f && f("Trend column enabled.", "success")) : f && f("Trend needs a column field, or a Series aggregation for field data.", "warning");
-  }, [W.canUseAny, P, h, n, b, i, f]), A = u.useCallback((T) => {
-    if (T.stopPropagation(), !W.canUseAny) {
+  }, [W.canUseAny, P, h, n, b, i, f]), D = u.useCallback((I) => {
+    if (I.stopPropagation(), !W.canUseAny) {
       f && f("Trend settings are not available for this value selection.", "warning");
       return;
     }
@@ -1883,7 +1900,7 @@ function jt({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
           {
             type: "button",
             "data-value-sparkline-settings": "true",
-            onClick: A,
+            onClick: D,
             style: {
               border: `1px solid ${o.border}`,
               background: o.headerSubtleBg || o.background,
@@ -1914,7 +1931,7 @@ function jt({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
           {
             type: "button",
             "data-value-sparkline-toggle": "true",
-            onClick: R,
+            onClick: C,
             style: {
               border: `1px solid ${o.border}`,
               background: o.background,
@@ -1931,14 +1948,14 @@ function jt({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
             children: "Remove Trend"
           }
         ),
-        M && !k && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: o.primary, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: [
+        M && !j && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: o.primary, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: [
           (t.sparkline && t.sparkline.source) === "field" ? `series ${(t.sparkline && t.sparkline.displayMode) === "value" ? "value" : "trend"}` : "linked pivot",
           " | ",
           ["line", "area", "column", "bar"].includes(t.sparkline && t.sparkline.type) ? t.sparkline.type : "line",
           " | ",
           t.sparkline && t.sparkline.metric || "last"
         ] }),
-        k && /* @__PURE__ */ e.jsx(
+        j && /* @__PURE__ */ e.jsx(
           Rn,
           {
             item: t,
@@ -1953,14 +1970,14 @@ function jt({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
     }
   ) : null;
 }
-function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConfigs: x, theme: f, styles: k, dropLine: y, zoneId: F, valueSelectStyle: s, colFields: b = [], fixedSparklineValueKeySet: W = /* @__PURE__ */ new Set(), showNotification: P, serverError: M = null }) {
-  const $ = i ? `${f.primary}77` : M ? "#F59E0B88" : f.border, h = i ? f.headerBg || `${f.primary}0f` : f.background || "transparent", R = String(t.formula || "").trim() || "Empty formula";
+function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConfigs: x, theme: f, styles: j, dropLine: y, zoneId: F, valueSelectStyle: s, colFields: b = [], fixedSparklineValueKeySet: W = /* @__PURE__ */ new Set(), showNotification: P, serverError: M = null }) {
+  const $ = i ? `${f.primary}77` : M ? "#F59E0B88" : f.border, h = i ? f.headerBg || `${f.primary}0f` : f.background || "transparent", C = String(t.formula || "").trim() || "Empty formula";
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
       onClick: () => o(t.field),
       style: {
-        ...k.chip,
+        ...j.chip,
         border: `1px solid ${$}`,
         background: h,
         borderLeft: i ? `3px solid ${f.primary}` : "3px solid transparent",
@@ -1971,7 +1988,7 @@ function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
       },
       title: "Select formula",
       children: [
-        y && y.zone === F && y.idx === n && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...k.dropLine, top: -2 } }),
+        y && y.zone === F && y.idx === n && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, top: -2 } }),
         /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
           /* @__PURE__ */ e.jsx(E.DragIndicator, {}),
           /* @__PURE__ */ e.jsx("span", { style: {
@@ -2001,7 +2018,7 @@ function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
               textOverflow: "ellipsis"
             }, children: [
               "=",
-              R
+              C
             ] }),
             M && /* @__PURE__ */ e.jsxs("div", { style: { marginTop: "2px", fontSize: "9px", color: "#B45309" }, children: [
               "⚠ ",
@@ -2021,8 +2038,8 @@ function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
           /* @__PURE__ */ e.jsx(
             "span",
             {
-              onClick: (A) => {
-                A.stopPropagation(), l(n);
+              onClick: (D) => {
+                D.stopPropagation(), l(n);
               },
               style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" },
               children: /* @__PURE__ */ e.jsx(E.Close, {})
@@ -2030,7 +2047,7 @@ function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
           )
         ] }),
         /* @__PURE__ */ e.jsx(
-          jt,
+          jr,
           {
             item: t,
             idx: n,
@@ -2042,7 +2059,7 @@ function st({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
             showNotification: P
           }
         ),
-        y && y.zone === F && y.idx === n + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...k.dropLine, bottom: -2 } })
+        y && y.zone === F && y.idx === n + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, bottom: -2 } })
       ]
     }
   );
@@ -2053,12 +2070,12 @@ const Dn = {
   expression_error: "Expression could not be evaluated (server)",
   missing_reference: "Unknown field reference (server)"
 };
-function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: k = [], availableRawFields: y = [], serverError: F = null }) {
+function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: j = [], availableRawFields: y = [], serverError: F = null }) {
   const s = u.useRef(null), [b, W] = u.useState({
     label: t.label || "",
     formula: t.formula || "",
     formulaRef: J(t),
-    formulaScope: Ne(t.formulaScope)
+    formulaScope: He(t.formulaScope)
   }), P = u.useRef(t);
   P.current = t, u.useEffect(() => {
     const g = P.current;
@@ -2066,7 +2083,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
       label: g.label || "",
       formula: g.formula || "",
       formulaRef: J(g),
-      formulaScope: Ne(g.formulaScope)
+      formulaScope: He(g.formulaScope)
     });
   }, [t.field]), u.useEffect(() => {
     if (!s.current) return;
@@ -2092,10 +2109,10 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
       (g) => g.agg === "formula" && g.field !== t.field
     ),
     [t.field, M]
-  ), R = u.useMemo(
-    () => (Array.isArray(k) ? k : []).filter((g) => g && g.id && g.id !== t.field),
-    [k, t.field]
-  ), A = u.useMemo(
+  ), C = u.useMemo(
+    () => (Array.isArray(j) ? j : []).filter((g) => g && g.id && g.id !== t.field),
+    [j, t.field]
+  ), D = u.useMemo(
     () => {
       const g = new Set(M.map(
         /** @param {any} [c] @returns {any} */
@@ -2104,84 +2121,84 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
       return (Array.isArray(y) ? y : []).filter((z) => !g.has(z));
     },
     [y, M]
-  ), T = u.useMemo(
+  ), I = u.useMemo(
     () => jn(
       b.formula,
       M,
       t.field,
       b.formulaRef,
       b.formulaScope,
-      R,
-      A
+      C,
+      D
     ),
-    [R, b.formula, b.formulaRef, b.formulaScope, t.field, M, A]
-  ), U = u.useMemo(
-    () => Cn(l, T.tone),
-    [T.tone, l]
-  ), D = u.useMemo(
-    () => ze(b.formulaScope) ? wn(R) : kn($),
-    [R, b.formulaScope, $]
+    [C, b.formula, b.formulaRef, b.formulaScope, t.field, M, D]
+  ), N = u.useMemo(
+    () => Cn(l, I.tone),
+    [I.tone, l]
+  ), R = u.useMemo(
+    () => ze(b.formulaScope) ? wn(C) : kn($),
+    [C, b.formulaScope, $]
   ), O = u.useMemo(
-    () => ze(b.formulaScope) ? at(R) || "[column_id] - [other_column_id]" : Dr($) || `${Fe(b.formulaRef || t.field)} * 100`,
-    [R, b.formulaRef, b.formulaScope, t.field, $]
-  ), a = b.label !== (t.label || "") || b.formula !== (t.formula || "") || b.formulaRef !== J(t) || b.formulaScope !== Ne(t.formulaScope), w = u.useCallback(() => {
+    () => ze(b.formulaScope) ? ar(C) || "[column_id] - [other_column_id]" : Dt($) || `${Fe(b.formulaRef || t.field)} * 100`,
+    [C, b.formulaRef, b.formulaScope, t.field, $]
+  ), a = b.label !== (t.label || "") || b.formula !== (t.formula || "") || b.formulaRef !== J(t) || b.formulaScope !== He(t.formulaScope), k = u.useCallback(() => {
     const g = Me(b.formulaRef, t.field);
     o(
       /** @param {any} [prev] @returns {any} */
       (z) => {
-        const v = [...z], V = v[n];
-        if (!V) return z;
-        const G = J(V);
-        let K = g;
+        const V = [...z], A = V[n];
+        if (!A) return z;
+        const H = J(A);
+        let Z = g;
         const Q = new Set(
-          v.filter((Y, ee) => Y && ee !== n).map((Y) => Y.agg === "formula" ? J(Y) : Y.field).filter(Boolean).map((Y) => String(Y).toLowerCase())
+          V.filter((U, ee) => U && ee !== n).map((U) => U.agg === "formula" ? J(U) : U.field).filter(Boolean).map((U) => String(U).toLowerCase())
         );
-        if (Q.has(K.toLowerCase())) {
-          let Y = 2, ee = `${K}${Y}`;
+        if (Q.has(Z.toLowerCase())) {
+          let U = 2, ee = `${Z}${U}`;
           for (; Q.has(ee.toLowerCase()); )
-            Y += 1, ee = `${K}${Y}`;
-          K = ee;
+            U += 1, ee = `${Z}${U}`;
+          Z = ee;
         }
-        if (v[n] = {
-          ...V,
+        if (V[n] = {
+          ...A,
           label: b.label,
           formula: b.formula,
-          formulaRef: K,
+          formulaRef: Z,
           formulaScope: b.formulaScope
-        }, G && G !== K)
-          for (let Y = 0; Y < v.length; Y += 1) {
-            if (Y === n) continue;
-            const ee = v[Y];
-            !ee || ee.agg !== "formula" || !ee.formula || (v[Y] = {
+        }, H && H !== Z)
+          for (let U = 0; U < V.length; U += 1) {
+            if (U === n) continue;
+            const ee = V[U];
+            !ee || ee.agg !== "formula" || !ee.formula || (V[U] = {
               ...ee,
-              formula: hn(ee.formula, G, K)
+              formula: hn(ee.formula, H, Z)
             });
           }
-        return v;
+        return V;
       }
     );
-  }, [b.formula, b.formulaRef, b.formulaScope, b.label, n, t.field, o]), C = u.useCallback(() => {
+  }, [b.formula, b.formulaRef, b.formulaScope, b.label, n, t.field, o]), w = u.useCallback(() => {
     W({
       label: t.label || "",
       formula: t.formula || "",
       formulaRef: J(t),
-      formulaScope: Ne(t.formulaScope)
+      formulaScope: He(t.formulaScope)
     }), x();
   }, [t.field, t.formula, t.formulaRef, t.formulaScope, t.label, x]), B = u.useCallback((g) => {
     const z = s.current;
     if (!z) return;
-    const v = b.formula || "", V = z.selectionStart ?? v.length, G = z.selectionEnd ?? v.length, K = `${v.slice(0, V)}${g}${v.slice(G)}`;
+    const V = b.formula || "", A = z.selectionStart ?? V.length, H = z.selectionEnd ?? V.length, Z = `${V.slice(0, A)}${g}${V.slice(H)}`;
     W(
       /** @param {any} [prev] @returns {any} */
-      (Y) => ({ ...Y, formula: K })
+      (U) => ({ ...U, formula: Z })
     );
-    const Q = V + g.length;
+    const Q = A + g.length;
     setTimeout(() => {
       s.current && (s.current.focus(), s.current.setSelectionRange(Q, Q));
     }, 0);
   }, [b.formula]), _ = u.useCallback(() => {
-    w(), x();
-  }, [w, x]), N = {
+    k(), x();
+  }, [k, x]), Y = {
     border: `1px solid ${l.border}`,
     background: l.background,
     color: l.text,
@@ -2204,7 +2221,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
   return /* @__PURE__ */ e.jsx(
     "div",
     {
-      onClick: C,
+      onClick: w,
       style: {
         position: "fixed",
         inset: 0,
@@ -2220,7 +2237,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
         {
           onClick: (g) => g.stopPropagation(),
           onKeyDown: (g) => {
-            g.key === "Escape" && C(), (g.ctrlKey || g.metaKey) && g.key === "Enter" && _();
+            g.key === "Escape" && w(), (g.ctrlKey || g.metaKey) && g.key === "Enter" && _();
           },
           style: {
             width: "min(760px, 92vw)",
@@ -2242,7 +2259,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                 "button",
                 {
                   type: "button",
-                  onClick: C,
+                  onClick: w,
                   style: {
                     border: `1px solid ${l.border}`,
                     background: l.headerSubtleBg || l.background,
@@ -2315,13 +2332,13 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                     "aria-label": "Formula type",
                     value: b.formulaScope,
                     onChange: (g) => {
-                      const z = Ne(g.target.value);
+                      const z = He(g.target.value);
                       W(
                         /** @param {any} [prev] @returns {any} */
-                        (v) => ({
-                          ...v,
+                        (V) => ({
+                          ...V,
                           formulaScope: z,
-                          formula: v.formula || (z === "columns" ? at(R) : Dr($))
+                          formula: V.formula || (z === "columns" ? ar(C) : Dt($))
                         })
                       );
                     },
@@ -2377,16 +2394,16 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
               /* @__PURE__ */ e.jsx("div", { style: {
                 padding: "5px 9px",
                 borderRadius: "999px",
-                border: `1px solid ${U.border}`,
-                background: U.background,
-                color: U.text,
+                border: `1px solid ${N.border}`,
+                background: N.background,
+                color: N.text,
                 fontSize: "10px",
                 lineHeight: "14px"
-              }, children: T.text }),
+              }, children: I.text }),
               /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec }, children: "Ctrl/Cmd + Enter applies" })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" }, children: [
-              D.map(
+              R.map(
                 /** @param {any} [template] @returns {any} */
                 (g) => /* @__PURE__ */ e.jsx(
                   "button",
@@ -2396,7 +2413,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                       /** @param {any} [prev] @returns {any} */
                       (z) => ({ ...z, formula: g.value })
                     ),
-                    style: N,
+                    style: Y,
                     children: g.label
                   },
                   g.label
@@ -2418,7 +2435,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
               ze(b.formulaScope) ? /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Rendered Columns" }),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: [
-                  R.map(
+                  C.map(
                     /** @param {any} [column] @returns {any} */
                     (g) => /* @__PURE__ */ e.jsx(
                       "button",
@@ -2426,14 +2443,14 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                         type: "button",
                         onMouseDown: (z) => z.preventDefault(),
                         onClick: () => B(se(g.id)),
-                        style: N,
+                        style: Y,
                         title: `Insert ${g.id}`,
                         children: g.label || g.id
                       },
                       g.id
                     )
                   ),
-                  R.length === 0 && /* @__PURE__ */ e.jsx("span", { style: { fontSize: "11px", color: l.textSec }, children: "Render the pivot once, or type a bracketed column id directly." })
+                  C.length === 0 && /* @__PURE__ */ e.jsx("span", { style: { fontSize: "11px", color: l.textSec }, children: "Render the pivot once, or type a bracketed column id directly." })
                 ] })
               ] }) : /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Measures" }),
@@ -2445,7 +2462,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
                       onClick: () => B(Fe(g.field)),
-                      style: N,
+                      style: Y,
                       title: `Insert ${g.field}`,
                       children: g.field
                     },
@@ -2463,7 +2480,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
                       onClick: () => B(Fe(J(g))),
-                      style: N,
+                      style: Y,
                       title: `${J(g)}${g.label ? ` (${g.label})` : ""}`,
                       children: J(g)
                     },
@@ -2471,9 +2488,9 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                   )
                 ) })
               ] }),
-              !ze(b.formulaScope) && A.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
+              !ze(b.formulaScope) && D.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Data Fields (auto-aggregated as sum)" }),
-                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: A.map(
+                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: D.map(
                   /** @param {any} [f] @returns {any} */
                   (g) => /* @__PURE__ */ e.jsx(
                     "button",
@@ -2481,7 +2498,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
                       onClick: () => B(Fe(g)),
-                      style: { ...N, borderColor: `${l.primary}66`, color: l.primary, background: `${l.primary}0d` },
+                      style: { ...Y, borderColor: `${l.primary}66`, color: l.primary, background: `${l.primary}0d` },
                       title: `Insert: ${g}`,
                       children: ke(g)
                     },
@@ -2516,7 +2533,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                   "button",
                   {
                     type: "button",
-                    onClick: C,
+                    onClick: w,
                     style: {
                       border: `1px solid ${l.border}`,
                       background: l.background,
@@ -2558,7 +2575,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
     }
   );
 }
-function dt({
+function dr({
   panelId: t,
   panelLabel: n,
   size: i,
@@ -2566,82 +2583,82 @@ function dt({
   getSidebarWidth: l = null,
   onSidebarWidthChange: x = null,
   theme: f,
-  outerStyle: k = {},
+  outerStyle: j = {},
   contentStyle: y = {},
   children: F
 }) {
-  const s = u.useRef(null), b = u.useRef(null), W = u.useRef(null), P = u.useRef(null), M = u.useRef(null), $ = u.useRef(null), h = u.useRef(null), [R, A] = u.useState(null), [T, U] = u.useState(null), D = u.useMemo(() => Qt(t), [t]), O = u.useMemo(
-    () => Jr(t, i),
+  const s = u.useRef(null), b = u.useRef(null), W = u.useRef(null), P = u.useRef(null), M = u.useRef(null), $ = u.useRef(null), h = u.useRef(null), [C, D] = u.useState(null), [I, N] = u.useState(null), R = u.useMemo(() => Qr(t), [t]), O = u.useMemo(
+    () => Jt(t, i),
     [t, i]
   ), a = u.useRef(O);
   a.current = O;
-  const w = u.useMemo(() => R ? Jr(t, {
-    width: R.width !== void 0 ? R.width : O.width,
-    height: R.height !== void 0 ? R.height : O.height
-  }) : O, [R, t, O]), C = u.useCallback((L = !0) => {
+  const k = u.useMemo(() => C ? Jt(t, {
+    width: C.width !== void 0 ? C.width : O.width,
+    height: C.height !== void 0 ? C.height : O.height
+  }) : O, [C, t, O]), w = u.useCallback((L = !0) => {
     if (b.current) {
       const g = b.current;
       b.current = null, g(L);
     }
   }, []);
-  u.useEffect(() => (() => C(!1)), [C]);
+  u.useEffect(() => (() => w(!1)), [w]);
   const B = u.useCallback((L, g) => {
     if (!s.current || typeof o != "function") return;
-    L.preventDefault(), L.stopPropagation(), C(!1);
-    const z = s.current.getBoundingClientRect(), v = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, V = typeof l == "function" ? Number(l()) : NaN, G = Number.isFinite(V) ? Math.max(200, Math.min(600, Math.round(V))) : null, K = G !== null ? Math.max(0, Math.round(G - v.width)) : 0, Q = typeof x == "function" && G !== null;
-    G !== null && (a.current.width === null || $.current === null) && ($.current = G, h.current = K);
-    const Y = G !== null ? $.current !== null ? Math.min(G, $.current) : G : null, ee = h.current !== null ? h.current : K, $r = Q ? Math.max(D.minWidth, Math.min(D.maxWidth, 600 - ee)) : Math.max(D.minWidth, Math.min(D.maxWidth, Math.floor(v.width))), le = {
+    L.preventDefault(), L.stopPropagation(), w(!1);
+    const z = s.current.getBoundingClientRect(), V = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, A = typeof l == "function" ? Number(l()) : NaN, H = Number.isFinite(A) ? Math.max(200, Math.min(600, Math.round(A))) : null, Z = H !== null ? Math.max(0, Math.round(H - V.width)) : 0, Q = typeof x == "function" && H !== null;
+    H !== null && (a.current.width === null || $.current === null) && ($.current = H, h.current = Z);
+    const U = H !== null ? $.current !== null ? Math.min(H, $.current) : H : null, ee = h.current !== null ? h.current : Z, $t = Q ? Math.max(R.minWidth, Math.min(R.maxWidth, 600 - ee)) : Math.max(R.minWidth, Math.min(R.maxWidth, Math.floor(V.width))), le = {
       startX: L.clientX,
       startY: L.clientY,
       startWidth: z.width,
       startHeight: z.height,
-      startParentWidth: Math.floor(v.width),
-      startSidebarWidth: G,
-      baseSidebarWidth: Y,
+      startParentWidth: Math.floor(V.width),
+      startSidebarWidth: H,
+      baseSidebarWidth: U,
       chromeWidth: ee,
       canExpandSidebar: Q,
-      maxWidth: $r,
+      maxWidth: $t,
       initialWidthProp: a.current.width
     }, we = document.body.style.cursor, _e = document.body.style.userSelect;
-    document.body.style.cursor = g === "both" ? "nwse-resize" : g === "width" ? "ew-resize" : "ns-resize", document.body.style.userSelect = "none", P.current = null, M.current = null, U(g);
+    document.body.style.cursor = g === "both" ? "nwse-resize" : g === "width" ? "ew-resize" : "ns-resize", document.body.style.userSelect = "none", P.current = null, M.current = null, N(g);
     const Ce = () => {
-      W.current = null, P.current && A(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
+      W.current = null, P.current && D(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
     }, fe = (ge) => {
       const ye = ge.clientX - le.startX, ve = ge.clientY - le.startY, Ue = {};
       if (g === "width" || g === "both" && (le.initialWidthProp !== null || Math.abs(ye) >= 3)) {
-        const Se = Math.max(D.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ye)));
+        const Se = Math.max(R.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ye)));
         if (Ue.width = Se, s.current && (s.current.style.width = `${Se}px`), le.canExpandSidebar) {
-          const ur = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, pr = Math.max(
-            ur,
+          const ut = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, pt = Math.max(
+            ut,
             Math.min(600, Se + le.chromeWidth)
           );
-          M.current = pr;
+          M.current = pt;
         }
       }
       if (g === "height" || g === "both") {
-        const Se = Math.max(D.minHeight, Math.min(D.maxHeight, Math.round(le.startHeight + ve)));
+        const Se = Math.max(R.minHeight, Math.min(R.maxHeight, Math.round(le.startHeight + ve)));
         Ue.height = Se, s.current && (s.current.style.height = `${Se}px`);
       }
       Object.keys(Ue).length !== 0 && (P.current = Ue, typeof window < "u" && typeof window.requestAnimationFrame == "function" ? W.current === null && (W.current = window.requestAnimationFrame(Ce)) : Ce());
     }, Re = (ge = !0) => {
       W.current !== null && typeof window < "u" && typeof window.cancelAnimationFrame == "function" && (window.cancelAnimationFrame(W.current), W.current = null), document.body.style.cursor = we, document.body.style.userSelect = _e, window.removeEventListener("mousemove", fe), window.removeEventListener("mouseup", ce), window.removeEventListener("blur", ce);
       const ye = P.current, ve = M.current;
-      P.current = null, M.current = null, U(null), A(null), ge ? (ve !== null && typeof x == "function" && x(ve), ye && o(t, ye)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
-    }, ce = () => C(!0);
+      P.current = null, M.current = null, N(null), D(null), ge ? (ve !== null && typeof x == "function" && x(ve), ye && o(t, ye)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
+    }, ce = () => w(!0);
     b.current = Re, window.addEventListener("mousemove", fe), window.addEventListener("mouseup", ce), window.addEventListener("blur", ce);
   }, [
     l,
-    D.maxHeight,
-    D.maxWidth,
-    D.minHeight,
-    D.minWidth,
+    R.maxHeight,
+    R.maxWidth,
+    R.minHeight,
+    R.minWidth,
     x,
     o,
     t,
-    C
+    w
   ]), _ = u.useCallback((L, g) => {
-    g && (g.preventDefault(), g.stopPropagation()), C(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)));
-  }, [x, o, t, C]), N = `${f.primary}55`;
+    g && (g.preventDefault(), g.stopPropagation()), w(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)));
+  }, [x, o, t, w]), Y = `${f.primary}55`;
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
@@ -2649,14 +2666,14 @@ function dt({
       style: {
         position: "relative",
         flexShrink: 0,
-        width: w.width === null ? "100%" : `${w.width}px`,
+        width: k.width === null ? "100%" : `${k.width}px`,
         maxWidth: "100%",
-        height: `${w.height}px`,
-        minHeight: `${D.minHeight}px`,
-        maxHeight: `${D.maxHeight}px`,
+        height: `${k.height}px`,
+        minHeight: `${R.minHeight}px`,
+        maxHeight: `${R.maxHeight}px`,
         boxSizing: "border-box",
         overflow: "hidden",
-        ...k
+        ...j
       },
       children: [
         /* @__PURE__ */ e.jsx(
@@ -2676,7 +2693,7 @@ function dt({
           "div",
           {
             className: "sp-resize-handle",
-            "data-resizing": T === "width" ? "true" : void 0,
+            "data-resizing": I === "width" ? "true" : void 0,
             onMouseDown: (L) => B(L, "width"),
             onDoubleClick: (L) => _("width", L),
             style: {
@@ -2694,14 +2711,14 @@ function dt({
               paddingRight: "2px"
             },
             title: `Resize ${n} width`,
-            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "2px", height: "24px", borderRadius: "999px", background: N, opacity: 0.45, pointerEvents: "none" } })
+            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "2px", height: "24px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
           }
         ),
         /* @__PURE__ */ e.jsx(
           "div",
           {
             className: "sp-resize-handle",
-            "data-resizing": T === "height" ? "true" : void 0,
+            "data-resizing": I === "height" ? "true" : void 0,
             onMouseDown: (L) => B(L, "height"),
             onDoubleClick: (L) => _("height", L),
             style: {
@@ -2719,14 +2736,14 @@ function dt({
               paddingBottom: "2px"
             },
             title: `Resize ${n} height`,
-            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "28px", height: "2px", borderRadius: "999px", background: N, opacity: 0.45, pointerEvents: "none" } })
+            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "28px", height: "2px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
           }
         ),
         /* @__PURE__ */ e.jsx(
           "div",
           {
             className: "sp-resize-handle",
-            "data-resizing": T === "both" ? "true" : void 0,
+            "data-resizing": I === "both" ? "true" : void 0,
             onMouseDown: (L) => B(L, "both"),
             onDoubleClick: (L) => _("both", L),
             style: {
@@ -2752,9 +2769,9 @@ function dt({
                   width: "3px",
                   height: "3px",
                   borderRadius: "999px",
-                  background: N,
+                  background: Y,
                   opacity: 0.55,
-                  boxShadow: `-4px 0 0 ${N}, 0 -4px 0 ${N}, -4px -4px 0 ${N}`,
+                  boxShadow: `-4px 0 0 ${Y}, 0 -4px 0 ${Y}, -4px -4px 0 ${Y}`,
                   pointerEvents: "none"
                 }
               }
@@ -2765,7 +2782,7 @@ function dt({
     }
   );
 }
-function ct({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, regularValueCount: l }) {
+function cr({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, regularValueCount: l }) {
   const x = u.useMemo(() => Je(t), [t]), f = u.useCallback((y) => {
     typeof n == "function" && n(
       /** @param {any} [previous] @returns {any} */
@@ -2774,7 +2791,7 @@ function ct({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, 
         ...typeof y == "function" ? y(Je(F)) : y
       })
     );
-  }, [n]), k = {
+  }, [n]), j = {
     ...o,
     width: "112px",
     padding: "3px 6px",
@@ -2812,7 +2829,7 @@ function ct({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, 
         {
           value: x.labelField,
           onChange: (y) => f({ labelField: y.target.value }),
-          style: k,
+          style: j,
           title: "Measure label field"
         }
       ),
@@ -2821,7 +2838,7 @@ function ct({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, 
         {
           value: x.valueField,
           onChange: (y) => f({ valueField: y.target.value }),
-          style: { ...k, width: "82px" },
+          style: { ...j, width: "82px" },
           title: "Measure value field"
         }
       ),
@@ -2863,7 +2880,7 @@ const En = u.memo(
     setRowFields: l,
     colFields: x,
     setColFields: f,
-    valConfigs: k,
+    valConfigs: j,
     setValConfigs: y,
     measureAxis: F = {},
     setMeasureAxis: s = null,
@@ -2873,29 +2890,29 @@ const En = u.memo(
     setColumnPinning: M,
     availableFields: $,
     table: h,
-    pinningPresets: R,
-    showNotification: A,
-    filterAnchorEl: T,
-    setFilterAnchorEl: U,
-    colSearch: D,
+    pinningPresets: C,
+    showNotification: D,
+    filterAnchorEl: I,
+    setFilterAnchorEl: N,
+    colSearch: R,
     setColSearch: O,
     colTypeFilter: a,
-    setColTypeFilter: w,
-    selectedCols: C,
+    setColTypeFilter: k,
+    selectedCols: w,
     setSelectedCols: B,
     dropLine: _,
-    onDragStart: N,
+    onDragStart: Y,
     onDragOver: L,
     onDrop: g,
     onDragEnd: z,
-    onKeyboardFieldDrop: v,
-    handleHeaderFilter: V,
-    handleFilterClick: G,
-    requestFilterOptions: K,
+    onKeyboardFieldDrop: V,
+    handleHeaderFilter: A,
+    handleFilterClick: H,
+    requestFilterOptions: Z,
     handleExpandAllRows: Q,
-    handlePinColumn: Y,
+    handlePinColumn: U,
     toggleAllColumnsPinned: ee,
-    activeFilterCol: $r,
+    activeFilterCol: $t,
     closeFilterPopover: le,
     filterOptions: we,
     filterOptionMeta: _e = {},
@@ -2908,60 +2925,60 @@ const En = u.memo(
     fixedSparklineValueKeys: ve = [],
     sparklineFields: Ue = null,
     displayedColumnOptions: Se = [],
-    reportEditorSelection: ur = null,
-    showReportConfigColumn: pr = !0,
-    setShowReportConfigColumn: kt = null,
+    reportEditorSelection: ut = null,
+    showReportConfigColumn: pt = !0,
+    setShowReportConfigColumn: kr = null,
     formulaErrors: We = {},
     serverSide: Qe = !1
   }) {
-    Kt("SidebarPanel");
-    const { theme: d, styles: Z } = Yt(), {
+    Kr("SidebarPanel");
+    const { theme: d, styles: G } = Yr(), {
       filters: ue,
-      setFilters: xr,
-      pivotMode: wt,
-      reportDef: Ct,
-      setReportDef: Rt,
-      savedReports: Dt,
-      setSavedReports: At,
-      activeReportId: $t,
-      setActiveReportId: zt,
+      setFilters: xt,
+      pivotMode: wr,
+      reportDef: Cr,
+      setReportDef: Rr,
+      savedReports: Dr,
+      setSavedReports: Ar,
+      activeReportId: $r,
+      setActiveReportId: zr,
       customDimensions: Ve,
-      setCustomDimensions: zr
-    } = Zt(), [er, Fr] = u.useState({ columnId: null, anchorEl: null }), [Te, Ie] = u.useState(null), [be, De] = u.useState(null), [Ae, fr] = u.useState("report"), rr = u.useRef(null), [Ft, tr] = u.useState(null), pe = u.useRef(null), Er = u.useRef(0), Ke = u.useRef(null), he = u.useRef(null), [q, gr] = u.useState(null), [yr, Mr] = u.useState(""), br = u.useMemo(
+      setCustomDimensions: zt
+    } = Zr(), [et, Ft] = u.useState({ columnId: null, anchorEl: null }), [Ie, Te] = u.useState(null), [be, De] = u.useState(null), [Ae, ft] = u.useState("report"), tt = u.useRef(null), [Fr, rt] = u.useState(null), pe = u.useRef(null), Et = u.useRef(0), Ke = u.useRef(null), he = u.useRef(null), [q, gt] = u.useState(null), [yt, Mt] = u.useState(""), bt = u.useMemo(
       () => new Set(Array.isArray(ve) ? ve : []),
       [ve]
-    ), re = u.useCallback(
-      (r) => Gt(r, Ve),
+    ), te = u.useCallback(
+      (r) => Gr(r, Ve),
       [Ve]
-    ), _r = u.useMemo(
+    ), _t = u.useMemo(
       () => Je(F),
       [F]
-    ), je = _r.labelField || "Measure Name", Be = u.useMemo(
+    ), je = _t.labelField || "Measure Name", Be = u.useMemo(
       () => ($ || []).filter(
         /** @param {any} [field] @returns {any} */
         (r) => r
       ),
       [$]
-    ), te = u.useMemo(
+    ), re = u.useMemo(
       () => Be.filter(
         /** @param {any} [field] @returns {any} */
-        (r) => r && !ut(r)
+        (r) => r && !ur(r)
       ),
       [Be]
-    ), Ye = Array.isArray(k) && k.length > 0 && je && !Be.includes(je), Le = u.useMemo(
+    ), Ye = Array.isArray(j) && j.length > 0 && je && !Be.includes(je), Le = u.useMemo(
       () => Ye ? [je, ...Be] : Be,
       [Be, je, Ye]
-    ), Ze = yr.trim().toLowerCase(), nr = u.useCallback((r) => {
+    ), Ze = yt.trim().toLowerCase(), nt = u.useCallback((r) => {
       if (!Ze) return !0;
       const p = Ye && r === je ? "measure name measure names metric metrics value values" : "";
-      return String(r || "").toLowerCase().includes(Ze) || String(re(r) || "").toLowerCase().includes(Ze) || p.includes(Ze);
-    }, [re, je, Ze, Ye]), hr = u.useMemo(
-      () => Le.length > 8 ? Le.filter(nr) : Le,
-      [Le, nr]
-    ), mr = u.useMemo(
-      () => te.length > 8 ? te.filter(nr) : te,
-      [te, nr]
-    ), Wr = u.useCallback((r) => {
+      return String(r || "").toLowerCase().includes(Ze) || String(te(r) || "").toLowerCase().includes(Ze) || p.includes(Ze);
+    }, [te, je, Ze, Ye]), ht = u.useMemo(
+      () => Le.length > 8 ? Le.filter(nt) : Le,
+      [Le, nt]
+    ), mt = u.useMemo(
+      () => re.length > 8 ? re.filter(nt) : re,
+      [re, nt]
+    ), Wt = u.useCallback((r) => {
       l(
         /** @param {any} [prev] @returns {any} */
         (p) => (p || []).filter(
@@ -2980,7 +2997,7 @@ const En = u.memo(
           /** @param {any} [item] @returns {any} */
           (c) => !(c && c.field === r)
         )
-      ), xr(
+      ), xt(
         /** @param {any} [prev] @returns {any} */
         (p) => {
           if (!p || !Object.prototype.hasOwnProperty.call(p, r)) return p;
@@ -2988,37 +3005,37 @@ const En = u.memo(
           return delete c[r], c;
         }
       );
-    }, [f, xr, l, y]), Et = u.useCallback((r) => {
+    }, [f, xt, l, y]), Er = u.useCallback((r) => {
       const p = pe.current;
       if (!p) return;
-      const c = 60, m = 12, S = p.getBoundingClientRect(), I = r.clientY, X = I - S.top, j = S.bottom - I;
-      let H = 0;
-      if (X < c && X >= 0 ? H = -1 : j < c && j >= 0 && (H = 1), H === 0) {
+      const c = 60, m = 12, v = p.getBoundingClientRect(), T = r.clientY, X = T - v.top, S = v.bottom - T;
+      let K = 0;
+      if (X < c && X >= 0 ? K = -1 : S < c && S >= 0 && (K = 1), K === 0) {
         he.current && (cancelAnimationFrame(he.current), he.current = null);
         return;
       }
       const oe = () => {
-        pe.current && (pe.current.scrollTop += H * m, he.current = requestAnimationFrame(oe));
+        pe.current && (pe.current.scrollTop += K * m, he.current = requestAnimationFrame(oe));
       };
       he.current || (he.current = requestAnimationFrame(oe));
-    }, []), Tr = u.useCallback(() => {
+    }, []), It = u.useCallback(() => {
       he.current && (cancelAnimationFrame(he.current), he.current = null);
     }, []), xe = u.useMemo(
-      () => k.filter(
+      () => j.filter(
         /** @param {any} [config] @returns {any} */
         (r) => r && r.agg === "formula"
       ),
-      [k]
+      [j]
     ), $e = u.useMemo(
       () => xe.length,
       [xe]
     ), Pe = u.useMemo(
-      () => k.filter(
+      () => j.filter(
         /** @param {any} [config] @returns {any} */
         (r) => r && r.agg !== "formula"
       ).length,
-      [k]
-    ), Mt = u.useMemo(() => [
+      [j]
+    ), Mr = u.useMemo(() => [
       { id: "rows", label: "Rows", icon: /* @__PURE__ */ e.jsx(E.List, {}) },
       { id: "cols", label: "Columns", icon: /* @__PURE__ */ e.jsx(E.Columns, {}) },
       { id: "vals", label: "Values", icon: /* @__PURE__ */ e.jsx(E.Sigma, {}) },
@@ -3027,72 +3044,72 @@ const En = u.memo(
       filter: Object.keys(ue || {}).filter((r) => r !== "global"),
       rows: o || [],
       cols: x || [],
-      vals: k || []
-    }), [x, ue, o, k]), lr = u.useCallback(() => {
-      q && A && A("Keyboard move cancelled.", "info"), gr(null);
-    }, [q, A]), Ir = u.useCallback((r, p, c, m) => {
-      if (typeof v != "function") return;
-      gr({ field: r, zone: p, idx: c, label: m }), A && A(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
-    }, [v, A]), or = u.useCallback((r, p = null) => {
-      if (!q || typeof v != "function") return !1;
-      const c = Ge[r] || [], m = Number(p), S = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), c.length)) : c.length, I = v({
+      vals: j || []
+    }), [x, ue, o, j]), lt = u.useCallback(() => {
+      q && D && D("Keyboard move cancelled.", "info"), gt(null);
+    }, [q, D]), Tt = u.useCallback((r, p, c, m) => {
+      if (typeof V != "function") return;
+      gt({ field: r, zone: p, idx: c, label: m }), D && D(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
+    }, [V, D]), ot = u.useCallback((r, p = null) => {
+      if (!q || typeof V != "function") return !1;
+      const c = Ge[r] || [], m = Number(p), v = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), c.length)) : c.length, T = V({
         field: q.field,
         srcZone: q.zone,
         srcIdx: q.idx,
         targetZone: r,
-        targetIdx: S,
+        targetIdx: v,
         source: "layout:keyboard-drop"
       });
-      return I !== !1 && (A && A(`Moved ${q.label}.`, "success"), gr(null)), I !== !1;
-    }, [q, v, A, Ge]), Br = u.useCallback((r, p, c, m, S) => {
-      if (!it(r.target)) {
+      return T !== !1 && (D && D(`Moved ${q.label}.`, "success"), gt(null)), T !== !1;
+    }, [q, V, D, Ge]), Bt = u.useCallback((r, p, c, m, v) => {
+      if (!ir(r.target)) {
         if (r.key === "Escape") {
-          r.preventDefault(), r.stopPropagation(), lr();
+          r.preventDefault(), r.stopPropagation(), lt();
           return;
         }
-        r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), q ? or(c, m) : Ir(p, c, m, S));
+        r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), q ? ot(c, m) : Tt(p, c, m, v));
       }
-    }, [lr, or, q, Ir]), _t = u.useCallback((r, p) => {
-      if (!it(r.target)) {
+    }, [lt, ot, q, Tt]), _r = u.useCallback((r, p) => {
+      if (!ir(r.target)) {
         if (r.key === "Escape") {
-          r.preventDefault(), r.stopPropagation(), lr();
+          r.preventDefault(), r.stopPropagation(), lt();
           return;
         }
-        !q || r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), or(p, (Ge[p] || []).length));
+        !q || r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), ot(p, (Ge[p] || []).length));
       }
-    }, [lr, or, q, Ge]), Wt = u.useCallback((r) => {
+    }, [lt, ot, q, Ge]), Wr = u.useCallback((r) => {
       r.preventDefault();
       const p = r.clientX, c = Re || 288;
       Ke.current = { startX: p, startWidth: c };
-      const m = document.body.style.cursor, S = document.body.style.userSelect;
+      const m = document.body.style.cursor, v = document.body.style.userSelect;
       document.body.style.cursor = "col-resize", document.body.style.userSelect = "none";
-      const I = (j) => {
+      const T = (S) => {
         if (!Ke.current) return;
-        const H = j.clientX - Ke.current.startX, oe = Math.max(200, Math.min(600, Ke.current.startWidth + H));
+        const K = S.clientX - Ke.current.startX, oe = Math.max(200, Math.min(600, Ke.current.startWidth + K));
         ce(oe);
       }, X = () => {
-        Ke.current = null, document.body.style.cursor = m, document.body.style.userSelect = S, window.removeEventListener("mousemove", I), window.removeEventListener("mouseup", X), window.removeEventListener("blur", X);
+        Ke.current = null, document.body.style.cursor = m, document.body.style.userSelect = v, window.removeEventListener("mousemove", T), window.removeEventListener("mouseup", X), window.removeEventListener("blur", X);
       };
-      window.addEventListener("mousemove", I), window.addEventListener("mouseup", X), window.addEventListener("blur", X);
-    }, [Re, ce]), Lr = u.useCallback(() => pe.current ? pe.current.getBoundingClientRect().width : Re || 288, [Re]), Pr = u.useCallback((r) => {
+      window.addEventListener("mousemove", T), window.addEventListener("mouseup", X), window.addEventListener("blur", X);
+    }, [Re, ce]), Lt = u.useCallback(() => pe.current ? pe.current.getBoundingClientRect().width : Re || 288, [Re]), Pt = u.useCallback((r) => {
       if (typeof ce != "function") return;
       const p = Math.max(200, Math.min(600, Math.round(r)));
       ce(
         /** @param {any} [prev] @returns {any} */
         (c) => c === p ? c : p
       );
-    }, [ce]), Or = u.useCallback((r, p) => {
+    }, [ce]), Ot = u.useCallback((r, p) => {
       typeof ye == "function" && ye(
         /** @param {any} [prev] @returns {any} */
         (c) => {
-          const m = Xt(c, r, p), S = c && c[r] ? c[r] : null, I = m[r];
-          return S && S.width === I.width && S.height === I.height ? c : m;
+          const m = Xr(c, r, p), v = c && c[r] ? c[r] : null, T = m[r];
+          return v && v.width === T.width && v.height === T.height ? c : m;
         }
       );
-    }, [ye]), Hr = Z.dropZone && Z.dropZone.padding || "8px", Nr = u.useMemo(() => {
-      const r = { ...Z.dropZone || {} };
+    }, [ye]), Nt = G.dropZone && G.dropZone.padding || "8px", Ht = u.useMemo(() => {
+      const r = { ...G.dropZone || {} };
       return delete r.minHeight, delete r.maxHeight, delete r.overflowY, delete r.padding, delete r.border, delete r.boxShadow, r;
-    }, [Z.dropZone]), Ur = u.useCallback((r) => {
+    }, [G.dropZone]), Ut = u.useCallback((r) => {
       if (we && we[r]) return we[r];
       if (Ce && Ce[r]) return Ce[r];
       if (!h || !h.getColumn) return [];
@@ -3100,11 +3117,11 @@ const En = u.memo(
       const c = /* @__PURE__ */ new Set();
       return (h.getCoreRowModel ? h.getCoreRowModel().rows : []).forEach(
         /** @param {any} [row] @returns {any} */
-        (S) => {
-          const I = S.getValue(r);
-          I != null && I !== "" && c.add(I);
+        (v) => {
+          const T = v.getValue(r);
+          T != null && T !== "" && c.add(T);
         }
-      ), Array.from(c).sort((S, I) => String(S).localeCompare(String(I), void 0, { numeric: !0, sensitivity: "base" }));
+      ), Array.from(c).sort((v, T) => String(v).localeCompare(String(T), void 0, { numeric: !0, sensitivity: "base" }));
     }, [Ce, we, h]), me = u.useMemo(() => ({
       border: `1px solid ${d.border}`,
       background: d.headerSubtleBg || d.surfaceInset || d.background,
@@ -3116,112 +3133,112 @@ const En = u.memo(
       padding: "1px 4px",
       minHeight: "20px",
       outline: "none"
-    }), [d.background, d.border, d.headerSubtleBg, d.radiusSm, d.surfaceInset, d.text]), Vr = u.useCallback((r, p) => {
+    }), [d.background, d.border, d.headerSubtleBg, d.radiusSm, d.surfaceInset, d.text]), Vt = u.useCallback((r, p) => {
       y(
         /** @param {any} [prev] @returns {any} */
         (c) => {
-          const m = [...c], S = m[r];
-          if (!S) return c;
-          if (qr(p) && !S.weightField) {
-            const I = Array.isArray(te) && te.length > 0 ? te.find((H) => H !== S.field) || te[0] : "", X = typeof window < "u" ? window.prompt(
-              `Weight field for weighted average of ${ke(S.field)}`,
-              S.weightField || I || ""
-            ) : S.weightField || I || "", j = typeof X == "string" ? X.trim() : "";
-            return j ? Array.isArray(te) && te.length > 0 && !te.includes(j) ? (A && A(`Unknown weight field: ${j}`, "warning"), c) : (m[r] = { ...S, agg: p, weightField: j }, m) : (A && A("Weighted average requires a weight field.", "warning"), c);
+          const m = [...c], v = m[r];
+          if (!v) return c;
+          if (qt(p) && !v.weightField) {
+            const T = Array.isArray(re) && re.length > 0 ? re.find((K) => K !== v.field) || re[0] : "", X = typeof window < "u" ? window.prompt(
+              `Weight field for weighted average of ${ke(v.field)}`,
+              v.weightField || T || ""
+            ) : v.weightField || T || "", S = typeof X == "string" ? X.trim() : "";
+            return S ? Array.isArray(re) && re.length > 0 && !re.includes(S) ? (D && D(`Unknown weight field: ${S}`, "warning"), c) : (m[r] = { ...v, agg: p, weightField: S }, m) : (D && D("Weighted average requires a weight field.", "warning"), c);
           }
-          return m[r] = { ...S, agg: p }, m;
+          return m[r] = { ...v, agg: p }, m;
         }
       );
-    }, [te, y, A]), Tt = u.useCallback((r, p) => {
+    }, [re, y, D]), Ir = u.useCallback((r, p) => {
       if (!p) {
-        A && A("Weighted average requires a weight field.", "warning");
+        D && D("Weighted average requires a weight field.", "warning");
         return;
       }
       y(
         /** @param {any} [prev] @returns {any} */
         (c) => {
-          const m = [...c], S = m[r];
-          return S ? (m[r] = { ...S, weightField: p }, m) : c;
+          const m = [...c], v = m[r];
+          return v ? (m[r] = { ...v, weightField: p }, m) : c;
         }
       );
-    }, [y, A]), It = u.useCallback((r, p) => {
+    }, [y, D]), Tr = u.useCallback((r, p) => {
       y(
         /** @param {any} [prev] @returns {any} */
         (c) => {
-          const m = [...c], S = m[r];
-          return S ? (m[r] = {
-            ...S,
+          const m = [...c], v = m[r];
+          return v ? (m[r] = {
+            ...v,
             windowFn: p === "none" ? null : p
           }, m) : c;
         }
       );
-    }, [y]), Kr = u.useCallback(() => {
-      const r = Sn(k), p = k.filter(
+    }, [y]), Kt = u.useCallback(() => {
+      const r = Sn(j), p = j.filter(
         /** @param {any} [config] @returns {any} */
-        (I) => I && I.agg !== "formula"
-      ), c = `Formula ${$e + 1}`, m = Dr(p), S = bn(c, k, r);
-      Ie(r), De(r), y(
+        (T) => T && T.agg !== "formula"
+      ), c = `Formula ${$e + 1}`, m = Dt(p), v = bn(c, j, r);
+      Te(r), De(r), y(
         /** @param {any} [prev] @returns {any} */
-        (I) => [
-          ...I,
+        (T) => [
+          ...T,
           {
             field: r,
             agg: "formula",
             label: c,
             formula: m,
-            formulaRef: S,
+            formulaRef: v,
             formulaScope: "measures"
           }
         ]
-      ), A && (p.length === 0 ? A("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : A(`Added ${c}.`, "success"));
-    }, [$e, De, y, Ie, A, k]), Bt = (r, p) => {
-      r.stopPropagation(), pe.current && (Er.current = pe.current.scrollTop), Fr(
+      ), D && (p.length === 0 ? D("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : D(`Added ${c}.`, "success"));
+    }, [$e, De, y, Te, D, j]), Br = (r, p) => {
+      r.stopPropagation(), pe.current && (Et.current = pe.current.scrollTop), Ft(
         /** @param {any} [prev] @returns {any} */
         (c) => c.columnId === p ? { columnId: null, anchorEl: null } : { columnId: p, anchorEl: r.currentTarget }
-      ), K && K(p);
-    }, Lt = () => Fr({ columnId: null, anchorEl: null });
+      ), Z && Z(p);
+    }, Lr = () => Ft({ columnId: null, anchorEl: null });
     u.useEffect(() => {
-      pe.current && er.columnId && (pe.current.scrollTop = Er.current);
-    }, [we, er.columnId]), u.useEffect(() => {
+      pe.current && et.columnId && (pe.current.scrollTop = Et.current);
+    }, [we, et.columnId]), u.useEffect(() => {
       if (xe.length === 0) {
-        Te !== null && Ie(null), be !== null && De(null);
+        Ie !== null && Te(null), be !== null && De(null);
         return;
       }
       xe.some(
         /** @param {any} [config] @returns {any} */
-        (p) => p.field === Te
-      ) || Ie(xe[xe.length - 1].field), be && !xe.some(
+        (p) => p.field === Ie
+      ) || Te(xe[xe.length - 1].field), be && !xe.some(
         /** @param {any} [config] @returns {any} */
         (p) => p.field === be
       ) && De(null);
-    }, [Te, xe, be]);
-    const vr = u.useMemo(
-      () => k.findIndex(
+    }, [Ie, xe, be]);
+    const vt = u.useMemo(
+      () => j.findIndex(
         /** @param {any} [config] @returns {any} */
         (r) => r && r.agg === "formula" && r.field === be
       ),
-      [be, k]
-    ), Sr = vr >= 0 ? k[vr] : null, Yr = u.useCallback((r) => {
-      Ie(r), De(r);
+      [be, j]
+    ), St = vt >= 0 ? j[vt] : null, Yt = u.useCallback((r) => {
+      Te(r), De(r);
     }, []), Xe = u.useCallback((r) => {
-      const p = k[r] && k[r].agg === "formula" ? k[r].field : null;
+      const p = j[r] && j[r].agg === "formula" ? j[r].field : null;
       if (y(
         /** @param {any} [prev] @returns {any} */
         (c) => c.filter(
           /** @param {any} [_] @param {any} [index] @returns {any} */
-          (m, S) => S !== r
+          (m, v) => v !== r
         )
-      ), p && p === Te) {
+      ), p && p === Ie) {
         const c = xe.find(
           /** @param {any} [config] @returns {any} */
           (m) => m.field !== p
         );
-        Ie(c ? c.field : null);
+        Te(c ? c.field : null);
       }
       p && p === be && De(null);
-    }, [Te, xe, be, y, k]), Oe = wt === "report", Zr = Math.max(Re || 288, Oe ? 380 : 0), Gr = (r, p) => {
+    }, [Ie, xe, be, y, j]), Oe = wr === "report", Zt = Math.max(Re || 288, Oe ? 380 : 0), Gt = (r, p) => {
       if (r <= 8) return null;
-      const c = yr.trim().length > 0;
+      const c = yt.trim().length > 0;
       return /* @__PURE__ */ e.jsxs("div", { style: {
         display: "flex",
         alignItems: "center",
@@ -3239,8 +3256,8 @@ const En = u.memo(
             type: "search",
             "aria-label": "Search available fields",
             placeholder: `Search ${r} fields...`,
-            value: yr,
-            onChange: (m) => Mr(m.target.value),
+            value: yt,
+            onChange: (m) => Mt(m.target.value),
             style: {
               flex: 1,
               minWidth: 0,
@@ -3258,7 +3275,7 @@ const En = u.memo(
             type: "button",
             "aria-label": "Clear available field search",
             title: "Clear search",
-            onClick: () => Mr(""),
+            onClick: () => Mt(""),
             style: {
               border: "none",
               background: "transparent",
@@ -3279,7 +3296,7 @@ const En = u.memo(
       ] });
     };
     return /* @__PURE__ */ e.jsxs("div", { style: { position: "relative", display: "flex", flexShrink: 0 }, children: [
-      /* @__PURE__ */ e.jsxs("div", { ref: pe, style: { ...Z.sidebar, width: `${Zr}px`, minWidth: `${Zr}px` }, role: "complementary", "aria-label": "Tool Panel", onDragOver: Et, onDragLeave: Tr, onDrop: Tr, children: [
+      /* @__PURE__ */ e.jsxs("div", { ref: pe, style: { ...G.sidebar, width: `${Zt}px`, minWidth: `${Zt}px` }, role: "complementary", "aria-label": "Tool Panel", onDragOver: Er, onDragLeave: It, onDrop: It, children: [
         /* @__PURE__ */ e.jsx(
           "div",
           {
@@ -3300,14 +3317,14 @@ const En = u.memo(
               tabIndex: 0,
               "aria-selected": Ae === r.id,
               className: "sp-tab",
-              onClick: () => fr(r.id),
+              onClick: () => ft(r.id),
               onKeyDown: (m) => {
                 if (m.key === "Enter" || m.key === " ")
-                  m.preventDefault(), fr(r.id);
+                  m.preventDefault(), ft(r.id);
                 else if (m.key === "ArrowRight" || m.key === "ArrowLeft") {
                   m.preventDefault();
-                  const S = m.key === "ArrowRight" ? 1 : -1, I = c[(p + S + c.length) % c.length];
-                  I && fr(I.id);
+                  const v = m.key === "ArrowRight" ? 1 : -1, T = c[(p + v + c.length) % c.length];
+                  T && ft(T.id);
                 }
               },
               style: {
@@ -3438,50 +3455,50 @@ const En = u.memo(
         Oe && Ae === "report" ? /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "0 12px 12px" }, children: /* @__PURE__ */ e.jsx(
           yn,
           {
-            reportDef: Ct,
-            setReportDef: Rt,
+            reportDef: Cr,
+            setReportDef: Rr,
             availableFields: $,
             customDimensions: Ve,
             theme: d,
-            styles: Z,
+            styles: G,
             data: fe,
-            valConfigs: k,
+            valConfigs: j,
             colFields: x,
             setColFields: f,
             setValConfigs: y,
-            savedReports: Dt,
-            setSavedReports: At,
-            activeReportId: $t,
-            setActiveReportId: zt,
-            showNotification: A,
-            requestedSelection: ur,
-            showReportConfigColumn: pr,
-            setShowReportConfigColumn: kt
+            savedReports: Dr,
+            setSavedReports: Ar,
+            activeReportId: $r,
+            setActiveReportId: zr,
+            showNotification: D,
+            requestedSelection: ut,
+            showReportConfigColumn: pt,
+            setShowReportConfigColumn: kr
           }
         ) }) : Oe && Ae === "fields" ? /* @__PURE__ */ e.jsxs("div", { style: { padding: "0 4px" }, children: [
           /* @__PURE__ */ e.jsx(
-            lt,
+            lr,
             {
               availableFields: $,
               customDimensions: Ve,
-              setCustomDimensions: zr,
+              setCustomDimensions: zt,
               data: fe,
               theme: d,
-              showNotification: A,
-              getFieldLabel: re,
-              onDeleteField: Wr
+              showNotification: D,
+              getFieldLabel: te,
+              onDeleteField: Wt
             }
           ),
           /* @__PURE__ */ e.jsxs("div", { style: { fontSize: "10px", color: d.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px", padding: "0 2px" }, children: [
             /* @__PURE__ */ e.jsx(E.Database, { style: { verticalAlign: "middle", marginRight: "4px" } }),
             "Available Fields — click to add"
           ] }),
-          Gr(te.length, mr.length),
+          Gt(re.length, mt.length),
           /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "14px" }, children: [
-            mr.map(
+            mt.map(
               /** @param {any} [f] @returns {any} */
               (r) => {
-                const p = k.some(
+                const p = j.some(
                   /** @param {any} [c] @returns {any} */
                   (c) => c && c.field === r && c.agg !== "formula"
                 );
@@ -3491,7 +3508,7 @@ const En = u.memo(
                     onClick: () => {
                       p || y(
                         /** @param {any} [prev] @returns {any} */
-                        (c) => [...c, { field: r, agg: "sum", label: re(r) }]
+                        (c) => [...c, { field: r, agg: "sum", label: te(r) }]
                       );
                     },
                     style: {
@@ -3507,9 +3524,9 @@ const En = u.memo(
                       opacity: p ? 0.6 : 1,
                       userSelect: "none"
                     },
-                    title: p ? `${re(r)} already in values` : `Add ${re(r)} to values`,
+                    title: p ? `${te(r)} already in values` : `Add ${te(r)} to values`,
                     children: [
-                      re(r),
+                      te(r),
                       p ? " ✓" : ""
                     ]
                   },
@@ -3517,11 +3534,11 @@ const En = u.memo(
                 );
               }
             ),
-            te.length > 8 && mr.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
+            re.length > 8 && mt.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
           ] }),
           /* @__PURE__ */ e.jsxs("div", { style: { borderTop: `1px solid ${d.border}`, paddingTop: "10px", marginBottom: "8px" }, children: [
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "0 2px 8px 2px", flexWrap: "wrap" }, children: [
-              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: Kr, style: { border: `1px solid ${d.primary}66`, background: `${d.primary}12`, color: d.primary, borderRadius: "999px", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }, children: "+ Add Formula" }),
+              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: Kt, style: { border: `1px solid ${d.primary}66`, background: `${d.primary}12`, color: d.primary, borderRadius: "999px", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }, children: "+ Add Formula" }),
               /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec }, children: [
                 Pe,
                 " value",
@@ -3533,7 +3550,7 @@ const En = u.memo(
               ] })
             ] }),
             /* @__PURE__ */ e.jsx(
-              ct,
+              cr,
               {
                 measureAxis: F,
                 setMeasureAxis: s,
@@ -3543,45 +3560,45 @@ const En = u.memo(
               }
             )
           ] }),
-          k.map(
+          j.map(
             /** @param {any} [item] @param {any} [idx] @returns {any} */
             (r, p) => {
               const c = r && r.agg === "formula";
               if (!r) return null;
-              const m = Ft === p;
+              const m = Fr === p;
               return /* @__PURE__ */ e.jsx(
                 "div",
                 {
                   draggable: !0,
                   onDragStart: () => {
-                    rr.current = p;
+                    tt.current = p;
                   },
-                  onDragOver: (S) => {
-                    S.preventDefault(), tr(p);
+                  onDragOver: (v) => {
+                    v.preventDefault(), rt(p);
                   },
-                  onDragLeave: () => tr(null),
-                  onDrop: (S) => {
-                    S.preventDefault();
-                    const I = rr.current;
-                    tr(null), rr.current = null, !(I === null || I === p) && y(
+                  onDragLeave: () => rt(null),
+                  onDrop: (v) => {
+                    v.preventDefault();
+                    const T = tt.current;
+                    rt(null), tt.current = null, !(T === null || T === p) && y(
                       /** @param {any} [prev] @returns {any} */
                       (X) => {
-                        const j = [...X], [H] = j.splice(I, 1);
-                        return j.splice(p, 0, H), j;
+                        const S = [...X], [K] = S.splice(T, 1);
+                        return S.splice(p, 0, K), S;
                       }
                     );
                   },
                   onDragEnd: () => {
-                    rr.current = null, tr(null);
+                    tt.current = null, rt(null);
                   },
                   style: { marginBottom: "6px", borderTop: m ? `2px solid ${d.primary}` : "2px solid transparent", cursor: "grab" },
-                  children: c ? /* @__PURE__ */ e.jsx(st, { item: r, idx: p, selected: r.field === be, onSelect: Yr, onRemove: Xe, setValConfigs: y, theme: d, styles: Z, dropLine: null, zoneId: "vals", valueSelectStyle: me, colFields: x, fixedSparklineValueKeySet: br, showNotification: A, serverError: We && We[r.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...Z.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
+                  children: c ? /* @__PURE__ */ e.jsx(sr, { item: r, idx: p, selected: r.field === be, onSelect: Yt, onRemove: Xe, setValConfigs: y, theme: d, styles: G, dropLine: null, zoneId: "vals", valueSelectStyle: me, colFields: x, fixedSparklineValueKeySet: bt, showNotification: D, serverError: We && We[r.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...G.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
                     /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
                       /* @__PURE__ */ e.jsx(E.DragIndicator, { style: { flexShrink: 0, opacity: 0.4 } }),
-                      /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: re(r.field) })
+                      /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: te(r.field) })
                     ] }),
                     /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexWrap: "nowrap", flexShrink: 0 }, children: [
-                      /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Aggregation", value: r.agg, onClick: (S) => S.stopPropagation(), onChange: (S) => Vr(p, S.target.value), style: { ...me, width: "78px" }, children: [
+                      /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Aggregation", value: r.agg, onClick: (v) => v.stopPropagation(), onChange: (v) => Vt(p, v.target.value), style: { ...me, width: "78px" }, children: [
                         /* @__PURE__ */ e.jsx("option", { value: "sum", children: "Sum" }),
                         /* @__PURE__ */ e.jsx("option", { value: "avg", children: "Avg" }),
                         /* @__PURE__ */ e.jsx("option", { value: "count", children: "Cnt" }),
@@ -3597,7 +3614,7 @@ const En = u.memo(
               );
             }
           ),
-          k.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "12px", textAlign: "center" }, children: "No value fields. Click a field above or add a formula." })
+          j.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "12px", textAlign: "center" }, children: "No value fields. Click a field above or add a formula." })
         ] }) : !Oe && n === "filters" ? /* @__PURE__ */ e.jsxs("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", padding: "8px" }, children: [
           /* @__PURE__ */ e.jsxs("div", { style: { marginBottom: "10px", display: "flex", alignItems: "center", background: d.background, borderRadius: "6px", padding: "4px 8px", border: `1px solid ${d.border}` }, children: [
             /* @__PURE__ */ e.jsx(E.Search, {}),
@@ -3605,7 +3622,7 @@ const En = u.memo(
               "input",
               {
                 placeholder: "Search columns...",
-                value: D,
+                value: R,
                 onChange: (r) => O(r.target.value),
                 style: { border: "none", background: "transparent", marginLeft: "10px", outline: "none", width: "100%", color: d.text, fontSize: "13px" }
               }
@@ -3615,40 +3632,40 @@ const En = u.memo(
             const c = $.map(
               /** @param {any} [field] @returns {any} */
               (m) => {
-                const S = h.getColumn(m);
-                return S || { id: m, header: re(m), columnDef: { header: re(m) } };
+                const v = h.getColumn(m);
+                return v || { id: m, header: te(m), columnDef: { header: te(m) } };
               }
             ).filter(
               /** @param {any} [col] @returns {any} */
               (m) => {
-                const S = m.columnDef && typeof m.columnDef.header == "string" ? m.columnDef.header : typeof m.header == "string" ? m.header : m.id;
-                return String(S).toLowerCase().includes(D.toLowerCase()) || m.id.toLowerCase().includes(D.toLowerCase());
+                const v = m.columnDef && typeof m.columnDef.header == "string" ? m.columnDef.header : typeof m.header == "string" ? m.header : m.id;
+                return String(v).toLowerCase().includes(R.toLowerCase()) || m.id.toLowerCase().includes(R.toLowerCase());
               }
             );
             return /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: c.map(
               /** @param {any} [col] @returns {any} */
               (m) => /* @__PURE__ */ e.jsx(
-                tn,
+                rn,
                 {
                   column: m,
                   theme: d,
-                  styles: Z,
+                  styles: G,
                   onFilter: (
                     /** @param {any} [val] @returns {any} */
-                    ((S) => V(m.id, S))
+                    ((v) => A(m.id, v))
                   ),
                   currentFilter: ue[m.id],
-                  options: Ur(m.id),
+                  options: Ut(m.id),
                   optionMeta: _e && _e[m.id],
                   onSearchOptions: Qe ? (
                     /** @param {any} [search] @returns {any} */
-                    ((S) => K && K(m.id, { search: S, offset: 0 }))
+                    ((v) => Z && Z(m.id, { search: v, offset: 0 }))
                   ) : void 0,
                   onLoadMoreOptions: Qe ? (
                     /** @param {any} [search] @param {any} [offset] @returns {any} */
-                    ((S, I) => K && K(m.id, { search: S, offset: I }))
+                    ((v, T) => Z && Z(m.id, { search: v, offset: T }))
                   ) : void 0,
-                  onOpen: K
+                  onOpen: Z
                 },
                 m.id
               )
@@ -3657,34 +3674,34 @@ const En = u.memo(
         ] }) : (Oe ? Ae !== "columns" : n !== "columns") ? /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
           n === "fields" && /* @__PURE__ */ e.jsxs("div", { style: { flexShrink: 0 }, children: [
             /* @__PURE__ */ e.jsx(
-              lt,
+              lr,
               {
                 availableFields: $,
                 customDimensions: Ve,
-                setCustomDimensions: zr,
+                setCustomDimensions: zt,
                 data: fe,
                 theme: d,
-                showNotification: A,
-                getFieldLabel: re,
-                onDeleteField: Wr
+                showNotification: D,
+                getFieldLabel: te,
+                onDeleteField: Wt
               }
             ),
-            /* @__PURE__ */ e.jsxs("div", { style: Z.sectionTitleSm, children: [
+            /* @__PURE__ */ e.jsxs("div", { style: G.sectionTitleSm, children: [
               /* @__PURE__ */ e.jsx(E.Database, {}),
               " Available Fields"
             ] }),
-            Gr(Le.length, hr.length),
+            Gt(Le.length, ht.length),
             /* @__PURE__ */ e.jsxs(
-              dt,
+              dr,
               {
                 panelId: "availableFields",
                 panelLabel: "Available Fields",
                 size: ge && ge.availableFields,
-                onSizeChange: Or,
-                getSidebarWidth: Lr,
-                onSidebarWidthChange: Pr,
+                onSizeChange: Ot,
+                getSidebarWidth: Lt,
+                onSidebarWidthChange: Pt,
                 theme: d,
-                outerStyle: Nr,
+                outerStyle: Ht,
                 contentStyle: {
                   display: "flex",
                   flexWrap: "wrap",
@@ -3693,10 +3710,10 @@ const En = u.memo(
                   padding: "2px 12px 12px 2px"
                 },
                 children: [
-                  hr.map(
+                  ht.map(
                     /** @param {any} [f] @returns {any} */
                     (r) => {
-                      const p = Ye && r === je, c = p ? "Measure Names" : re(r), m = p ? "measureAxis" : "pool";
+                      const p = Ye && r === je, c = p ? "Measure Names" : te(r), m = p ? "measureAxis" : "pool";
                       return /* @__PURE__ */ e.jsxs(
                         "div",
                         {
@@ -3707,10 +3724,10 @@ const En = u.memo(
                           "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                           "aria-grabbed": q && q.zone === m && q.field === r ? "true" : "false",
                           "aria-label": `Move ${c}`,
-                          onDragStart: (S) => N(S, r, m),
+                          onDragStart: (v) => Y(v, r, m),
                           onDragEnd: z,
-                          onKeyDown: (S) => Br(S, r, m, -1, c),
-                          title: p ? "Drag to Rows or Columns to show measure names" : `Move ${re(r)}`,
+                          onKeyDown: (v) => Bt(v, r, m, -1, c),
+                          title: p ? "Drag to Rows or Columns to show measure names" : `Move ${te(r)}`,
                           style: {
                             padding: "4px 8px",
                             fontSize: "11px",
@@ -3738,17 +3755,17 @@ const En = u.memo(
                       );
                     }
                   ),
-                  Le.length > 8 && hr.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
+                  Le.length > 8 && ht.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
                 ]
               }
             )
           ] }),
-          Mt.map(
+          Mr.map(
             /** @param {any} [zone] @returns {any} */
             (r) => {
               const p = Ge[r.id] || [];
               return /* @__PURE__ */ e.jsxs("div", { style: { marginBottom: "20px", flexShrink: 0 }, children: [
-                /* @__PURE__ */ e.jsxs("div", { style: Z.sectionTitle, children: [
+                /* @__PURE__ */ e.jsxs("div", { style: G.sectionTitle, children: [
                   r.icon,
                   r.label
                 ] }),
@@ -3757,7 +3774,7 @@ const En = u.memo(
                     "button",
                     {
                       type: "button",
-                      onClick: Kr,
+                      onClick: Kt,
                       style: {
                         border: `1px solid ${d.primary}66`,
                         background: `${d.primary}12`,
@@ -3783,7 +3800,7 @@ const En = u.memo(
                     $e === 1 ? "" : "s"
                   ] }),
                   /* @__PURE__ */ e.jsx(
-                    ct,
+                    cr,
                     {
                       measureAxis: F,
                       setMeasureAxis: s,
@@ -3814,17 +3831,17 @@ const En = u.memo(
                   )
                 ] }),
                 /* @__PURE__ */ e.jsx(
-                  dt,
+                  dr,
                   {
                     panelId: r.id,
                     panelLabel: r.label,
                     size: ge && ge[r.id],
-                    onSizeChange: Or,
-                    getSidebarWidth: Lr,
-                    onSidebarWidthChange: Pr,
+                    onSizeChange: Ot,
+                    getSidebarWidth: Lt,
+                    onSidebarWidthChange: Pt,
                     theme: d,
-                    outerStyle: Nr,
-                    contentStyle: { padding: `${Hr} 12px 12px ${Hr}` },
+                    outerStyle: Ht,
+                    contentStyle: { padding: `${Nt} 12px 12px ${Nt}` },
                     children: /* @__PURE__ */ e.jsxs(
                       "div",
                       {
@@ -3833,7 +3850,7 @@ const En = u.memo(
                         tabIndex: 0,
                         "aria-label": `${r.label} drop zone`,
                         "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
-                        onKeyDown: (c) => _t(c, r.id),
+                        onKeyDown: (c) => _r(c, r.id),
                         onDragOver: (c) => {
                           c.target === c.currentTarget ? L(c, r.id, p.length) : (c.preventDefault(), c.dataTransfer && (c.dataTransfer.dropEffect = "move"));
                         },
@@ -3842,7 +3859,7 @@ const En = u.memo(
                           p.map(
                             /** @param {any} [item] @param {any} [idx] @returns {any} */
                             (c, m) => {
-                              const S = r.id === "vals" ? c.field : c, I = r.id === "vals" ? c.agg === "formula" ? c.label || "Formula" : re(c.field) : re(c), X = (r.id === "rows" || r.id === "cols") && S === je && _r.placement !== "none";
+                              const v = r.id === "vals" ? c.field : c, T = r.id === "vals" ? c.agg === "formula" ? c.label || "Formula" : te(c.field) : te(c), X = (r.id === "rows" || r.id === "cols") && v === je && _t.placement !== "none";
                               return /* @__PURE__ */ e.jsxs(
                                 "div",
                                 {
@@ -3852,42 +3869,42 @@ const En = u.memo(
                                   tabIndex: 0,
                                   "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                                   "aria-grabbed": q && q.zone === r.id && q.idx === m ? "true" : "false",
-                                  "aria-label": `Move ${I}`,
-                                  onKeyDown: (j) => Br(j, c, r.id, m, I),
-                                  onDragStart: (j) => N(j, c, r.id, m),
-                                  onDragOver: (j) => L(j, r.id, m),
+                                  "aria-label": `Move ${T}`,
+                                  onKeyDown: (S) => Bt(S, c, r.id, m, T),
+                                  onDragStart: (S) => Y(S, c, r.id, m),
+                                  onDragOver: (S) => L(S, r.id, m),
                                   onDragEnd: z,
                                   children: [
                                     r.id === "vals" && c.agg === "formula" ? /* @__PURE__ */ e.jsx(
-                                      st,
+                                      sr,
                                       {
                                         item: c,
                                         idx: m,
-                                        selected: c.field === Te,
-                                        onSelect: Yr,
+                                        selected: c.field === Ie,
+                                        onSelect: Yt,
                                         onRemove: Xe,
                                         setValConfigs: y,
                                         theme: d,
-                                        styles: Z,
+                                        styles: G,
                                         dropLine: _,
                                         zoneId: r.id,
                                         valueSelectStyle: me,
                                         colFields: x,
-                                        fixedSparklineValueKeySet: br,
-                                        showNotification: A,
+                                        fixedSparklineValueKeySet: bt,
+                                        showNotification: D,
                                         serverError: We && We[c.field] || null
                                       }
                                     ) : /* @__PURE__ */ e.jsxs("div", { style: {
-                                      ...Z.chip,
+                                      ...G.chip,
                                       ...r.id === "vals" ? { flexWrap: "wrap", alignItems: "flex-start" } : {}
                                     }, children: [
-                                      _ && _.zone === r.id && _.idx === m && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...Z.dropLine, top: -2 } }),
+                                      _ && _.zone === r.id && _.idx === m && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...G.dropLine, top: -2 } }),
                                       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
                                         /* @__PURE__ */ e.jsx(E.DragIndicator, {}),
-                                        /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: I })
+                                        /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: T })
                                       ] }),
                                       r.id === "vals" && /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexWrap: "nowrap", flexShrink: 0 }, children: [
-                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.agg, onClick: (j) => j.stopPropagation(), onChange: (j) => Vr(m, j.target.value), style: { ...me, width: "78px" }, title: "Aggregation", children: [
+                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.agg, onClick: (S) => S.stopPropagation(), onChange: (S) => Vt(m, S.target.value), style: { ...me, width: "78px" }, title: "Aggregation", children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "sum", children: "Sum" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "avg", children: "Avg" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "count", children: "Cnt" }),
@@ -3896,14 +3913,14 @@ const En = u.memo(
                                           /* @__PURE__ */ e.jsx("option", { value: "weighted_avg", children: "WAvg" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "array_agg", children: "Series" })
                                         ] }),
-                                        qr(c.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.weightField || "", onClick: (j) => j.stopPropagation(), onChange: (j) => Tt(m, j.target.value), style: { ...me, width: "96px" }, title: "Weight field", children: [
+                                        qt(c.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.weightField || "", onClick: (S) => S.stopPropagation(), onChange: (S) => Ir(m, S.target.value), style: { ...me, width: "96px" }, title: "Weight field", children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "", disabled: !0, children: "Weight" }),
-                                          te.map(
+                                          re.map(
                                             /** @param {any} [fieldName] @returns {any} */
-                                            (j) => /* @__PURE__ */ e.jsx("option", { value: j, children: re(j) }, j)
+                                            (S) => /* @__PURE__ */ e.jsx("option", { value: S, children: te(S) }, S)
                                           )
                                         ] }),
-                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Window calculation", value: c.windowFn || "none", onClick: (j) => j.stopPropagation(), onChange: (j) => It(m, j.target.value), style: { ...me, width: "68px" }, children: [
+                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Window calculation", value: c.windowFn || "none", onClick: (S) => S.stopPropagation(), onChange: (S) => Tr(m, S.target.value), style: { ...me, width: "68px" }, children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "none", children: "Norm" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "percent_of_row", children: "%Row" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "percent_of_col", children: "%Col" }),
@@ -3911,75 +3928,75 @@ const En = u.memo(
                                         ] })
                                       ] }),
                                       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "4px", marginLeft: "auto", alignItems: "center" }, children: [
-                                        r.id === "filter" && /* @__PURE__ */ e.jsx("div", { onClick: (j) => Bt(j, S), style: { cursor: "pointer", display: "flex", alignItems: "center", padding: "2px", borderRadius: "4px" }, children: /* @__PURE__ */ e.jsx(E.Filter, {}) }),
+                                        r.id === "filter" && /* @__PURE__ */ e.jsx("div", { onClick: (S) => Br(S, v), style: { cursor: "pointer", display: "flex", alignItems: "center", padding: "2px", borderRadius: "4px" }, children: /* @__PURE__ */ e.jsx(E.Filter, {}) }),
                                         /* @__PURE__ */ e.jsx("span", { onClick: () => {
                                           if (X && typeof s == "function") {
                                             s(
                                               /** @param {any} [previous] @returns {any} */
-                                              (j) => ({
-                                                ...Je(j),
+                                              (S) => ({
+                                                ...Je(S),
                                                 placement: "none"
                                               })
                                             ), r.id === "rows" && l(
                                               /** @param {any} [p] @returns {any} */
-                                              (j) => Array.isArray(j) ? j.filter(
+                                              (S) => Array.isArray(S) ? S.filter(
                                                 /** @param {any} [x] @returns {any} */
-                                                (H) => H !== S
-                                              ) : j
+                                                (K) => K !== v
+                                              ) : S
                                             ), r.id === "cols" && f(
                                               /** @param {any} [p] @returns {any} */
-                                              (j) => Array.isArray(j) ? j.filter(
+                                              (S) => Array.isArray(S) ? S.filter(
                                                 /** @param {any} [x] @returns {any} */
-                                                (H) => H !== S
-                                              ) : j
+                                                (K) => K !== v
+                                              ) : S
                                             );
                                             return;
                                           }
                                           if (r.id === "filter") {
-                                            const j = { ...ue };
-                                            delete j[S], xr(j);
+                                            const S = { ...ue };
+                                            delete S[v], xt(S);
                                           }
                                           r.id === "rows" && l(
                                             /** @param {any} [p] @returns {any} */
-                                            (j) => j.filter(
+                                            (S) => S.filter(
                                               /** @param {any} [x] @returns {any} */
-                                              (H) => H !== S
+                                              (K) => K !== v
                                             )
                                           ), r.id === "cols" && f(
                                             /** @param {any} [p] @returns {any} */
-                                            (j) => j.filter(
+                                            (S) => S.filter(
                                               /** @param {any} [x] @returns {any} */
-                                              (H) => H !== S
+                                              (K) => K !== v
                                             )
                                           ), r.id === "vals" && Xe(m);
                                         }, className: "sp-chip-remove", style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(E.Close, {}) })
                                       ] }),
-                                      r.id === "filter" && er.columnId === S && /* @__PURE__ */ e.jsx(
-                                        qt,
+                                      r.id === "filter" && et.columnId === v && /* @__PURE__ */ e.jsx(
+                                        qr,
                                         {
-                                          column: { header: I, id: S },
-                                          anchorEl: er.anchorEl,
-                                          onClose: Lt,
+                                          column: { header: T, id: v },
+                                          anchorEl: et.anchorEl,
+                                          onClose: Lr,
                                           onFilter: (
                                             /** @param {any} [filterValue] @returns {any} */
-                                            ((j) => V(S, j))
+                                            ((S) => A(v, S))
                                           ),
-                                          currentFilter: ue[S],
-                                          options: Ur(S),
-                                          optionMeta: _e && _e[S],
+                                          currentFilter: ue[v],
+                                          options: Ut(v),
+                                          optionMeta: _e && _e[v],
                                           onSearchOptions: Qe ? (
                                             /** @param {any} [search] @returns {any} */
-                                            ((j) => K && K(S, { search: j, offset: 0 }))
+                                            ((S) => Z && Z(v, { search: S, offset: 0 }))
                                           ) : void 0,
                                           onLoadMoreOptions: Qe ? (
                                             /** @param {any} [search] @param {any} [offset] @returns {any} */
-                                            ((j, H) => K && K(S, { search: j, offset: H }))
+                                            ((S, K) => Z && Z(v, { search: S, offset: K }))
                                           ) : void 0,
                                           theme: d
                                         }
                                       ),
                                       r.id === "vals" && /* @__PURE__ */ e.jsx(
-                                        jt,
+                                        jr,
                                         {
                                           item: c,
                                           idx: m,
@@ -3987,16 +4004,16 @@ const En = u.memo(
                                           theme: d,
                                           valueSelectStyle: me,
                                           colFields: x,
-                                          fixedSparklineValueKeySet: br,
-                                          showNotification: A
+                                          fixedSparklineValueKeySet: bt,
+                                          showNotification: D
                                         }
                                       ),
-                                      _ && _.zone === r.id && _.idx === m + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...Z.dropLine, bottom: -2 } })
+                                      _ && _.zone === r.id && _.idx === m + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...G.dropLine, bottom: -2 } })
                                     ] }),
-                                    r.id === "filter" && ue[S] && ue[S].conditions && /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: d.primary, padding: "0 8px 4px 8px", marginTop: "-4px" }, children: ue[S].conditions.map(
+                                    r.id === "filter" && ue[v] && ue[v].conditions && /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: d.primary, padding: "0 8px 4px 8px", marginTop: "-4px" }, children: ue[v].conditions.map(
                                       /** @param {any} [c] @returns {any} */
-                                      (j) => `${j.type}: ${j.value}${j.caseSensitive ? " (Match Case)" : ""}`
-                                    ).join(` ${ue[S].operator} `) })
+                                      (S) => `${S.type}: ${S.value}${S.caseSensitive ? " (Match Case)" : ""}`
+                                    ).join(` ${ue[v].operator} `) })
                                   ]
                                 },
                                 m
@@ -4021,7 +4038,7 @@ const En = u.memo(
                 "input",
                 {
                   placeholder: "Search columns...",
-                  value: D,
+                  value: R,
                   onChange: (r) => O(r.target.value),
                   style: {
                     border: "none",
@@ -4035,7 +4052,7 @@ const En = u.memo(
                   }
                 }
               ),
-              D && /* @__PURE__ */ e.jsx(
+              R && /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   type: "button",
@@ -4069,7 +4086,7 @@ const En = u.memo(
                 {
                   type: "button",
                   className: `sp-btn ${p ? "sp-btn-primary" : "sp-btn-subtle"}`,
-                  onClick: () => w(r.value),
+                  onClick: () => k(r.value),
                   style: {
                     padding: "6px 10px",
                     borderRadius: "8px",
@@ -4093,86 +4110,89 @@ const En = u.memo(
               );
             }) })
           ] }),
-          /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "6px", padding: "0 8px" }, children: [
+          /* @__PURE__ */ e.jsxs("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "4px", padding: "0 8px" }, children: [
             /* @__PURE__ */ e.jsxs(
               "button",
               {
+                type: "button",
+                className: "sp-btn sp-btn-subtle",
                 onClick: () => h.toggleAllColumnsVisible(!0),
+                title: "Show All Columns",
                 style: {
-                  ...Z.btn,
-                  padding: "8px 12px",
+                  ...G.btn,
+                  padding: "6px 4px",
                   fontSize: "11px",
-                  flex: 1,
+                  gap: "4px",
+                  minWidth: 0,
                   justifyContent: "center",
                   background: d.background,
                   fontWeight: 600,
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                  transition: "all 0.2s"
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
-                onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                 children: [
-                  /* @__PURE__ */ e.jsx(E.Visibility, { style: { fontSize: "14px" } }),
-                  /* @__PURE__ */ e.jsx("span", { children: "Show All" })
+                  /* @__PURE__ */ e.jsx(E.Visibility, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Show" })
                 ]
               }
             ),
             /* @__PURE__ */ e.jsxs(
               "button",
               {
+                type: "button",
+                className: "sp-btn sp-btn-subtle",
                 onClick: () => h.toggleAllColumnsVisible(!1),
+                title: "Hide All Columns",
                 style: {
-                  ...Z.btn,
-                  padding: "8px 12px",
+                  ...G.btn,
+                  padding: "6px 4px",
                   fontSize: "11px",
-                  flex: 1,
+                  gap: "4px",
+                  minWidth: 0,
                   justifyContent: "center",
                   background: d.background,
                   fontWeight: 600,
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                  transition: "all 0.2s"
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
-                onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                 children: [
-                  /* @__PURE__ */ e.jsx(E.VisibilityOff, { style: { fontSize: "14px" } }),
-                  /* @__PURE__ */ e.jsx("span", { children: "Hide All" })
+                  /* @__PURE__ */ e.jsx(E.VisibilityOff, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Hide" })
                 ]
               }
             ),
             /* @__PURE__ */ e.jsxs(
               "button",
               {
+                type: "button",
+                className: "sp-btn sp-btn-subtle",
                 onClick: () => ee(!1),
+                title: "Unpin All Columns",
                 style: {
-                  ...Z.btn,
-                  padding: "8px 12px",
+                  ...G.btn,
+                  padding: "6px 4px",
                   fontSize: "11px",
-                  flex: 1,
+                  gap: "4px",
+                  minWidth: 0,
                   justifyContent: "center",
                   background: d.background,
                   fontWeight: 600,
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                  transition: "all 0.2s"
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
-                onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                 children: [
-                  /* @__PURE__ */ e.jsx(E.Unpin, { style: { fontSize: "14px" } }),
-                  /* @__PURE__ */ e.jsx("span", { children: "Unpin All" })
+                  /* @__PURE__ */ e.jsx(E.Unpin, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Unpin" })
                 ]
               }
             )
           ] }),
-          C.size > 0 && /* @__PURE__ */ e.jsxs("div", { style: {
+          w.size > 0 && /* @__PURE__ */ e.jsxs("div", { style: {
             display: "flex",
             flexDirection: "column",
             gap: "8px",
-            background: `linear-gradient(135deg, ${d.select}ee, ${d.select}dd)`,
-            padding: "12px",
-            borderRadius: "8px",
-            border: `2px solid ${d.primary}66`,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+            background: d.select || "var(--sp-select)",
+            padding: "10px",
+            borderRadius: "var(--sp-radius-md, 8px)",
+            border: "1px solid var(--sp-border-strong, var(--sp-primary))",
+            boxShadow: "var(--sp-shadow-sm, 0 2px 8px rgba(0,0,0,0.1))",
             margin: "0 8px"
           }, children: [
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [
@@ -4185,14 +4205,16 @@ const En = u.memo(
                 borderRadius: "6px",
                 boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
               }, children: [
-                C.size,
+                w.size,
                 " Column",
-                C.size > 1 ? "s" : "",
+                w.size > 1 ? "s" : "",
                 " Selected"
               ] }),
               /* @__PURE__ */ e.jsx(
                 "button",
                 {
+                  type: "button",
+                  className: "sp-btn sp-btn-ghost",
                   onClick: () => B(/* @__PURE__ */ new Set()),
                   style: {
                     border: "none",
@@ -4201,11 +4223,8 @@ const En = u.memo(
                     display: "flex",
                     color: d.textSec,
                     padding: "4px",
-                    borderRadius: "4px",
-                    transition: "all 0.2s"
+                    borderRadius: "4px"
                   },
-                  onMouseEnter: (r) => r.currentTarget.style.background = d.hover,
-                  onMouseLeave: (r) => r.currentTarget.style.background = d.background,
                   children: /* @__PURE__ */ e.jsx(E.Close, {})
                 }
               )
@@ -4214,22 +4233,21 @@ const En = u.memo(
               /* @__PURE__ */ e.jsxs(
                 "button",
                 {
+                  type: "button",
+                  className: "sp-btn sp-btn-subtle",
                   onClick: () => {
-                    Array.from(C).forEach((r) => Y(r, "left")), B(/* @__PURE__ */ new Set());
+                    Array.from(w).forEach((r) => U(r, "left")), B(/* @__PURE__ */ new Set());
                   },
                   style: {
-                    ...Z.btn,
-                    padding: "6px 12px",
+                    ...G.btn,
+                    padding: "6px 8px",
                     fontSize: "11px",
                     background: d.background,
                     flex: 1,
                     justifyContent: "center",
                     fontWeight: 600,
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                    transition: "all 0.2s"
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
-                  onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                  onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                   children: [
                     /* @__PURE__ */ e.jsx(E.PinLeft, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Pin Left" })
@@ -4239,22 +4257,21 @@ const En = u.memo(
               /* @__PURE__ */ e.jsxs(
                 "button",
                 {
+                  type: "button",
+                  className: "sp-btn sp-btn-subtle",
                   onClick: () => {
-                    Array.from(C).forEach((r) => Y(r, !1)), B(/* @__PURE__ */ new Set());
+                    Array.from(w).forEach((r) => U(r, !1)), B(/* @__PURE__ */ new Set());
                   },
                   style: {
-                    ...Z.btn,
-                    padding: "6px 12px",
+                    ...G.btn,
+                    padding: "6px 8px",
                     fontSize: "11px",
                     background: d.background,
                     flex: 1,
                     justifyContent: "center",
                     fontWeight: 600,
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                    transition: "all 0.2s"
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
-                  onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                  onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                   children: [
                     /* @__PURE__ */ e.jsx(E.Unpin, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Unpin" })
@@ -4264,22 +4281,21 @@ const En = u.memo(
               /* @__PURE__ */ e.jsxs(
                 "button",
                 {
+                  type: "button",
+                  className: "sp-btn sp-btn-subtle",
                   onClick: () => {
-                    Array.from(C).forEach((r) => Y(r, "right")), B(/* @__PURE__ */ new Set());
+                    Array.from(w).forEach((r) => U(r, "right")), B(/* @__PURE__ */ new Set());
                   },
                   style: {
-                    ...Z.btn,
-                    padding: "6px 12px",
+                    ...G.btn,
+                    padding: "6px 8px",
                     fontSize: "11px",
                     background: d.background,
                     flex: 1,
                     justifyContent: "center",
                     fontWeight: 600,
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                    transition: "all 0.2s"
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
-                  onMouseEnter: (r) => r.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)",
-                  onMouseLeave: (r) => r.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.05)",
                   children: [
                     /* @__PURE__ */ e.jsx(E.PinRight, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Pin Right" })
@@ -4291,127 +4307,127 @@ const En = u.memo(
           /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }, children: (() => {
             const p = h.getAllColumns().filter(
               /** @param {any} [c] @returns {any} */
-              (j) => !j.parent && j.id !== "no_data"
+              (S) => !S.parent && S.id !== "no_data"
             ).filter(
               /** @param {any} [col] @returns {any} */
-              (j) => {
+              (S) => {
                 if (a === "all") return !0;
-                let H = "string";
-                if (k.find(
+                let K = "string";
+                if (j.find(
                   /** @param {any} [v] @returns {any} */
-                  (ie) => j.id.includes(ie.field)
+                  (ie) => S.id.includes(ie.field)
                 ))
-                  H = "number";
+                  K = "number";
                 else if (fe && fe.length > 0) {
                   const ie = fe[0];
-                  let ae = ie[j.id];
-                  if (ae === void 0 && j.accessorFn)
+                  let ae = ie[S.id];
+                  if (ae === void 0 && S.accessorFn)
                     try {
-                      ae = j.accessorFn(ie);
+                      ae = S.accessorFn(ie);
                     } catch {
                     }
-                  typeof ae == "number" ? H = "number" : ae instanceof Date ? H = "date" : typeof ae == "string" && (!isNaN(Number(ae)) && ae.trim() !== "" ? H = "number" : !isNaN(Date.parse(ae)) && ae.includes("-") && (H = "date"));
+                  typeof ae == "number" ? K = "number" : ae instanceof Date ? K = "date" : typeof ae == "string" && (!isNaN(Number(ae)) && ae.trim() !== "" ? K = "number" : !isNaN(Date.parse(ae)) && ae.includes("-") && (K = "date"));
                 }
-                return H === a;
+                return K === a;
               }
             ), c = p.filter(
               /** @param {any} [c] @returns {any} */
-              (j) => ir(j, "left")
+              (S) => it(S, "left")
             ), m = p.filter(
               /** @param {any} [c] @returns {any} */
-              (j) => ir(j, "right")
-            ), S = p.filter(
+              (S) => it(S, "right")
+            ), v = p.filter(
               /** @param {any} [c] @returns {any} */
-              (j) => ir(j, "unpinned")
-            ), I = (j, H) => j.map(
+              (S) => it(S, "unpinned")
+            ), T = (S, K) => S.map(
               /** @param {any} [column] @returns {any} */
               (oe) => /* @__PURE__ */ e.jsx(
-                pt,
+                pr,
                 {
                   column: oe,
                   level: 0,
                   theme: d,
-                  styles: Z,
-                  handlePinColumn: Y,
-                  colSearch: D,
-                  selectedCols: C,
+                  styles: G,
+                  handlePinColumn: U,
+                  colSearch: R,
+                  selectedCols: w,
                   setSelectedCols: B,
                   onDrop: X,
-                  sectionId: H
+                  sectionId: K
                 },
                 oe.id
               )
-            ), X = (j, H, oe) => {
+            ), X = (S, K, oe) => {
               let ie;
               const ae = P || { left: [], right: [] };
               if (oe) {
-                const qe = H === "left" ? ae.left : H === "right" ? ae.right : null;
+                const qe = K === "left" ? ae.left : K === "right" ? ae.right : null;
                 if (qe) {
                   if (ie = qe.indexOf(oe), ie === -1) {
-                    const jr = h.getColumn(oe);
-                    if (jr && en(jr)) {
-                      const Xr = wr(jr).find(
+                    const jt = h.getColumn(oe);
+                    if (jt && en(jt)) {
+                      const Xt = wt(jt).find(
                         /** @param {any} [id] @returns {any} */
-                        (Pt) => qe.includes(Pt)
+                        (Pr) => qe.includes(Pr)
                       );
-                      Xr && (ie = qe.indexOf(Xr));
+                      Xt && (ie = qe.indexOf(Xt));
                     }
                   }
                   ie === -1 && (ie = void 0);
                 }
               }
-              H === "left" ? Y(j, "left", ie) : H === "right" ? Y(j, "right", ie) : Y(j, !1);
+              K === "left" ? U(S, "left", ie) : K === "right" ? U(S, "right", ie) : U(S, !1);
             };
             return /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
               c.length > 0 && /* @__PURE__ */ e.jsx(
-                kr,
+                kt,
                 {
                   title: "Pinned Left",
                   count: c.length,
                   theme: d,
-                  styles: Z,
+                  styles: G,
                   sectionId: "left",
                   onDrop: X,
-                  children: I(c, "left")
+                  children: T(c, "left")
                 }
               ),
               m.length > 0 && /* @__PURE__ */ e.jsx(
-                kr,
+                kt,
                 {
                   title: "Pinned Right",
                   count: m.length,
                   theme: d,
-                  styles: Z,
+                  styles: G,
                   sectionId: "right",
                   onDrop: X,
-                  children: I(m, "right")
+                  children: T(m, "right")
                 }
               ),
               /* @__PURE__ */ e.jsx(
-                kr,
+                kt,
                 {
                   title: "Columns",
-                  count: S.length,
+                  count: v.length,
                   theme: d,
-                  styles: Z,
+                  styles: G,
                   sectionId: "unpinned",
                   onDrop: X,
-                  children: I(S, "unpinned")
+                  children: T(v, "unpinned")
                 }
               )
             ] });
           })() }),
-          R && R.length > 0 && /* @__PURE__ */ e.jsxs("div", { style: { padding: "8px", borderTop: `1px solid ${d.border}` }, children: [
-            /* @__PURE__ */ e.jsx("div", { style: Z.sectionTitle, children: "Pinning Presets" }),
-            /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" }, children: R.map(
+          C && C.length > 0 && /* @__PURE__ */ e.jsxs("div", { style: { padding: "8px", borderTop: `1px solid ${d.border}` }, children: [
+            /* @__PURE__ */ e.jsx("div", { style: G.sectionTitle, children: "Pinning Presets" }),
+            /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" }, children: C.map(
               /** @param {any} [preset] @param {any} [i] @returns {any} */
               (r, p) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   onClick: () => {
-                    M(r.config), A(`Applied preset: ${r.name}`);
+                    M(r.config), D(`Applied preset: ${r.name}`);
                   },
-                  style: { ...Z.btn, fontSize: "11px", background: d.headerBg },
+                  style: { ...G.btn, fontSize: "11px", background: d.headerBg },
                   children: r.name
                 },
                 p
@@ -4424,26 +4440,26 @@ const En = u.memo(
           ] })
         ] })
       ] }),
-      Sr && /* @__PURE__ */ e.jsx(
+      St && /* @__PURE__ */ e.jsx(
         An,
         {
-          item: Sr,
-          idx: vr,
-          valConfigs: k,
+          item: St,
+          idx: vt,
+          valConfigs: j,
           setValConfigs: y,
           theme: d,
           onClose: () => De(null),
           onRemove: Xe,
           displayedColumnOptions: Se,
-          availableRawFields: te,
-          serverError: We && We[Sr.field] || null
+          availableRawFields: re,
+          serverError: We && We[St.field] || null
         }
       ),
       /* @__PURE__ */ e.jsx(
         "div",
         {
           className: "sp-resize-handle",
-          onMouseDown: Wt,
+          onMouseDown: Wr,
           title: "Drag to resize panel",
           style: { position: "absolute", right: -2, top: 0, bottom: 0, width: "9px", cursor: "col-resize", zIndex: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center" },
           children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "2px", height: "100%", borderRadius: "999px", background: d.border, opacity: 0.55, pointerEvents: "none" } })

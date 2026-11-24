@@ -7,7 +7,6 @@ import {
     encodeBytesToUtf8,
 } from './clientResponsePostProcessor';
 import { ClientSqlPlanner } from './clientSqlPlanner';
-import { EmitterUnsupported, runClientCore } from '../core/clientCoreRuntime';
 import { ClientSubscriptionEngine } from './clientSubscriptionEngine';
 import { applyCustomDimensionsToDataset, DuckDbWasmExecutor } from './duckdbWasmExecutor';
 import type { BaselineDescriptor, StreamUpdateBatch } from '../streamingTypes';
@@ -60,6 +59,17 @@ function defaultLoadXlsxWriter(): Promise<SheetJsModuleLike> {
             .then((mod: any) => (mod && mod.default ? mod.default : mod) as SheetJsModuleLike);
     }
     return cachedXlsxWriterPromise;
+}
+
+type ClientCoreModule = typeof import('../core/clientCoreRuntime');
+let cachedClientCorePromise: Promise<ClientCoreModule> | null = null;
+
+/** The semantic core's client runtime (IR -> DuckDB SQL): fetched only once client mode serves a read. */
+function loadClientCore(): Promise<ClientCoreModule> {
+    if (!cachedClientCorePromise) {
+        cachedClientCorePromise = import(/* webpackChunkName: "pivot-client-core" */ '../core/clientCoreRuntime');
+    }
+    return cachedClientCorePromise;
 }
 
 export class ClientPivotTransport implements ClientPivotTransportInterface {
@@ -315,6 +325,7 @@ export class ClientPivotTransport implements ClientPivotTransportInterface {
             this.executor.recordCoreOutcome({ served: false, reason: 'duckdb unavailable' });
             return null;
         }
+        const { EmitterUnsupported, runClientCore } = await loadClientCore();
         const started = Date.now();
         try {
             const result = await runClientCore(plan, conn, plan.table);

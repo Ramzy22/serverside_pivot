@@ -621,11 +621,16 @@ def test_heavy_client_dependencies_are_loaded_only_by_the_features_that_need_the
     assert 'webpackChunkName: "pivot-detail-drawer"' in workspace_canvas_source
     assert 'webpackChunkName: "pivot-detail-sidepanel"' in workspace_canvas_source
     assert 'webpackChunkName: "pivot-edit-panel"' in workspace_canvas_source
+    assert 'webpackChunkName: "pivot-live"' in workspace_canvas_source
+    assert "import { LiveExplainSidePanel }" not in workspace_canvas_source
+    client_transport_source = Path(os.path.join(os.getcwd(), "serverside_pivot", "src", "lib", "runtime", "client", "clientPivotTransport.ts")).read_text(encoding="utf-8")
+    assert 'webpackChunkName: "pivot-client-core"' in client_transport_source
+    assert "from '../core/clientCoreRuntime';" not in client_transport_source
     assert (
         "chunkFilename: '[name].serverside_pivot.min.js'" in webpack_source
         or "chunkFilename: `[name].${dashLibraryName}.min.js`" in webpack_source
     )
-    assert "DEFAULT_MAX_MAIN_BYTES = 1_100_000" in bundle_contract_source
+    assert "DEFAULT_MAX_MAIN_BYTES = 1_150_000" in bundle_contract_source
     assert "DEFAULT_MAX_STANDARD_ASYNC_BYTES = 300_000" in bundle_contract_source
     assert "OPTIONAL_ASYNC_BUDGETS" in bundle_contract_source
     assert "serverside_pivot_shared" in bundle_contract_source

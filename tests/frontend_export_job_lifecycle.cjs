@@ -460,3 +460,22 @@ test('a synchronous cancel dispatch failure keeps the job cancellable and retrie
         h.respond(h.snapshot('cancelled')); assert.equal(h.state.progress.phase, 'cancelled');
     } finally {h.ref.current?.dispose(); timers.restore();}
 });
+
+test('a job stopped at a server export limit ends failed once, tells the user, and never retries', () => {
+    const timers = fakeTimers(); const h = harness();
+    try {
+        h.commands.exportPivot('csv');
+        h.respond(h.snapshot('running'));
+        h.commands.pollExportJob('job-1');
+        const sent = h.requests.length;
+        h.respond({limitCode: 'PIVOT_EXPORT_MAX_ROWS'}, h.requests.at(-1), 'error');
+        assert.equal(h.state.progress.phase, 'failed');
+        assert.equal(h.state.exporting, false);
+        assert.equal(h.notices.length, 1);
+        assert.match(h.notices[0][0], /Export limit exceeded \(row count\)/);
+        assert.equal(h.notices[0][1], 'error');
+        assert.equal(h.requests.length, sent, 'a limit is final: no poll and no restart');
+        assert.equal(timers.pending.size, 0);
+        assert.deepEqual(h.downloads, []);
+    } finally {h.ref.current?.dispose(); timers.restore();}
+});

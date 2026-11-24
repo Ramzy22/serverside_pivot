@@ -96,7 +96,7 @@ app.layout = html.Div(
 class _DemoPrincipal:
     id = "flagship-demo"
     role = "viewer"
-    attributes = {}
+    attributes = {"accounting_tenant": "flagship-demo"}  # trusted accounting account (docs/OPERATIONS.md)
 
 
 register_pivot_app(

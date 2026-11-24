@@ -34,7 +34,9 @@ REQUIRED_ARTIFACTS = [
 # The initial viewer, normal charts, and report builder should stay lean. XLSX
 # and ECharts/WebGL are deliberately lazy because they are only needed after a
 # user starts an export or selects a specialised chart type.
-DEFAULT_MAX_MAIN_BYTES = 1_100_000
+# 1.15 MB since the live-streaming UI and the client semantic core (2026-11-24); the client core
+# runtime and the live-stream panels are lazy chunks, chart rendering stays lazy.
+DEFAULT_MAX_MAIN_BYTES = 1_150_000
 DEFAULT_MAX_STANDARD_ASYNC_BYTES = 300_000
 DEFAULT_MAX_ASYNC_BYTES = 1_750_000
 OPTIONAL_ASYNC_BUDGETS = {
@@ -139,6 +141,8 @@ def main() -> None:
             )
 
     if errors:
+        for error in errors:
+            print(f"  VIOLATION: {error}", file=sys.stderr)
         print(
             f"\nverify_bundle_contract: FAILED — {len(errors)} contract violation(s).",
             file=sys.stderr,

@@ -12,8 +12,9 @@ _INNER = _os.path.join(_HERE, "pivot_engine")
 
 __path__ = [_INNER]
 
-from .controller import PivotController
 from .scalable_pivot_controller import ScalablePivotController
+
+PivotController = ScalablePivotController  # the single controller (M4)
 from .tanstack_adapter import (
     TanStackOperation,
     TanStackPivotAdapter,

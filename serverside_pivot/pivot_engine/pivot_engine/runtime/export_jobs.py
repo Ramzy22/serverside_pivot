@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 EXPORT_JOB_PHASES = frozenset({"queued", "running", "cancelling", "cancelled", "completed", "failed", "interrupted"})
 EXPORT_JOB_TERMINAL_PHASES = frozenset({"cancelled", "completed", "failed", "interrupted"})
+EXPORT_JOB_ERROR_CODES = frozenset({"PIVOT_EXPORT_MAX_ROWS", "PIVOT_EXPORT_MAX_BYTES"})
 _TRANSITIONS = {
     "queued": frozenset({"running", "cancelled", "failed", "interrupted"}),
     "running": frozenset({"cancelling", "completed", "failed", "interrupted"}),
@@ -57,6 +58,8 @@ class ExportJobSnapshot:
     total_rows: Optional[int] = None
     owner_epoch: int = 0
     payload_ref: Optional[Mapping[str, Any]] = None
+    # Why a failed job failed, when the reason is a public limit (PIVOT_EXPORT_MAX_ROWS/BYTES).
+    error_code: Optional[str] = None
 
     def __post_init__(self) -> None:
         for name in ("job_id", "subject", "accounting_account_id", "table"):
@@ -77,6 +80,11 @@ class ExportJobSnapshot:
             raise ValueError("Only a completed job may expose a payload reference.")
         if self.payload_ref is not None:
             object.__setattr__(self, "payload_ref", _freeze(self.payload_ref))
+        if self.error_code is not None:
+            if self.phase != "failed":
+                raise ValueError("Only a failed job may carry an error code.")
+            if self.error_code not in EXPORT_JOB_ERROR_CODES:
+                raise ValueError("Unknown export job error code.")
 
     def to_payload(self) -> dict[str, Any]:
         """Return detached public observations, excluding authorization identity."""
@@ -98,7 +106,7 @@ def transition_export_job(snapshot: ExportJobSnapshot, event: Mapping[str, Any] 
     Exact terminal replays are idempotent; terminal mutations are fenced.
     """
     fields = {"phase": event} if isinstance(event, str) else dict(event)
-    allowed = {"phase", "rows_written", "bytes_written", "total_rows", "owner_epoch", "payload_ref"}
+    allowed = {"phase", "rows_written", "bytes_written", "total_rows", "owner_epoch", "payload_ref", "error_code"}
     if set(fields) - allowed:
         raise ValueError("An export event cannot change job identity or accounting.")
     phase = fields.get("phase", snapshot.phase)

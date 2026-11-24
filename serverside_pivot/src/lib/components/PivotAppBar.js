@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 're
 import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
 import ThemedSelect from './ThemedSelect';
+import { GlobalSearchInput } from './GlobalSearchInput';
 import { themes, buildEditedCellVisualStyle, buildThemeCssVars, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
@@ -2235,13 +2236,11 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                         padding: '0 10px'
                     }}>
                         <Icons.Search />
-                        <input
-                            data-testid="pivot-global-search"
+                        <GlobalSearchInput
                             style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
                             placeholder="Search records..."
                             value={(filters && filters.global) || ''}
-                            onChange={e => {
-                                const val = e.target.value;
+                            onCommit={val => {
                                 setFilters(/** @param {any} [p] @returns {any} */ p => {
                                     /** @type {Record<string, any>} */
                                     const next = {...p};

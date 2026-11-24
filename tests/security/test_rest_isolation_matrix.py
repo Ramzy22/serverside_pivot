@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import fastapi.routing as fastapi_routing
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
 from starlette.routing import WebSocketRoute
@@ -109,14 +110,25 @@ def _api():
     return api
 
 
+def _flat_routes(app):
+    """(route, full path) of every route, through included routers.
+
+    FastAPI >= 0.16x keeps an included router as one ``_IncludedRouter`` entry in ``app.routes``;
+    ``iter_route_contexts`` flattens it. Older releases list every route directly."""
+    flatten = getattr(fastapi_routing, "iter_route_contexts", None)
+    if flatten is None:
+        return [(route, getattr(route, "path", None)) for route in app.routes]
+    return [(context.route, context.path) for context in flatten(app.routes)]
+
+
 def _routes(app):
     found = set()
-    for route in app.routes:
+    for route, path in _flat_routes(app):
         if isinstance(route, APIRoute):
             for method in route.methods - {"HEAD", "OPTIONS"}:
-                found.add((method, route.path))
+                found.add((method, path))
         elif isinstance(route, (APIWebSocketRoute, WebSocketRoute)):
-            found.add(("WS", route.path))
+            found.add(("WS", path))
     return {r for r in found if not r[1].startswith(("/docs", "/openapi", "/redoc"))}
 
 

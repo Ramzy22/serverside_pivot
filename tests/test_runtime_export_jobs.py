@@ -103,3 +103,17 @@ def test_completed_payload_reference_is_deeply_immutable_and_detached():
 def test_invalid_snapshots_are_rejected(fields):
     with pytest.raises(ValueError):
         job(**fields)
+
+
+def test_only_a_failed_job_carries_a_known_error_code():
+    from pivot_engine.runtime.export_jobs import ExportJobSnapshot, transition_export_job
+
+    running = ExportJobSnapshot("j", "s", "a", "t", phase="running")
+    failed = transition_export_job(running, {"phase": "failed", "error_code": "PIVOT_EXPORT_MAX_ROWS"})
+    assert failed.error_code == "PIVOT_EXPORT_MAX_ROWS"
+    assert "error_code" not in failed.to_payload() and "errorCode" not in failed.to_payload()
+    with pytest.raises(ValueError):
+        ExportJobSnapshot("j", "s", "a", "t", phase="completed", payload_ref={"id": "x"}, error_code="PIVOT_EXPORT_MAX_ROWS")
+    with pytest.raises(ValueError):
+        transition_export_job(running, {"phase": "failed", "error_code": "anything"})
+

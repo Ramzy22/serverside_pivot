@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 
-@pytest.mark.parametrize("script", ["frontend_response_queue.cjs", "frontend_row_identity.cjs"])
+@pytest.mark.parametrize("script", ["frontend_response_queue.cjs", "frontend_row_identity.cjs", "frontend_global_search_debounce.cjs", "frontend_dismiss_shadow_dom.cjs"])
 def test_frontend_runtime_contract(script):
     node = shutil.which("node")
     if node is None:

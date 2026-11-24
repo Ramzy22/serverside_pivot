@@ -176,6 +176,33 @@ def test_http_export_job_completes_downloads_and_status_does_not_requery():
     gateway.payload_store.clear()
 
 
+def test_export_job_stopped_by_a_limit_reports_the_limit_code(monkeypatch):
+    """A job that hits PIVOT_EXPORT_MAX_BYTES ends failed and answers like the synchronous limit."""
+    monkeypatch.setenv("PIVOT_EXPORT_MAX_BYTES", "1")
+    app, gateway, _adapter, _current = _job_host()
+    with TestClient(app) as client:
+        start = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert start.status_code == 200, start.text
+        job_id = start.json()["payload"]["jobId"]
+        deadline = time.monotonic() + 5
+        while True:
+            status = client.post("/v1/runtime", json=_job_request("status", job_id, request_id="export-status-limit"))
+            assert status.status_code == 200, status.text
+            envelope = status.json()
+            if envelope["status"] != "export_job" or envelope["payload"]["phase"] in {"failed", "completed"}:
+                break
+            assert time.monotonic() < deadline, envelope
+            time.sleep(.01)
+        assert envelope["status"] == "error", envelope
+        assert envelope["kind"] == "export" and envelope["requestId"] == "export-status-limit"
+        assert envelope["payload"] == {"limitCode": "PIVOT_EXPORT_MAX_BYTES"}
+        snapshot = gateway.export_job_store.get(job_id, "alice", _job_request("status")["table"],
+                                                accounting_account_id="trusted")
+        assert snapshot.phase == "failed" and snapshot.error_code == "PIVOT_EXPORT_MAX_BYTES"
+    assert gateway.resource_governor.snapshot()["active_slots"]["export"] == 0
+    gateway.payload_store.clear()
+
+
 def test_export_job_uses_frontend_state_override_for_flat_layout():
     app, gateway, adapter, current = _job_host()
     envelope = _job_request("start", format="csv", layout_mode="tabular", state_override={

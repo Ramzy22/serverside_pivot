@@ -191,6 +191,16 @@ function createExportJobController(initialPorts) {
       if (!request) return true;
       clearTimeout(request.timer); candidate.requests.delete(requestId);
       if (response.status !== 'export_job') {
+        if (payload.limitCode) {
+          // The server stopped the job at PIVOT_EXPORT_MAX_ROWS / PIVOT_EXPORT_MAX_BYTES: final, never retried.
+          terminal(candidate, 'failed');
+          if (delivery && delivery.showNotification) {
+            delivery.showNotification(
+              `Export limit exceeded (${payload.limitCode === 'PIVOT_EXPORT_MAX_BYTES' ? 'file size' : 'row count'}). Narrow the selection and export again.`,
+              'error');
+          }
+          return true;
+        }
         if (candidate.cancelRequested && payload.code !== 'export_job_not_found') schedulePoll(candidate);
         else terminal(candidate, payload.code === 'export_job_not_found' ? 'interrupted' : 'failed');
         return true;

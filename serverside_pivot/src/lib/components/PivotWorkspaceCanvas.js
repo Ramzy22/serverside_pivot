@@ -12,10 +12,13 @@ import { PaginationBar } from './PivotSmallComponents';
 import { PivotTableBody } from './Table/PivotTableBody';
 import ShimmerFallback from './ShimmerFallback';
 import { RuntimeDataError } from './RuntimeDataError';
-import { LiveStreamDiffBar } from './LiveStreamDiffBar';
-import { LiveExplainSidePanel } from './LiveExplainSidePanel';
 
 /** @type {any} */
+// Live-stream chrome: only a live workspace (one with a subscription store) fetches it.
+const LazyLiveStreamDiffBar = React.lazy(() => import(/* webpackChunkName: "pivot-live" */ './LiveStreamDiffBar')
+  .then(module => ({ default: module.LiveStreamDiffBar })));
+const LazyLiveExplainSidePanel = React.lazy(() => import(/* webpackChunkName: "pivot-live" */ './LiveExplainSidePanel')
+  .then(module => ({ default: module.LiveExplainSidePanel })));
 const LazyDetailDrawer = React.lazy(() => import(/* webpackChunkName: "pivot-detail-drawer" */ './Table/DetailDrawer'));
 /** @type {any} */
 const LazyDetailSidePanel = React.lazy(() => import(/* webpackChunkName: "pivot-detail-sidepanel" */ './Table/DetailSidePanel'));
@@ -148,7 +151,11 @@ export function PivotWorkspaceCanvas({ canvas }) {
           />
         </React.Suspense>
       )}
-      <LiveExplainSidePanel store={liveSubscriptionStore} theme={theme} />
+      {liveSubscriptionStore ? (
+        <React.Suspense fallback={null}>
+          <LazyLiveExplainSidePanel store={liveSubscriptionStore} theme={theme} />
+        </React.Suspense>
+      ) : null}
       {editPanelEnabled && ((editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates) ? (
         <React.Suspense fallback={null}>
           <LazyEditSidePanel
@@ -177,7 +184,11 @@ export function PivotWorkspaceCanvas({ canvas }) {
   >
     <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', flexDirection: 'column' }}>
       <RuntimeDataError error={runtimeDataError} onRetry={retryRuntimeData} theme={theme} />
-      <LiveStreamDiffBar store={liveSubscriptionStore} theme={theme} />
+      {liveSubscriptionStore ? (
+        <React.Suspense fallback={null}>
+          <LazyLiveStreamDiffBar store={liveSubscriptionStore} theme={theme} />
+        </React.Suspense>
+      ) : null}
     <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
       <PivotTableBody
         parentRef={parentRef}

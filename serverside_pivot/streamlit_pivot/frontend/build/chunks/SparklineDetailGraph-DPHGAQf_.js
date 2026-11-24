@@ -1,19 +1,19 @@
-import { W as nt, X as rt, Y as ot, Z as z, _ as lt, j as n } from "./index-D4WX8QbF.js";
+import { Y as nt, Z as rt, _ as ot, $, a0 as lt, j as n } from "./index-D68SRNaU.js";
 import { R as d } from "./charts-DthW1Q8W.js";
 function st({ modal: S, theme: e }) {
-  const a = Array.isArray(S && S.points) ? S.points : [], v = S && S.sparklineConfig ? S.sparklineConfig : {}, s = ["line", "area", "column", "bar"].includes(v.type) ? v.type : "line", h = 640, i = 300, o = 46, [R, X] = d.useState(null), [Y, j] = d.useState(null);
+  const a = Array.isArray(S && S.points) ? S.points : [], v = S && S.sparklineConfig ? S.sparklineConfig : {}, s = ["line", "area", "column", "bar"].includes(v.type) ? v.type : "line", h = 640, i = 300, o = 46, [R, Y] = d.useState(null), [X, j] = d.useState(null);
   d.useEffect(() => {
-    X(null), j(null);
+    Y(null), j(null);
   }, [a.length, s]);
   const x = d.useMemo(() => {
     const t = Math.max(0, a.length - 1);
-    if (!Y || a.length === 0) return { start: 0, end: t };
-    const r = Math.max(0, Math.min(t, Math.floor(Number(Y.start) || 0))), c = Math.max(r, Math.min(t, Math.floor(Number(Y.end) || t)));
+    if (!X || a.length === 0) return { start: 0, end: t };
+    const r = Math.max(0, Math.min(t, Math.floor(Number(X.start) || 0))), c = Math.max(r, Math.min(t, Math.floor(Number(X.end) || t)));
     return { start: r, end: c };
-  }, [a.length, Y]), f = d.useMemo(
+  }, [a.length, X]), f = d.useMemo(
     () => a.slice(x.start, x.end + 1),
     [x, a]
-  ), _ = f.length, M = a.length > 4, $ = M && _ > 4, k = M && (x.start > 0 || x.end < a.length - 1), y = d.useMemo(
+  ), _ = f.length, M = a.length > 4, z = M && _ > 4, k = M && (x.start > 0 || x.end < a.length - 1), y = d.useMemo(
     () => nt({ points: f, type: s, width: h, height: i, padding: o }),
     [f, s]
   ), I = rt(f), b = d.useMemo(
@@ -71,17 +71,17 @@ function st({ modal: S, theme: e }) {
         return !u || !p ? null : { index: c, label: u.label, x: p.markerX };
       }
     ).filter(Boolean);
-  }, [m, f]), A = v.color || e.primary || "#2563EB", q = v.positiveColor || (e.isDark ? "#86EFAC" : "#2F855A"), J = v.negativeColor || (e.isDark ? "#FDA4AF" : "#B91C1C"), K = I.length ? z(Math.min(...I)) : "", Q = I.length ? z(Math.max(...I)) : "", T = f[0], V = f[f.length - 1], P = b.min < 0 && b.max > 0 ? lt(0, b.min, b.max, o, i - o) : null, l = R !== null && m[R] ? m[R] : null, Z = 172, E = 54, L = l ? Math.max(10, Math.min(h - Z - 10, l.markerX + (l.markerX > h * 0.66 ? -Z - 14 : 14))) : 0, N = l ? Math.max(10, Math.min(i - E - 10, l.markerY + (l.markerY > i * 0.55 ? -E - 14 : 14))) : 0, U = d.useCallback((t) => {
+  }, [m, f]), A = v.color || e.primary || "#2563EB", q = v.positiveColor || (e.isDark ? "#86EFAC" : "#2F855A"), J = v.negativeColor || (e.isDark ? "#FDA4AF" : "#B91C1C"), K = I.length ? $(Math.min(...I)) : "", Q = I.length ? $(Math.max(...I)) : "", T = f[0], V = f[f.length - 1], P = b.min < 0 && b.max > 0 ? lt(0, b.min, b.max, o, i - o) : null, l = R !== null && m[R] ? m[R] : null, Z = 172, E = 54, L = l ? Math.max(10, Math.min(h - Z - 10, l.markerX + (l.markerX > h * 0.66 ? -Z - 14 : 14))) : 0, N = l ? Math.max(10, Math.min(i - E - 10, l.markerY + (l.markerY > i * 0.55 ? -E - 14 : 14))) : 0, U = d.useCallback((t) => {
     if (!m.length) return;
     const r = t.currentTarget.getBoundingClientRect(), c = (t.clientX - r.left) / Math.max(r.width, 1) * h, u = (t.clientY - r.top) / Math.max(r.height, 1) * i;
     let p = 0, g = Number.POSITIVE_INFINITY;
     m.forEach(
       /** @param {any} [mark] @param {any} [index] @returns {any} */
-      (W, C) => {
-        const w = c - W.markerX, F = u - W.markerY, G = s === "bar" ? w * w + F * F : Math.abs(w) + Math.abs(F) * 0.08;
-        G < g && (g = G, p = C);
+      (C, W) => {
+        const w = c - C.markerX, F = u - C.markerY, G = s === "bar" ? w * w + F * F : Math.abs(w) + Math.abs(F) * 0.08;
+        G < g && (g = G, p = W);
       }
-    ), X(p);
+    ), Y(p);
   }, [m, i, s, h]), O = d.useCallback((t, r) => {
     if (a.length <= 0) {
       j(null);
@@ -93,17 +93,17 @@ function st({ modal: S, theme: e }) {
       return;
     }
     if (g - p + 1 < u) {
-      const W = Math.round((p + g) / 2), C = Math.floor(u / 2), w = Math.max(0, Math.min(c - u + 1, W - C));
+      const C = Math.round((p + g) / 2), W = Math.floor(u / 2), w = Math.max(0, Math.min(c - u + 1, C - W));
       j({ start: w, end: w + u - 1 });
       return;
     }
     j({ start: p, end: g });
   }, [a.length]), D = d.useCallback((t) => {
     if (!M) return;
-    const r = x.start, c = x.end, u = c - r + 1, p = Math.min(4, a.length), g = Math.max(p, Math.min(a.length, Math.round(u * t))), W = l ? l.fullIndex : Math.round((r + c) / 2), C = Math.max(0, Math.min(a.length - g, Math.round(W - g / 2)));
-    O(C, C + g - 1);
+    const r = x.start, c = x.end, u = c - r + 1, p = Math.min(4, a.length), g = Math.max(p, Math.min(a.length, Math.round(u * t))), C = l ? l.fullIndex : Math.round((r + c) / 2), W = Math.max(0, Math.min(a.length - g, Math.round(C - g / 2)));
+    O(W, W + g - 1);
   }, [l, M, x, a.length, O]), tt = d.useCallback(() => {
-    X(null), j(null);
+    Y(null), j(null);
   }, []), et = d.useCallback((t) => {
     M && (t.preventDefault(), D(t.deltaY < 0 ? 0.68 : 1.42));
   }, [M, D]);
@@ -132,9 +132,9 @@ function st({ modal: S, theme: e }) {
                   {
                     type: "button",
                     "data-pivot-sparkline-zoom-in": "true",
-                    disabled: !$,
+                    disabled: !z,
                     onClick: () => D(0.62),
-                    style: { border: `1px solid ${e.border}`, background: $ ? e.background : e.headerSubtleBg, color: $ ? e.text : e.textSec, borderRadius: "6px", padding: "4px 8px", fontSize: "11px", fontWeight: 700, cursor: $ ? "pointer" : "default", opacity: $ ? 1 : 0.55 },
+                    style: { border: `1px solid ${e.border}`, background: z ? e.background : e.headerSubtleBg, color: z ? e.text : e.textSec, borderRadius: "6px", padding: "4px 8px", fontSize: "11px", fontWeight: 700, cursor: z ? "pointer" : "default", opacity: z ? 1 : 0.55 },
                     children: "Zoom In"
                   }
                 ),
@@ -171,7 +171,7 @@ function st({ modal: S, theme: e }) {
             viewBox: `0 0 ${h} ${i}`,
             "aria-label": "Sparkline detail chart",
             onMouseMove: U,
-            onMouseLeave: () => X(null),
+            onMouseLeave: () => Y(null),
             onWheel: et,
             style: { display: "block", width: "100%", height: "320px", cursor: m.length ? "crosshair" : "default" },
             children: [
@@ -180,7 +180,7 @@ function st({ modal: S, theme: e }) {
                 /** @param {any} [tick] @param {any} [index] @returns {any} */
                 (t, r) => /* @__PURE__ */ n.jsxs("g", { children: [
                   /* @__PURE__ */ n.jsx("line", { x1: o, y1: t.y, x2: h - o, y2: t.y, stroke: e.border, strokeWidth: "1", opacity: r === B.length - 1 ? 0.9 : 0.45, strokeDasharray: r === B.length - 1 ? "" : "4 6" }),
-                  /* @__PURE__ */ n.jsx("text", { x: o - 8, y: t.y + 4, fill: e.textSec, fontSize: "10", textAnchor: "end", children: z(t.value) })
+                  /* @__PURE__ */ n.jsx("text", { x: o - 8, y: t.y + 4, fill: e.textSec, fontSize: "10", textAnchor: "end", children: $(t.value) })
                 ] }, `y-tick-${r}`)
               ),
               H.map(
@@ -208,7 +208,7 @@ function st({ modal: S, theme: e }) {
                       fill: A,
                       stroke: e.background,
                       strokeWidth: "1.4",
-                      children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${z(t.value, 6)}` })
+                      children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${$(t.value, 6)}` })
                     },
                     `${t.label || "point"}-${r}`
                   )
@@ -227,7 +227,7 @@ function st({ modal: S, theme: e }) {
                     ry: "2",
                     fill: t.positive ? q : J,
                     opacity: l && l.fullIndex === t.fullIndex ? 1 : 0.88,
-                    children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${z(t.value, 6)}` })
+                    children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${$(t.value, 6)}` })
                   },
                   `${t.label || "bar"}-${r}`
                 )
@@ -237,7 +237,7 @@ function st({ modal: S, theme: e }) {
                 /* @__PURE__ */ n.jsx("circle", { cx: l.markerX, cy: l.markerY, r: "6.4", fill: A, stroke: e.background, strokeWidth: "2" }),
                 /* @__PURE__ */ n.jsx("rect", { x: L, y: N, width: Z, height: E, rx: "7", fill: e.background || "#fff", stroke: e.border, strokeWidth: "1.2", opacity: "0.98" }),
                 /* @__PURE__ */ n.jsx("text", { x: L + 10, y: N + 18, fill: e.textSec, fontSize: "10", fontWeight: "700", children: String(l.label || l.pointIndex + 1).slice(0, 28) }),
-                /* @__PURE__ */ n.jsx("text", { x: L + 10, y: N + 38, fill: e.text, fontSize: "15", fontWeight: "800", children: z(l.value, 6) })
+                /* @__PURE__ */ n.jsx("text", { x: L + 10, y: N + 38, fill: e.text, fontSize: "15", fontWeight: "800", children: $(l.value, 6) })
               ] }) : null,
               y.maxValue !== null ? /* @__PURE__ */ n.jsxs("text", { x: h - o, y: "22", fill: e.textSec, fontSize: "11", fontWeight: "700", textAnchor: "end", children: [
                 "Max ",

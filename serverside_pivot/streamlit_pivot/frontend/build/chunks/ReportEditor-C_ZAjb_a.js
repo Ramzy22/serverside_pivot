@@ -1,4 +1,4 @@
-import { ac as gl, an as vl, j as l, I as S, ao as jl, T as X, ae as Sl, $ as T, ap as Cl } from "./index-D4WX8QbF.js";
+import { ae as gl, ap as vl, j as l, I as S, aq as jl, T as X, ag as Sl, a1 as T, ar as Cl } from "./index-D68SRNaU.js";
 import { a as x } from "./charts-DthW1Q8W.js";
 const ne = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, Ge = [
   { value: "eq", label: "Equals" },
@@ -32,7 +32,7 @@ const ne = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(
   "_has_children",
   "_is_expanded",
   "__col_schema"
-]), W = "default", me = "branch:", Ye = ["", "solid", "dashed", "dotted", "double"], Ze = (e = "") => ({ _id: ne(), field: e, operator: "eq", value: "", values: [] }), Re = () => ({ op: "AND", clauses: [] }), Al = () => ({ _id: ne(), label: "", condition: Re(), child: null }), ve = (e = {}) => {
+]), W = "default", Ae = "branch:", Ye = ["", "solid", "dashed", "dotted", "double"], Ze = (e = "") => ({ _id: ne(), field: e, operator: "eq", value: "", values: [] }), Re = () => ({ op: "AND", clauses: [] }), ml = () => ({ _id: ne(), label: "", condition: Re(), child: null }), ve = (e = {}) => {
   const t = e && typeof e == "object" ? e : {}, n = Number(t.indent), i = Number(t.borderWidth), r = typeof t.borderStyle == "string" && Ye.includes(t.borderStyle) ? t.borderStyle : "";
   return {
     indent: Number.isFinite(n) && n >= 0 ? Math.floor(n) : "",
@@ -58,7 +58,7 @@ const ne = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(
   format: ve(),
   defaultChild: null,
   branches: []
-}), ml = (e) => !e || typeof e.field != "string" || !e.field ? null : {
+}), Al = (e) => !e || typeof e.field != "string" || !e.field ? null : {
   _id: typeof e._id == "string" ? e._id : ne(),
   field: e.field,
   operator: Ge.some((t) => t.value === e.operator) ? e.operator : "eq",
@@ -66,7 +66,7 @@ const ne = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(
   values: Array.isArray(e.values) ? e.values.map(String).filter(Boolean) : []
 }, Ne = (e) => ({
   op: e && e.op === "OR" ? "OR" : "AND",
-  clauses: Array.isArray(e && e.clauses) ? e.clauses.map(ml).filter(Boolean) : []
+  clauses: Array.isArray(e && e.clauses) ? e.clauses.map(Al).filter(Boolean) : []
 }), $e = (e) => !e || typeof e != "object" ? null : {
   _id: typeof e._id == "string" ? e._id : ne(),
   label: typeof e.label == "string" ? e.label : "",
@@ -98,9 +98,9 @@ function M(e) {
     branches: t
   };
 }
-const Ie = (e) => `${me}${e}`, Se = (e) => {
-  if (typeof e != "string" || !e.startsWith(me)) return -1;
-  const t = parseInt(e.slice(me.length), 10);
+const Ie = (e) => `${Ae}${e}`, Se = (e) => {
+  if (typeof e != "string" || !e.startsWith(Ae)) return -1;
+  const t = parseInt(e.slice(Ae.length), 10);
   return Number.isFinite(t) ? t : -1;
 }, $l = (e, t) => {
   const n = new Set(
@@ -203,27 +203,27 @@ const Ie = (e) => `${me}${e}`, Se = (e) => {
   const r = [], o = [], a = (n || []).some(
     /** @param {any} [config] @returns {any} */
     (h) => h && h.field && h.agg
-  ), f = new Set(Array.isArray(t) ? t : []), C = /* @__PURE__ */ new Map(), b = Array.isArray(i) ? i : [], B = (h, A) => {
+  ), f = new Set(Array.isArray(t) ? t : []), C = /* @__PURE__ */ new Map(), b = Array.isArray(i) ? i : [], B = (h, m) => {
     const d = h.trim().toLowerCase();
     if (d) {
       if (C.has(d)) {
-        r.push(`Duplicate header "${h}" at ${A}; already used at ${C.get(d)}.`);
+        r.push(`Duplicate header "${h}" at ${m}; already used at ${C.get(d)}.`);
         return;
       }
-      C.set(d, A);
+      C.set(d, m);
     }
-  }, N = (h, A, d = /* @__PURE__ */ new Set()) => {
+  }, N = (h, m, d = /* @__PURE__ */ new Set()) => {
     if (!h) return;
-    const v = h._id || `${A}:${h.field || ""}`;
+    const v = h._id || `${m}:${h.field || ""}`;
     if (d.has(v)) {
-      r.push(`Circular row override detected at ${A}.`);
+      r.push(`Circular row override detected at ${m}.`);
       return;
     }
     const j = new Set(d);
-    j.add(v), h.field ? f.size > 0 && !f.has(h.field) && r.push(`Field "${T(h.field)}" at ${A} is no longer available.`) : r.push(`Missing field at ${A}.`), B(Qe(h), A), h.topN && !a && r.push(`Top-N at ${A} needs at least one measure selected.`), h.filters && !Fe(h.filters) ? r.push(`Level filter at ${A} has incomplete rules.`) : h.filters && !qe(h.filters, b) && r.push(`Level filter at ${A} does not match any loaded rows.`), h.defaultChild && N(h.defaultChild, `${A} > Default children`, j), (h.branches || []).forEach(
+    j.add(v), h.field ? f.size > 0 && !f.has(h.field) && r.push(`Field "${T(h.field)}" at ${m} is no longer available.`) : r.push(`Missing field at ${m}.`), B(Qe(h), m), h.topN && !a && r.push(`Top-N at ${m} needs at least one measure selected.`), h.filters && !Fe(h.filters) ? r.push(`Level filter at ${m} has incomplete rules.`) : h.filters && !qe(h.filters, b) && r.push(`Level filter at ${m} does not match any loaded rows.`), h.defaultChild && N(h.defaultChild, `${m} > Default children`, j), (h.branches || []).forEach(
       /** @param {any} [branch] @param {any} [index] @returns {any} */
       (u, D) => {
-        const R = u.label && u.label.trim() ? u.label.trim() : `Row override ${D + 1}`, y = `${A} > ${R}`;
+        const R = u.label && u.label.trim() ? u.label.trim() : `Row override ${D + 1}`, y = `${m} > ${R}`;
         Fe(u.condition) ? qe(u.condition, b) || r.push(`Row override "${R}" does not match any loaded rows.`) : r.push(`Row override "${R}" needs a complete row rule.`), Array.isArray(u.sourcePathFields) && u.sourcePathFields.length > 0 && u.sourcePathFields[u.sourcePathFields.length - 1] !== h.field && r.push(`Row override "${R}" was created for another level and no longer points to this row path.`), Dl(u.sourceRowPath, b) || o.push(`Row override "${R}" points to a row path that is not in the current loaded rows.`), u.child && N(u.child, `${y} > Custom children`, j), u.child || o.push(`Row override "${R}" has no Custom children; it only renames the matching row.`);
       }
     );
@@ -241,7 +241,7 @@ const Ie = (e) => `${me}${e}`, Se = (e) => {
     }
   }
   return n || null;
-}, Ae = (e, t, n) => {
+}, me = (e, t, n) => {
   const i = re(e, t);
   return i && i.branches[n] ? i.branches[n] : null;
 }, z = (e, t, n) => {
@@ -335,7 +335,7 @@ const Ie = (e) => `${me}${e}`, Se = (e) => {
     (o) => !o || o.field !== t ? !1 : o.operator === "eq" || o.operator === "=" ? Z(o.value) === i : o.operator === "in" ? Array.isArray(o.values) && o.values.map(Z).includes(i) : !1
   );
 }, Il = (e, t, n, i = "") => ({
-  ...Al(),
+  ...ml(),
   label: Z(n || t),
   condition: {
     op: "AND",
@@ -545,7 +545,7 @@ function De({ condition: e, allFields: t, getFieldLabel: n = T, onSave: i, onClo
         )
       })
     );
-  }, []), A = x.useCallback((d) => {
+  }, []), m = x.useCallback((d) => {
     b(
       /** @param {any} [prev] @returns {any} */
       (v) => ({
@@ -729,7 +729,7 @@ function De({ condition: e, allFields: t, getFieldLabel: n = T, onSave: i, onClo
                         "button",
                         {
                           type: "button",
-                          onClick: () => A(v),
+                          onClick: () => m(v),
                           style: { background: "none", border: "none", cursor: "pointer", color: "#B91C1C", padding: "6px" },
                           children: /* @__PURE__ */ l.jsx(S.Delete, {})
                         }
@@ -1040,7 +1040,7 @@ function ql({
   titleLabel: B = "Title",
   canRemove: N = !0
 }) {
-  const h = H(o), A = e && e.levelNumber ? `Level ${e.levelNumber}` : "Level", d = !!(t.filters && t.filters.clauses && t.filters.clauses.length > 0), j = [
+  const h = H(o), m = e && e.levelNumber ? `Level ${e.levelNumber}` : "Level", d = !!(t.filters && t.filters.clauses && t.filters.clauses.length > 0), j = [
     t.field ? i(t.field) : "Select field",
     t.label && t.label.trim() ? `Title: ${t.label.trim()}` : null,
     t.topN ? `Top ${t.topN}` : null,
@@ -1048,7 +1048,7 @@ function ql({
   ].filter(Boolean);
   return /* @__PURE__ */ l.jsxs("div", { style: ce(o), children: [
     /* @__PURE__ */ l.jsxs("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }, children: [
-      /* @__PURE__ */ l.jsx("div", { children: /* @__PURE__ */ l.jsx("div", { style: { fontSize: "14px", fontWeight: 800, color: o.text }, children: A }) }),
+      /* @__PURE__ */ l.jsx("div", { children: /* @__PURE__ */ l.jsx("div", { style: { fontSize: "14px", fontWeight: 800, color: o.text }, children: m }) }),
       /* @__PURE__ */ l.jsxs("div", { style: { display: "flex", gap: "8px", flexShrink: 0 }, children: [
         /* @__PURE__ */ l.jsx(
           "button",
@@ -1078,7 +1078,7 @@ function ql({
     /* @__PURE__ */ l.jsxs(
       rl,
       {
-        title: `${A} settings`,
+        title: `${m} settings`,
         summary: j.join(" · "),
         theme: o,
         defaultOpen: !1,
@@ -1262,7 +1262,7 @@ function Kl({
   onApply: a,
   onCancel: f
 }) {
-  const [C, b] = x.useState(null), [B, N] = x.useState(!1), h = e && e.child ? e.child : J(""), A = Array.isArray(e && e.selectedPath) ? e.selectedPath : [], d = re(h, A) || h, v = !!(d.filters && d.filters.clauses && d.filters.clauses.length > 0), j = Ee(h, e.childLevelNumber || 2), u = Math.max(0, A.length), D = (e && Number.isFinite(Number(e.childLevelNumber)) ? Number(e.childLevelNumber) : 2) + A.length, R = H(r), y = [
+  const [C, b] = x.useState(null), [B, N] = x.useState(!1), h = e && e.child ? e.child : J(""), m = Array.isArray(e && e.selectedPath) ? e.selectedPath : [], d = re(h, m) || h, v = !!(d.filters && d.filters.clauses && d.filters.clauses.length > 0), j = Ee(h, e.childLevelNumber || 2), u = Math.max(0, m.length), D = (e && Number.isFinite(Number(e.childLevelNumber)) ? Number(e.childLevelNumber) : 2) + m.length, R = H(r), y = [
     d.field ? n(d.field) : "Select field",
     e.title && e.title.trim() ? `Title: ${e.title.trim()}` : null,
     d.topN ? `Top ${d.topN}` : null,
@@ -1270,7 +1270,7 @@ function Kl({
   ].filter(Boolean), k = (c) => {
     o({
       ...e,
-      child: z(h, A, () => c)
+      child: z(h, m, () => c)
     });
   }, V = (c) => {
     o({
@@ -1278,12 +1278,12 @@ function Kl({
       selectedPath: Be(c)
     });
   }, pe = () => {
-    const c = [...A, W];
+    const c = [...m, W];
     o({
       ...e,
       child: z(
         h,
-        A,
+        m,
         /** @param {any} [node] @returns {any} */
         ($) => ({
           ...$,
@@ -1297,7 +1297,7 @@ function Kl({
       ...e,
       child: z(
         h,
-        A,
+        m,
         /** @param {any} [node] @returns {any} */
         (c) => ({
           ...c,
@@ -1698,7 +1698,7 @@ function Zl({
   savedReports: B,
   setSavedReports: N,
   activeReportId: h,
-  setActiveReportId: A,
+  setActiveReportId: m,
   showNotification: d,
   requestedSelection: v = null,
   showReportConfigColumn: j = !0,
@@ -1723,7 +1723,7 @@ function Zl({
     t(
       /** @param {any} [prev] @returns {any} */
       (p) => {
-        const w = p && typeof p == "object" ? p : {}, m = w.root ? M(w.root) : null, P = typeof s == "function" ? s(m) : s;
+        const w = p && typeof p == "object" ? p : {}, A = w.root ? M(w.root) : null, P = typeof s == "function" ? s(A) : s;
         return { ...w, root: P };
       }
     );
@@ -1745,18 +1745,18 @@ function Zl({
       return s ? { type: "node", node: s } : null;
     }
     if (y.type === "branch") {
-      const s = Ae(g, y.nodePath, y.branchIndex);
+      const s = me(g, y.nodePath, y.branchIndex);
       return s ? { type: "branch", branch: s } : null;
     }
     return null;
-  }, [g, y]), ke = x.useMemo(() => !V || !g ? null : Ae(g, V.nodePath, V.branchIndex), [V, g]), Oe = x.useCallback((s) => {
+  }, [g, y]), ke = x.useMemo(() => !V || !g ? null : me(g, V.nodePath, V.branchIndex), [V, g]), Oe = x.useCallback((s) => {
     if (!s || s.type !== "rowPath" || !g) return !1;
     const p = Array.isArray(s.nodePath) ? s.nodePath : [], w = re(g, p);
     if (!w) return !1;
-    const m = Array.isArray(w.branches) ? w.branches : [], P = m.findIndex(
+    const A = Array.isArray(w.branches) ? w.branches : [], P = A.findIndex(
       /** @param {any} [branch] @returns {any} */
       (ae) => Je(ae, s.field, s.value)
-    ), L = P >= 0 ? m[P] : null, ye = L && L.child ? L.child : w.defaultChild || J(""), K = Z(s.label || s.value);
+    ), L = P >= 0 ? A[P] : null, ye = L && L.child ? L.child : w.defaultChild || J(""), K = Z(s.label || s.value);
     return $({
       request: s,
       nodePath: p,
@@ -1778,13 +1778,14 @@ function Zl({
         re(g, y.path) || k({ type: "node", path: [] });
         return;
       }
-      Ae(g, y.nodePath, y.branchIndex) || k({ type: "node", path: y.nodePath });
+      me(g, y.nodePath, y.branchIndex) || k({ type: "node", path: y.nodePath });
     }
   }, [g, y]);
   const he = x.useCallback(() => {
     const s = xe.current;
     !s || typeof s.scrollIntoView != "function" || window.requestAnimationFrame(() => {
-      s.scrollIntoView({ block: "start", behavior: "smooth" });
+      const p = typeof window < "u" && typeof window.matchMedia == "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      s.scrollIntoView({ block: "start", behavior: p ? "auto" : "smooth" });
     });
   }, []);
   x.useEffect(() => {
@@ -1810,7 +1811,7 @@ function Zl({
   }, [F]), _e = x.useCallback((s, p, w) => {
     F(
       /** @param {any} [prevRoot] @returns {any} */
-      (m) => ge(m, s, p, () => w)
+      (A) => ge(A, s, p, () => w)
     );
   }, [F]), sl = x.useCallback((s) => {
     const p = J(s);
@@ -1823,8 +1824,8 @@ function Zl({
         w,
         s,
         /** @param {any} [node] @returns {any} */
-        (m) => ({
-          ...m,
+        (A) => ({
+          ...A,
           defaultChild: J("")
         })
       )
@@ -1846,8 +1847,8 @@ function Zl({
   const ol = x.useCallback((s, p, w) => {
     w || F(
       /** @param {any} [prevRoot] @returns {any} */
-      (m) => ge(
-        m,
+      (A) => ge(
+        A,
         s,
         p,
         /** @param {any} [branch] @returns {any} */
@@ -1865,8 +1866,8 @@ function Zl({
         s,
         p,
         /** @param {any} [branch] @returns {any} */
-        (m) => ({
-          ...m,
+        (A) => ({
+          ...A,
           child: null
         })
       )
@@ -1892,20 +1893,20 @@ function Zl({
       ), k({ type: "node", path: p });
       return;
     }
-    const m = Se(w);
-    m >= 0 && (F(
+    const A = Se(w);
+    A >= 0 && (F(
       /** @param {any} [prevRoot] @returns {any} */
       (P) => ge(
         P,
         p,
-        m,
+        A,
         /** @param {any} [branch] @returns {any} */
         (L) => ({
           ...L,
           child: null
         })
       )
-    ), k({ type: "branch", nodePath: p, branchIndex: m }));
+    ), k({ type: "branch", nodePath: p, branchIndex: A }));
   }, [F]), cl = x.useCallback((s, p) => {
     F(
       /** @param {any} [prevRoot] @returns {any} */
@@ -1913,9 +1914,9 @@ function Zl({
         w,
         s,
         /** @param {any} [node] @returns {any} */
-        (m) => ({
-          ...m,
-          branches: m.branches.filter(
+        (A) => ({
+          ...A,
+          branches: A.branches.filter(
             /** @param {any} [_] @param {any} [index] @returns {any} */
             (P, L) => L !== p
           )
@@ -1943,9 +1944,9 @@ function Zl({
         w,
         s.path,
         /** @param {any} [node] @returns {any} */
-        (m) => ({
-          ...m,
-          defaultChild: m.defaultChild || J("")
+        (A) => ({
+          ...A,
+          defaultChild: A.defaultChild || J("")
         })
       )
     ), k({ type: "node", path: p });
@@ -1964,7 +1965,7 @@ function Zl({
     k(null);
   }, [q, d]), yl = x.useCallback(() => {
     if (!c || !c.request) return;
-    const s = c.request, p = Array.isArray(c.nodePath) ? c.nodePath : [], w = Ll(c.child), m = {
+    const s = c.request, p = Array.isArray(c.nodePath) ? c.nodePath : [], w = Ll(c.child), A = {
       ...Il(s.field, s.value, c.title || c.rowLabel, ""),
       label: Z(c.title || c.rowLabel || s.value),
       sourceRowPath: Array.isArray(s.pathValues) ? s.pathValues.map(String).filter(Boolean) : [],
@@ -1979,11 +1980,11 @@ function Zl({
         ...K,
         branches: ae.map(
           /** @param {any} [branch] @param {any} [index] @returns {any} */
-          (be, bl) => bl === He ? { ...m, _id: be._id || m._id } : be
+          (be, bl) => bl === He ? { ...A, _id: be._id || A._id } : be
         )
       } : {
         ...K,
-        branches: [...ae, m]
+        branches: [...ae, A]
       };
     }, L = z(g, p, P), ye = Ke(L, { allFields: O, valConfigs: a, data: o });
     if (!ye.valid) {
@@ -2010,8 +2011,8 @@ function Zl({
         layout: vl(f, a),
         createdAt: (/* @__PURE__ */ new Date()).toISOString()
       }
-    ]), A(s), R(""), d && d(`Report "${p}" saved`, "info");
-  }, [f, a, e, D, q, g, B, A, N, d]);
+    ]), m(s), R(""), d && d(`Report "${p}" saved`, "info");
+  }, [f, a, e, D, q, g, B, m, N, d]);
   return /* @__PURE__ */ l.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "18px", padding: "2px 0 8px" }, children: [
     (B || []).length > 0 && /* @__PURE__ */ l.jsxs("div", { children: [
       /* @__PURE__ */ l.jsxs("div", { style: E(r), children: [
@@ -2024,7 +2025,7 @@ function Zl({
           "div",
           {
             onClick: () => {
-              jl(s, { setReportDef: t, setActiveReportId: A, setColFields: C, setValConfigs: b }), $(null), k({ type: "node", path: [] });
+              jl(s, { setReportDef: t, setActiveReportId: m, setColFields: C, setValConfigs: b }), $(null), k({ type: "node", path: [] });
             },
             style: {
               display: "flex",
@@ -2048,9 +2049,9 @@ function Zl({
                       /** @param {any} [prev] @returns {any} */
                       (w) => (w || []).filter(
                         /** @param {any} [current] @returns {any} */
-                        (m) => m.id !== s.id
+                        (A) => A.id !== s.id
                       )
-                    ), h === s.id && A(null);
+                    ), h === s.id && m(null);
                   },
                   style: { background: "none", border: "none", cursor: "pointer", color: "#B91C1C", padding: "2px", flexShrink: 0 },
                   children: /* @__PURE__ */ l.jsx(S.Delete, {})

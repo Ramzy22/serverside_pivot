@@ -2,10 +2,12 @@
 const assert = require('assert');
 const path = require('path');
 const { buildSync } = require(path.join(__dirname, '..', 'serverside_pivot', 'node_modules', 'esbuild'));
+// Resolve bundle externals (react) from the frontend package, never from directories above the repo.
+const frontendRequire = require('module').createRequire(path.join(__dirname, '..', 'serverside_pivot', 'package.json'));
 const src = path.join(__dirname, '..', 'serverside_pivot', 'src', 'lib', 'runtime', 'responseQueue.ts');
 const out = buildSync({ entryPoints: [src], bundle: true, write: false, format: 'cjs', platform: 'node', external: ['react'] });
 const mod = { exports: {} };
-new Function('module', 'exports', 'require', out.outputFiles[0].text)(mod, mod.exports, require);
+new Function('module', 'exports', 'require', out.outputFiles[0].text)(mod, mod.exports, frontendRequire);
 const { EMPTY_RESPONSE_QUEUE, enqueueResponse, advanceResponse } = mod.exports;
 
 const data = { kind: 'data', requestId: 'd1' };

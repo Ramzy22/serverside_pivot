@@ -32,7 +32,9 @@ class DemoPrincipal:
 
     id: str = "flagship-demo"
     role: str = "viewer"
-    attributes: dict[str, Any] = field(default_factory=dict)
+    # The trusted accounting account (docs/OPERATIONS.md). Without one, every request is charged to
+    # the small shared ``system`` bucket (2 query slots), which a single interactive workspace exceeds.
+    attributes: dict[str, Any] = field(default_factory=lambda: {"accounting_tenant": "flagship-demo"})
 
 
 def demo_principal() -> DemoPrincipal:

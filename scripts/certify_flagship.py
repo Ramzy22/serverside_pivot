@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -51,6 +52,24 @@ def _run(command: list[str], *, cwd: Path = ROOT) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
+HOST_PORTS = {"runtime": 8765, "dash": 8050, "react": 5174, "streamlit": 8502}
+
+
+def _require_free_ports(ports: Mapping[str, int]) -> None:
+    """Refuse to start when a host port already answers.
+
+    A server left over from an earlier run would satisfy the readiness probe while the fresh process
+    fails to bind, so the browser suite would certify stale code."""
+    busy = []
+    for name, port in ports.items():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                busy.append(f"{name}:{port}")
+    if busy:
+        raise RuntimeError(f"Flagship host port(s) already in use (stop the old servers first): {', '.join(busy)}")
+
+
 def _wait_for(url: str, *, process: subprocess.Popen[str], timeout: float = 45) -> None:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -82,6 +101,9 @@ def _process(command: list[str], *, name: str, artifact_dir: Path, environment: 
     try:
         yield process
     finally:
+        if process.poll() is None and os.name == "nt":
+            # Console launchers (streamlit.exe) run the server in a child; terminate() would orphan it.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
         if process.poll() is None:
             process.terminate()
             try:
@@ -211,6 +233,7 @@ def _run_with_hosts(
 ) -> int:
     node = shutil.which("node") or "node"
     streamlit = shutil.which("streamlit") or "streamlit"
+    _require_free_ports(HOST_PORTS)
     with ExitStack() as stack:
         runtime = stack.enter_context(_process(
             [sys.executable, "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", "8765"],

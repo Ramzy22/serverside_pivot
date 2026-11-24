@@ -13,6 +13,7 @@ import json
 import os
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -1653,11 +1654,19 @@ def _click_export(driver, export_format: str):
 
 
 def _qualification_leaf_order(driver) -> list[str]:
-    return [
-        element.get_attribute("data-header-column-id")
-        for element in _workspace_elements(driver, "[role='columnheader'][data-header-column-id]")
-        if element.get_attribute("data-header-column-id")
-    ]
+    from selenium.common.exceptions import StaleElementReferenceException
+
+    # Virtualized headers re-render while columns settle; re-read a snapshot that went stale.
+    for _attempt in range(10):
+        try:
+            return [
+                column_id
+                for element in _workspace_elements(driver, "[role='columnheader'][data-header-column-id]")
+                if (column_id := element.get_attribute("data-header-column-id"))
+            ]
+        except StaleElementReferenceException:
+            time.sleep(0.1)
+    raise AssertionError("column headers kept re-rendering; no stable leaf order")
 
 
 def _apply_qualification_column_order(driver):

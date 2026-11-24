@@ -204,6 +204,12 @@ class RuntimeHttpGateway:
                 self._subscription_service.close()
 
     def _export_job_response(self, request, snapshot):
+        if snapshot.phase == "failed" and snapshot.error_code:
+            # Same envelope as the synchronous export limit (status "error", payload.limitCode).
+            return validate_runtime_response_v1(build_runtime_response(
+                kind="export", request_id=request.get("requestId"), status="error",
+                payload={"limitCode": snapshot.error_code},
+            ))
         response = build_export_job_response(snapshot, request_id=request.get("requestId"))
         payload = response["payload"]
         reference = payload.get("payloadRef")

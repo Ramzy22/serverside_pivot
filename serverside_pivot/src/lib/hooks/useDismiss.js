@@ -2,6 +2,15 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { buildThemeCssVars } from '../utils/styles';
 
+/** The focused element, looking through open shadow roots. @returns {Element | null} */
+function deepActiveElement() {
+    let active = typeof document === 'undefined' ? null : document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+        active = active.shadowRoot.activeElement;
+    }
+    return active;
+}
+
 /**
  * Shared overlay dismissal hook: handles Escape (capture phase), outside clicks,
  * and clean focus restoration to the previously focused trigger element.
@@ -29,14 +38,15 @@ export function useDismiss({
     useEffect(() => {
         if (!open || !enabled || typeof document === 'undefined') return undefined;
 
-        const active = document.activeElement;
+        const active = deepActiveElement();
         previousFocusRef.current = active && typeof (/** @type {any} */ (active)).focus === 'function'
             ? /** @type {HTMLElement} */ (active)
             : null;
 
         /** @param {Node | null} target @returns {boolean} */
         const isInsideRefs = (target) => {
-            if (!target) return false;
+            // composedPath() ends with document and window; only DOM nodes can be contained.
+            if (!target || typeof (/** @type {any} */ (target)).nodeType !== 'number') return false;
             const list = refsRef.current || [];
             for (let i = 0; i < list.length; i += 1) {
                 const entry = list[i];
@@ -58,10 +68,16 @@ export function useDismiss({
             }
         };
 
-        /** @param {MouseEvent | PointerEvent} event */
+        /**
+         * A document listener sees events from inside a shadow root (Streamlit) retargeted to the
+         * shadow host, so ``event.target`` alone would call every inside click "outside".
+         * @param {MouseEvent | PointerEvent} event
+         */
         const handlePointerDown = (event) => {
             const target = /** @type {Node | null} */ (event.target);
             if (isInsideRefs(target)) return;
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            if (path.some(node => isInsideRefs(/** @type {Node | null} */ (node)))) return;
             if (typeof onCloseRef.current === 'function') {
                 onCloseRef.current();
             }
@@ -75,11 +91,11 @@ export function useDismiss({
             document.removeEventListener('mousedown', handlePointerDown, true);
             if (restoreFocus && previousFocusRef.current) {
                 const prev = previousFocusRef.current;
-                const currentActive = document.activeElement;
+                const currentActive = deepActiveElement();
                 const shouldRestore = !currentActive
                     || currentActive === document.body
                     || isInsideRefs(currentActive);
-                if (shouldRestore && document.contains(prev)) {
+                if (shouldRestore && prev.isConnected) {
                     try {
                         prev.focus({ preventScroll: true });
                     } catch (_err) {
