@@ -146,7 +146,9 @@ function clausePredicate(field: string, clause: NormalizedFilterClause, column: 
         return { field, op, value: clause.value, caseSensitive };
     }
     const value = typedValue(clause.value, column, `filter ${field}`);
-    if (value === null) return { field, op: op === '=' ? 'is_null' : 'is_not_null' } as Filter;
+    // REQ-NULL-003: a comparison never matches NULL (`= NULL` included); the emitter has no FALSE
+    // predicate, so the request is not served on the client rather than answered differently.
+    if (value === null) throw new EmitterUnsupported(`comparison ${op} with NULL on ${field}`);
     return { field, op, value, ...(column.family === 'string' ? { caseSensitive } : {}) } as Filter;
 }
 

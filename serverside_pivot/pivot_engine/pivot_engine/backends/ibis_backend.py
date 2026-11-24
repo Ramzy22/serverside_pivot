@@ -41,6 +41,7 @@ from pivot_engine.backends.duckdb_backend import (
 )
 from pivot_engine.resource_governor import ResourceLimits
 from ..core.authority.scope import run_in_executor_scoped
+from ..core.exec import compiled_sql
 from pivot_engine.backends.execution import (
     CancellationUnavailableError,
     DatabaseExecution,
@@ -410,7 +411,7 @@ class IbisBackend:
             if ibis_expr is not None:
                 self.con._run_pre_execute_hooks(ibis_expr)
                 expression = ibis_expr.as_table()
-                sql = self.con.compile(expression)
+                sql = compiled_sql(self.con, expression)  # SQL tier of the compile cache
                 # In-memory tables live on the Ibis connection, not on pooled
                 # cursors: the lease sees them only once registered on it.
                 memtables = _in_memory_tables(expression)

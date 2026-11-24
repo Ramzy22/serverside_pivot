@@ -6,7 +6,7 @@ editing.  Every read is answered by the semantic core (``pivot_engine.core``)
 through ``transport.core_bridge``; the controller exposes the stable
 ``run_pivot*`` / export / drill-through façades over it.
 """
-from typing import Optional, Any, Dict, List, Mapping, Union, Callable, Generator
+from typing import Optional, Any, Dict, List, Mapping, Tuple, Union, Callable, Generator
 import asyncio
 import decimal
 import logging
@@ -105,12 +105,17 @@ class ScalablePivotController:
         if generation_guard is not None:
             self.cache = GenerationGuardedCache(self.cache, generation_guard)
         self.core_visible_counts: Dict[str, int] = {}
+        # Every invalidation of a core tier (local or from another process) bumps the epoch under this
+        # lock; a read stores what it computed only if the epoch it started under is still current, so
+        # a read that overlaps a load or mutation can never put its stale result back.
+        self._core_epoch = 0
+        self._core_epoch_lock = threading.Lock()
         self.cache_coordinator.register_namespace(
             CORE_VISIBLE_COUNT_NAMESPACE,
             owner="controller",
             key_dimensions=("plan_fingerprint", "scope_fingerprint"),
             size_getter=lambda: {"entries": len(self.core_visible_counts)},
-            invalidator=lambda _event: self.core_visible_counts.clear(),
+            invalidator=lambda _event: self._invalidate_core(self.core_visible_counts.clear),
         )
         # The core result tier: pivot tables keyed by spec fingerprint under the active scope (REQ-SEC-004),
         # dropped for a table on its load or mutation and expired after ``cache_ttl``.
@@ -124,7 +129,8 @@ class ScalablePivotController:
             owner="controller",
             key_dimensions=("dataset", "spec_fingerprint", "scope_fingerprint"),
             size_getter=lambda: {"bytes": self.core_cache.used_bytes("result")},
-            invalidator=lambda event: self.core_cache.invalidate(dataset=event.table, tiers=("result",)),
+            invalidator=lambda event: self._invalidate_core(
+                lambda: self.core_cache.invalidate(dataset=event.table, tiers=("result",))),
         )
 
         self.enable_streaming = enable_streaming
@@ -190,8 +196,22 @@ class ScalablePivotController:
         """Clear every controller-owned cache (forces fresh reads)."""
         if self.cache is not None and hasattr(self.cache, "clear"):
             self.cache.clear()
-        self.core_visible_counts.clear()
-        self.core_cache.invalidate()
+        self._invalidate_core(lambda: (self.core_visible_counts.clear(), self.core_cache.invalidate()))
+
+    def _invalidate_core(self, drop: Callable[[], Any]) -> None:
+        with self._core_epoch_lock:
+            self._core_epoch += 1
+            drop()
+
+    def core_epoch(self) -> int:
+        """The current core cache epoch: capture it before a read, pass it when storing the result."""
+        with self._core_epoch_lock:
+            return self._core_epoch
+
+    def store_core_visible_count(self, key: str, total: int, epoch: int) -> None:
+        with self._core_epoch_lock:
+            if epoch == self._core_epoch:
+                self.core_visible_counts[key] = total
 
     def cached_core_result(self, spec: Any) -> Optional[pa.Table]:
         """The core pivot table of ``spec`` from the result tier (under the active scope), if fresh."""
@@ -200,8 +220,12 @@ class ScalablePivotController:
             return None
         return entry[1]
 
-    def store_core_result(self, spec: Any, table: pa.Table) -> None:
-        self.core_cache.put(key_for("result", str(spec.table), spec_fingerprint(spec)), (time.monotonic(), table))
+    def store_core_result(self, spec: Any, table: pa.Table, epoch: int) -> None:
+        """Store a computed result unless a load or mutation invalidated the core since ``epoch``."""
+        with self._core_epoch_lock:
+            if epoch != self._core_epoch:
+                return
+            self.core_cache.put(key_for("result", str(spec.table), spec_fingerprint(spec)), (time.monotonic(), table))
 
     def close(self) -> None:
         """Release the controller's caches and backend connection."""
@@ -221,6 +245,11 @@ class ScalablePivotController:
             return self.resolve_table(table_name).schema()
         except Exception:
             return None
+
+    def table_schema(self, table_name: str) -> Tuple[Any, List[str]]:
+        """(schema, column names) of a table: catalog metadata only, no rows are read."""
+        self.catalog.set_backend(self.con)
+        return self.catalog.get_schema_and_columns(table_name)
 
     def _get_table_columns(self, table_name: str) -> List[str]:
         try:
@@ -327,8 +356,9 @@ class ScalablePivotController:
         normalized = self._normalize_spec(spec)
         table = None if force_refresh else self.cached_core_result(normalized)
         if table is None:
+            epoch = self.core_epoch()  # before the read: a write during it voids the store
             table = core_locked_call(self, normalized.table, lambda: core_pivot_table(self.resolve_table, normalized))
-            self.store_core_result(normalized, table)
+            self.store_core_result(normalized, table, epoch)
         return self._convert_table_to_dict(table, normalized) if return_format == "dict" else table
 
     def run_pivot_arrow(self, spec: Any) -> pa.Table:
@@ -394,10 +424,9 @@ class ScalablePivotController:
         column_values = [table.column(column).to_pylist() for column in columns]
         rows = [[normalize_cell(value) for value in row] for row in zip(*column_values)]
         next_cursor = None
-        if spec.limit and table.num_rows == spec.limit and spec.sort:
-            last = table.slice(table.num_rows - 1).to_pylist()[0]
-            sort_keys = spec.sort if isinstance(spec.sort, list) else [spec.sort]
-            next_cursor = {k.get("field"): last[k.get("field")] for k in sort_keys if k.get("field") in last} or None
+        if spec.limit and table.num_rows == spec.limit:  # a full page: continue after it, in the same order
+            done = int((spec.cursor or {}).get("offset", 0)) if isinstance(spec.cursor, dict) else 0
+            next_cursor = {"offset": done + table.num_rows}
         return {"columns": columns, "rows": rows, "next_cursor": next_cursor}
 
     # ------------------------------------------------------------ CDC / live

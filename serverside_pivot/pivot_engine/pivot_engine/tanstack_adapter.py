@@ -12,6 +12,7 @@ import re
 import time
 import json
 from collections import Counter, OrderedDict
+from collections.abc import MutableMapping
 from dataclasses import replace
 import hashlib
 from .adapter_viewport_cache import AdapterViewportCache, AdapterViewportKeyBuilder
@@ -97,6 +98,28 @@ def _has_case_variant_siblings(rows: Any) -> bool:
             return True
         seen[key] = path[-1]
     return False
+
+
+class _EpochBoundCounts(MutableMapping):  # type: ignore[type-arg]
+    """The controller's visible-node counts; writes land only while the captured epoch is current."""
+
+    def __init__(self, controller: Any, epoch: int) -> None:
+        self._controller, self._epoch = controller, epoch
+
+    def __getitem__(self, key: str) -> int:
+        return self._controller.core_visible_counts[key]
+
+    def __setitem__(self, key: str, value: int) -> None:
+        self._controller.store_core_visible_count(key, value, self._epoch)
+
+    def __delitem__(self, key: str) -> None:
+        self._controller.core_visible_counts.pop(key, None)
+
+    def __iter__(self) -> Any:
+        return iter(list(self._controller.core_visible_counts))
+
+    def __len__(self) -> int:
+        return len(self._controller.core_visible_counts)
 
 
 class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
@@ -2120,9 +2143,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         return await self._hierarchy_view_routed(
             pivot_spec, target_paths, start_row, end_row, include_grand_total=include_grand_total)
 
-    def _core_visible_counts(self) -> Dict[str, int]:
-        """Visible-node counts by plan fingerprint: the controller's (cleared on every data change), else the adapter's."""
+    def _core_visible_counts(self) -> "MutableMapping[str, int]":
+        """Visible-node counts by plan fingerprint: the controller's (cleared on every data change), else the adapter's.
+
+        The controller's counts come as a view bound to the core epoch at the start of this request, so a
+        count computed across a load or mutation is never stored."""
         counts = getattr(self.controller, "core_visible_counts", None)
+        if isinstance(counts, dict) and callable(getattr(self.controller, "core_epoch", None)):
+            return _EpochBoundCounts(self.controller, self.controller.core_epoch())
         return counts if isinstance(counts, dict) else self.__dict__.setdefault("_core_total_rows_cache", {})
 
     async def _hierarchy_view_routed(

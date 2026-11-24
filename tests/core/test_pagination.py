@@ -63,10 +63,11 @@ def test_pages_concatenate_to_the_unpaged_tree(mode):
 def test_materialized_pages_equal_direct_execution(records, query, size):
     con = _con(_table(records))
     unpaged = replace(query, window=Window())
-    expected = _paths(execute(unpaged, con.table))
-    pager = Pager(materialize_after=1)  # first page direct, then held: both must agree
-    got = [p for page in _walk(pager, con, replace(unpaged, window=Window(0, size)), mode="materialized")
-           for p in _paths(page.frame)]
+    expected = [(r["path"], r["values"]) for r in execute(unpaged, con.table).records()]
+    pager = Pager(materialize_after=1)  # first page direct, then held: both must agree (paths and values)
+    got = [(r["path"], r["values"])
+           for page in _walk(pager, con, replace(unpaged, window=Window(0, size)), mode="materialized")
+           for r in page.frame.records()]
     assert got == expected
 
 
@@ -229,3 +230,48 @@ def test_materialized_mode_serves_direct_pages_until_a_scroll_is_under_way():
     jump = Pager(materialize_after=5, materialize_offset=6).page(
         replace(Q, window=Window(6, 3)), con.table, mode="materialized")
     assert jump.total_rows == 11  # a deep jump materializes at once
+
+
+def test_one_materialization_never_blocks_other_trees_and_is_built_once():
+    import threading
+
+    con = _con(_table(RECORDS))
+    pager = Pager(materialize_after=0)
+    other = replace(Q, rows=("c",))
+    real_build, real_slice = pager._build, pager._slice
+    release, started, builds = threading.Event(), threading.Event(), []
+    db = threading.Lock()  # one DuckDB connection is not safe across threads: serialize the statements only
+
+    def slow_build(query, resolve, strategy, mat_id):
+        builds.append(query.rows)
+        if query.rows == Q.rows:
+            started.set()
+            assert release.wait(30)  # blocked holding no lock of the Pager's (nor the database)
+        with db:
+            return real_build(query, resolve, strategy, mat_id)
+
+    def serialized_slice(*args):
+        with db:
+            return real_slice(*args)
+
+    pager._build, pager._slice = slow_build, serialized_slice
+    results = {}
+
+    def page_q(name):
+        try:
+            results[name] = pager.page(Q, con.table, mode="materialized")
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertion below
+            results[name] = exc
+
+    first = threading.Thread(target=page_q, args=("first",))
+    first.start()
+    assert started.wait(30)
+    second = threading.Thread(target=page_q, args=("second",))  # same tree: waits for that one build
+    second.start()
+    assert pager.page(other, con.table, mode="materialized").frame.table.num_rows > 0  # not blocked by Q's build
+    release.set()
+    first.join(30)
+    second.join(30)
+    assert not [r for r in results.values() if isinstance(r, BaseException)], results
+    assert builds.count(Q.rows) == 1
+    assert results["first"].frame.fingerprint == results["second"].frame.fingerprint

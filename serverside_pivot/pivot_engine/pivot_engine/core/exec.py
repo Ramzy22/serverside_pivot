@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
+from .cache import CacheKey, CacheManager, key_for
 from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
@@ -24,7 +25,8 @@ from .physical import STRATEGIES, check_capabilities, choose
 from .physical.capabilities import refusing_untranslatable
 from .registry import type_family
 
-__all__ = ["canonical", "compile_query", "execute", "execute_async", "fingerprint", "materialize",
+__all__ = ["canonical", "clear_compile_cache", "compile_query", "compiled_sql",
+           "execute", "execute_async", "fingerprint", "materialize",
            "measure_expr", "record_predicate", "records", "scope_fingerprint", "statement_runner"]
 
 Resolver = Callable[[str], Any]
@@ -102,7 +104,8 @@ def canonical(query: PivotQuery) -> str:
     if query.unpivot is not None:  # REQ-DIM-002
         u = query.unpivot
         body["unpivot"] = [u.label, u.value, u.key, u.drop_nulls,
-                           [[m.label, m.field, m.order, *([m.agg, m.weight, m.q, m.order_by] if m.agg else [])]
+                           [[m.label, m.field, m.order, *([m.agg, m.weight, m.q, m.order_by] if m.agg else []),
+                             *([expr_to_wire(m.expr)] if m.expr is not None else [])]
                             for m in u.members]]
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
@@ -123,16 +126,73 @@ def fingerprint(query: PivotQuery) -> str:
     return hashlib.sha256(f"{canonical(query)}|{scope_fingerprint(query.dataset)}".encode()).hexdigest()[:32]
 
 
+# The plan tier of the core cache (REQ-SEC-004): the key holds the query's meaning, the scope
+# fingerprint and the policy version of the active grant; the entry holds the operation it was built
+# from (the resolved relation, or the final expression) and its backend, and a hit requires that
+# operation to be structurally equal to the current one (same table, schema and scope filter) on the
+# very same backend object: Ibis compares connections by their parameters, so two in-memory DuckDB
+# connections holding different data compare equal.  The entry keeps its backend alive, so an
+# identity match can never be a reused address.  Building the
+# same input twice gives the same expression, so a hit is exact.  Counted in entries.
+_COMPILED = CacheManager(budgets={"plan": 512}, sizeof=lambda _entry: 1)
+
+
+def clear_compile_cache() -> None:
+    _COMPILED.invalidate(tiers=("plan",))
+
+
+def _backends(op: Any) -> Tuple[int, ...]:
+    return tuple(sorted({id(t.source) for t in op.find(_database_table())}))
+
+
+def _cached(key: CacheKey, source: Any) -> Any:
+    entry = _COMPILED.get(key)
+    if entry is None or entry[0] != source or entry[1] != _backends(source):
+        return None
+    return entry[3]
+
+
+def _remember(key: CacheKey, source: Any, value: Any) -> None:
+    sources = tuple({id(t.source): t.source for t in source.find(_database_table())}.values())
+    _COMPILED.put(key, (source, _backends(source), sources, value))
+
+
+def _database_table() -> Any:
+    from ibis.expr.operations import DatabaseTable
+
+    return DatabaseTable
+
+
+def compiled_sql(backend: Any, expr: Any) -> str:
+    """``backend.compile(expr)``, memoized on the expression's structure."""
+    op = expr.op()
+    key = key_for("plan", "", f"sql:{backend.name}:{hash(op)}")
+    sql = _cached(key, op)
+    if sql is None:
+        sql = str(backend.compile(expr))
+        _remember(key, op, sql)
+    return str(sql)
+
+
 def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> Any:
     """``strategy=None`` lets the physical planner choose."""
     from .physical.union_all import prepared
 
     relation = resolve(query.dataset)
     query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
-    relation = prepared(relation, query)  # REQ-DIM-001/002: strategies see the category and measure-axis columns
-    schema = relation.schema()
-    plan = logical_plan(query)
-    expr = STRATEGIES[strategy or choose(plan, schema)](plan, relation)
+    whole = replace(query, window=Window())
+    source = relation.op()
+    key = key_for("plan", query.dataset, hashlib.sha256(f"{canonical(whole)}|{strategy}".encode()).hexdigest())
+    tree = _cached(key, source)
+    if tree is None:
+        relation = prepared(relation, query)  # REQ-DIM-001/002: strategies see the category and measure-axis columns
+        plan = logical_plan(whole)
+        tree = STRATEGIES[strategy or choose(plan, relation.schema())](plan, relation)
+        verify_scoped(tree)
+        _remember(key, source, tree)
+    if query.window.limit is None and not query.window.offset:
+        return tree
+    expr = tree.limit(query.window.limit, offset=query.window.offset)
     verify_scoped(expr)
     return expr
 

@@ -349,3 +349,30 @@ def test_the_core_result_tier_never_crosses_tenants():  # REQ-SEC-004
     assert a == {"x": 1, "y": 2}
     assert b == {"x": 100}
     controller.close()
+
+
+def test_a_read_overlapping_a_write_never_stores_its_stale_result(monkeypatch):
+    import pyarrow as pa
+
+    import pivot_engine.transport.core_bridge as bridge
+
+    controller, spec = _result_tier_controller()
+    real = bridge.core_pivot_table
+
+    def read_then_write_lands(resolve, s):
+        stale = real(resolve, s)  # computed on the old data ...
+        controller.load_data_from_arrow("t", pa.table({"tenant": ["A"], "r": ["x"], "v": [5]}))  # ... then a write
+        return stale
+
+    monkeypatch.setattr(bridge, "core_pivot_table", read_then_write_lands)
+    assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 101, "y": 2}  # the in-flight answer
+    monkeypatch.setattr(bridge, "core_pivot_table", real)
+    assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 5}  # not the stale one from the tier
+
+    epoch = controller.core_epoch()
+    controller._clear_mutation_caches("t")
+    controller.store_core_visible_count("k", 7, epoch)
+    assert "k" not in controller.core_visible_counts
+    controller.store_core_visible_count("k", 7, controller.core_epoch())
+    assert controller.core_visible_counts["k"] == 7
+    controller.close()

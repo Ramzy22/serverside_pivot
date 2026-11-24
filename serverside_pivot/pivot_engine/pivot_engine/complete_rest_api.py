@@ -551,35 +551,26 @@ class CompletePivotAPI:
         async def get_schema_endpoint(table_name: str, user: User = Depends(get_current_user)):
             self._authorize_dataset(user, table_name, "schema", bind=False)
             try:
-                # This would typically query the database schema
-                # For now, return mock schema based on a sample query
-                spec = PivotSpec(
-                    table=table_name,
-                    rows=[],  # No grouping for schema query
-                    measures=[],
-                    filters=[]
-                )
-                
+                # Column metadata only (no rows are read): from the catalog, not a pivot.
                 try:
-                    sample_result = await self.controller.run_pivot_async(spec, return_format="dict")
-                    columns = sample_result.get('columns', []) if sample_result else []
-                except:
-                    columns = []  # Fallback to empty if table doesn't exist
-                
+                    schema, columns = self.controller.table_schema(table_name)
+                except Exception as exc:  # noqa: BLE001 - an unknown table is a 404, not an empty schema
+                    raise HTTPException(status_code=404, detail="Table not found.") from exc
+                types = dict(schema.items()) if hasattr(schema, "items") else {}
                 schema_info = {
                     "table": table_name,
-                    "columns": [{"name": col, "type": "unknown"} for col in columns],
-                    "total_rows": "unknown"  # Would query actual count in real implementation
+                    "columns": [{"name": col, "type": str(types.get(col, "unknown"))} for col in columns],
+                    "total_rows": "unknown",  # counting rows is a scoped read, not metadata
                 }
                 
                 return APIResponse(
                     status="success",
                     data=schema_info
                 )
+            except HTTPException:
+                raise
             except PermissionError as e:  # scope / unproven-path denial (REQ-SEC-005)
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.") from e
-            except CoreUnsupported as e:  # a request the semantic core does not express
-                raise HTTPException(status_code=422, detail={"code": e.code, "reasons": list(e.reasons)}) from e
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e
         

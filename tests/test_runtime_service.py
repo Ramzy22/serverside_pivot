@@ -3744,3 +3744,50 @@ def test_branching_report_emits_format_and_debug_metadata():
     assert north.get("_reportFormat")["borderWidth"] == 2
     assert north.get("_reportDebug")["levelField"] == "region"
     assert north.get("_reportDebug")["childrenSource"] == "Default children"
+
+
+def test_runtime_service_all_rows_export_includes_every_pivot_column_beyond_the_viewport():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    members = [f"M{index:02d}" for index in range(30)]
+    adapter.controller.load_data_from_arrow(
+        "wide_export_data",
+        pa.Table.from_pydict({
+            "region": [("North", "South")[index % 2] for index in range(60)],
+            "member": [members[index % 30] for index in range(60)],
+            "sales": [float(index) for index in range(60)],
+        }),
+    )
+    adapter.bounded_pivot_export_capable = False  # the windowed (core) export path, not the bounded pager
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            col_fields=["member"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={},
+            layout_mode="hierarchy",
+            export_request={"format": "csv", "rowStart": 0, "rowEnd": 1, "allRows": True},
+        ),
+        PivotRequestContext(
+            table="wide_export_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="wide-export",
+            client_instance="wide-export-client",
+            state_epoch=1,
+            window_seq=1,
+            viewport_active=True,
+            start_row=0,
+            end_row=1,
+            col_start=0,
+            col_end=4,  # the viewport shows five member columns
+        ),
+    )
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8-sig", newline="") as export_file:
+            text = export_file.read()
+        assert all(member in text for member in members), text[:400]
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)

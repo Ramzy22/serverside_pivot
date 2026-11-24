@@ -155,3 +155,29 @@ def test_rest_reads_are_scoped_or_denied(method, path, index):
         tenant_values = [d.get("value") if isinstance(d, dict) else d for d in (inner or [])]
     found = leaks(json.dumps(payload, default=str) if not isinstance(payload, str) else payload, rows, tenant_values=tenant_values)
     assert not found, f"{method} {path}: tenant isolation violated -> {found}"
+
+
+def test_schema_route_returns_column_metadata_without_rows():
+    assert TestClient(_api().get_app()).get(f"/pivot/schema/{TABLE}").status_code == 403  # "schema" not granted
+    from pivot_engine.runtime.dataset_authorization import RuntimeDatasetAuthorizer
+
+    import pivot_engine.complete_rest_api as rest_api_module
+
+    controller = ScalablePivotController(backend_uri=":memory:")
+    controller.load_data_from_arrow(TABLE, tenant_table())
+    api = CompletePivotAPI(controller, dataset_authorizer=RuntimeDatasetAuthorizer({TABLE: {
+        "roles": {"viewer"}, "operations": {"read", "schema"},
+        "rowSecurity": {"mode": "claims", "claims": {"tenant": "tenant"}}}}))
+
+    async def current_user():
+        return User(id="tenant-a-user", username="tenant-a-user", role="viewer", attributes={"tenant": "A"})
+
+    api.app.dependency_overrides[rest_api_module.get_current_user] = current_user
+    client = TestClient(api.get_app(), raise_server_exceptions=False)
+    response = client.get(f"/pivot/schema/{TABLE}")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert [c["name"] for c in data["columns"]] == list(tenant_table().column_names)
+    assert all(c["type"] != "unknown" for c in data["columns"])
+    assert not leaks(response.json())
+    assert client.get("/pivot/schema/no_such_table").status_code in (403, 404)

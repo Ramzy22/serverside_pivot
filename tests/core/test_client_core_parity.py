@@ -280,3 +280,13 @@ def test_ambiguous_expansion_is_not_guessed(client):  # REQ-ID-001, F-EXPAND-EMP
     with pytest.raises(CoreUnsupported, match="empty or NULL member"):
         _expanded([["A", ""]], ["r", "c", "k"], {"r": "string", "c": "string", "k": "string"})
     assert _expanded([["A"]], ["r", "c", "k"], {"r": "string", "c": "string", "k": "string"}) == frozenset({("A",)})
+
+
+def test_a_comparison_with_null_is_never_answered_differently_on_the_client(client):  # REQ-NULL-003
+    """The server never matches NULL in a comparison; the client cannot express FALSE, so it declines."""
+    table = _table([{"r": "A", "c": "x", "k": "K1", "v": 1.0, "n": 1}, {"r": "B", "c": "y", "k": "K2", "v": 2.0, "n": None}])
+    for clause in ({"type": "gt", "value": "__null__"}, {"type": "equals", "value": "__null__"}):
+        reply = client({"rowFields": ["r"], "colFields": [], "valConfigs": [{"field": "v", "agg": "sum"}],
+                        "sorting": [], "filters": {"n": {"operator": "AND", "conditions": [clause]}},
+                        "expanded": {}}, table)
+        assert "with NULL" in reply.get("unsupported", ""), reply

@@ -21,7 +21,7 @@ import re
 import time
 from dataclasses import is_dataclass, replace
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
 from ..core.exec import (
@@ -114,6 +114,9 @@ def _flatten_fields(f: Mapping[str, Any]) -> List[str]:
 
 
 def _dimension_filter(f: Mapping[str, Any], families: Mapping[str, str], reasons: List[str]) -> Any:
+    if not isinstance(f, Mapping):  # e.g. a SQL-text condition: never parsed, a typed refusal
+        reasons.append(f"filter of type {type(f).__name__}")
+        return None
     if "conditions" in f:
         op = str(f.get("op") or f.get("operator") or "AND").lower()
         if op not in {"and", "or"}:
@@ -1086,10 +1089,12 @@ def _legacy_values(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[
         return {k: v for k, v in values.items() if not k.startswith(HIDDEN)}
     out: Dict[str, Any] = {}
     for j, _member, m, name in query.cells():
-        out[f"{keys[j]}_{m.alias}"] = values[name]
+        if not m.alias.startswith(HIDDEN):  # helper measures (ragged paths, axis bases) stay internal
+            out[f"{keys[j]}_{m.alias}"] = values[name]
     if totals_column:
         for m in query.measures:
-            out[f"__RowTotal__{m.alias}"] = values[m.alias]
+            if not m.alias.startswith(HIDDEN):
+                out[f"__RowTotal__{m.alias}"] = values[m.alias]
     return out
 
 
@@ -1162,7 +1167,7 @@ def core_hierarchy_view(
     end_row: Optional[int],
     *,
     include_grand_total_row: bool = False,
-    total_cache: Optional[Dict[str, int]] = None,
+    total_cache: Optional[MutableMapping[str, int]] = None,
     capture: Optional[Dict[str, Any]] = None,
     tabular_subtotals: bool = False,
     flat: bool = False,
@@ -1298,9 +1303,15 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
 
     relation = resolve(spec.table)
     offset = max(0, int(getattr(spec, "offset", 0) or 0))
+    cursor = getattr(spec, "cursor", None)
+    if cursor:  # the continuation this read returns as ``next_cursor``: an offset into the same order
+        if set(cursor) != {"offset"} or not isinstance(cursor["offset"], int) or cursor["offset"] < 0:
+            raise CoreUnsupported(["keyset cursor"])
+        offset += cursor["offset"]
     limit = getattr(spec, "limit", None) or None  # the run_pivot contract: limit 0 (or None) = no limit
     plain = copy.copy(spec)
     plain.offset = 0
+    plain.cursor = None
     cell_sorts: List[Tuple[int, str, str, bool, bool, bool]] = []
     query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
@@ -1320,11 +1331,13 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
         names += values
     else:
         for j, _member, m, name in query.cells():
-            columns.append(name)
-            names.append(f"{keys[j]}_{m.alias}")
+            if not m.alias.startswith(HIDDEN):
+                columns.append(name)
+                names.append(f"{keys[j]}_{m.alias}")
         if totals_column:
-            columns += [m.alias for m in query.measures]
-            names += [f"__RowTotal__{m.alias}" for m in query.measures]
+            shown = [m.alias for m in query.measures if not m.alias.startswith(HIDDEN)]
+            columns += shown
+            names += [f"__RowTotal__{alias}" for alias in shown]
     return table.select(columns).rename_columns(names)
 
 
@@ -1388,7 +1401,7 @@ def _capture(capture: Dict[str, Any], query: PivotQuery, relation: Any) -> None:
     capture["data"] = base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
 
 
-def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[Dict[str, int]]) -> int:
+def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[MutableMapping[str, int]]) -> int:
     """Rows of the core tree including its grand total."""
     unwindowed = replace(query, window=Window(), column_members=(), derived=())  # cells/derived never change it
     key = fingerprint(unwindowed)

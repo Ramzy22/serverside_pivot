@@ -770,3 +770,43 @@ def test_an_and_group_of_measure_conditions_is_one_measure_filter_each():  # REQ
     assert spec_to_query(spec(filters=[single_or]), [], SCHEMA).measure_filters == (MeasureFilter(2, "v_sum", ">", 1.0),)
     with pytest.raises(CoreUnsupported, match="compound measure filter"):
         spec_to_query(spec(filters=[{"op": "OR", "conditions": group["conditions"]}]), [], SCHEMA)
+
+
+def test_ragged_helper_measures_never_reach_a_pivoted_response():
+    con = ibis.duckdb.connect()
+    con.create_table("t", pa.table({"r": ["A", "A", "B"], "s": ["x", None, "y"], "c": ["p", "q", "p"], "v": [1, 5, 7]}))
+    ragged = spec(rows=["r", "s"], columns=["c"], pivot_config=PivotConfig(enabled=True, include_totals_column=True),
+                  group_allow_unbalanced=True)
+    view = core_hierarchy_view(con.table, ragged, [["__ALL__"]], 0, 100, include_grand_total_row=True)
+    keys = {k for row in view["rows"] for k in row}
+    assert not [k for k in keys if "__base_" in k], keys
+    assert {"p_v_sum", "q_v_sum"} <= keys
+
+
+def test_next_cursor_continues_the_same_order_until_the_last_page():
+    import asyncio
+
+    from pivot_engine.scalable_pivot_controller import ScalablePivotController
+
+    controller = ScalablePivotController(backend_uri=":memory:")
+    controller.load_data_from_arrow("t", pa.table({"r": [f"k{i:02d}" for i in range(7)], "v": list(range(7))}))
+    base = dict(rows=["r"], sort=[{"field": "r", "order": "desc"}])
+    whole = asyncio.run(controller.run_pivot_async(spec(**base, limit=0), return_format="dict"))
+    pages, cursor = [], None
+    while True:
+        page = asyncio.run(controller.run_pivot_async(spec(**base, limit=3, cursor=cursor), return_format="dict"))
+        pages += page["rows"]
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert pages == whole["rows"] and len(pages) == 7
+    with pytest.raises(CoreUnsupported):
+        asyncio.run(controller.run_pivot_async(spec(**base, limit=3, cursor={"r": "k03"}), return_format="dict"))
+
+
+def test_a_text_filter_condition_is_a_typed_refusal():
+    from pivot_engine.transport.core_bridge import core_record_filter
+
+    with pytest.raises(CoreUnsupported) as info:
+        core_record_filter(_con().table("t"), "region = 'East'")
+    assert info.value.reasons == ("filter of type str",)

@@ -129,7 +129,8 @@ class Pager:
         self.cache = cache or CacheManager(budgets={"snapshot": max_held_rows}, sizeof=_held_rows, on_evict=_drop)
         self.epoch = epoch or uuid.uuid4().hex
         self._secret = secret or secrets.token_bytes(32)
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # guards the index, the page counts and the in-flight builds only
+        self._building: Dict[CacheKey, threading.Event] = {}
 
     # ----------------------------------------------------------- cursor
 
@@ -220,20 +221,29 @@ class Pager:
                 raise CursorRejectedError("materialized result expired")
             return held, mat_id
         index_key = key_for("plan", query.dataset, f"matidx:{base_fp}", revision)
-        with self._lock:
-            known = self.cache.get(index_key)
-            if known is not None:
-                held = self.cache.get(key_for("snapshot", query.dataset, f"mat:{known.mat_id}"))
-                if held is not None:
-                    return held, str(known.mat_id)
-            seen_key = (scope_fingerprint(query.dataset), base_fp, revision)
-            seen = self._pages_seen.get(seen_key, 0)
-            if not force and seen < self.materialize_after and offset < self.materialize_offset:
-                if len(self._pages_seen) > 10_000:
-                    self._pages_seen.clear()
-                self._pages_seen[seen_key] = seen + 1
-                return None, ""
-            self._pages_seen.pop(seen_key, None)
+        while True:
+            with self._lock:
+                known = self.cache.get(index_key)
+                if known is not None:
+                    held = self.cache.get(key_for("snapshot", query.dataset, f"mat:{known.mat_id}"))
+                    if held is not None:
+                        return held, str(known.mat_id)
+                in_flight = self._building.get(index_key)
+                if in_flight is None:
+                    seen_key = (scope_fingerprint(query.dataset), base_fp, revision)
+                    seen = self._pages_seen.get(seen_key, 0)
+                    if not force and seen < self.materialize_after and offset < self.materialize_offset:
+                        if len(self._pages_seen) > 10_000:
+                            self._pages_seen.clear()
+                        self._pages_seen[seen_key] = seen + 1
+                        return None, ""
+                    self._pages_seen.pop(seen_key, None)
+                    self._building[index_key] = threading.Event()
+                    break
+            in_flight.wait()  # the same tree is being built: use it once it is held (or build it if that failed)
+        # The build (one statement over the whole tree) runs outside the lock: other trees and tenants
+        # keep paging while it runs.
+        try:
             mat_id = uuid.uuid4().hex
             handle = self._build(query, resolve, strategy, mat_id)
             if handle.total > self.max_held_rows:
@@ -242,8 +252,12 @@ class Pager:
                     f"materialized tree has {handle.total} rows, above the {self.max_held_rows} row limit; "
                     "use restart_on_change paging"
                 )
-            self.cache.put(key_for("snapshot", query.dataset, f"mat:{mat_id}"), handle)
-            self.cache.put(index_key, _Index(mat_id))
+            with self._lock:
+                self.cache.put(key_for("snapshot", query.dataset, f"mat:{mat_id}"), handle)
+                self.cache.put(index_key, _Index(mat_id))
+        finally:
+            with self._lock:
+                self._building.pop(index_key).set()
         return handle, mat_id
 
     def _build(self, query: PivotQuery, resolve: Resolver, strategy: Optional[str], mat_id: str) -> _Materialized:
@@ -272,7 +286,7 @@ class Pager:
         return ResultFrame(
             table=materialize(page),
             rows=tuple(query.rows),
-            measures=tuple(m.alias for m in query.measures),
+            measures=tuple(query.value_columns()),
             fingerprint=f"mat:{handle.table}",
             window=(offset, limit),
             meta={"total_rows": handle.total},
