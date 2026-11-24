@@ -20,7 +20,8 @@ from .frame import ResultFrame
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
 from .logical import plan as logical_plan
-from .physical import STRATEGIES, choose
+from .physical import STRATEGIES, check_capabilities, choose
+from .physical.capabilities import refusing_untranslatable
 from .registry import type_family
 
 __all__ = ["canonical", "compile_query", "execute", "execute_async", "fingerprint", "materialize",
@@ -38,10 +39,13 @@ def materialize(expr: Any) -> Any:
     A request binds a runner (``statement_runner``) that owns cancellation, the
     query deadline and the physical lease; without one the statement runs on
     the expression's own backend.  Returns what ``expr.to_pyarrow()`` returns
-    (an Arrow table, or a scalar for a scalar expression).
+    (an Arrow table, or a scalar for a scalar expression).  A statement the
+    backend cannot compile is a typed ``BackendCapabilityError`` before it runs.
     """
+    check_capabilities(expr)
     runner = _RUNNER.get()
-    return expr.to_pyarrow() if runner is None else runner(expr)
+    with refusing_untranslatable(expr):
+        return expr.to_pyarrow() if runner is None else runner(expr)
 
 
 @contextmanager

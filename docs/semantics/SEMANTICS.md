@@ -129,3 +129,4 @@ Definitions, for a request over dataset `D`:
 | REQ-BACK-001 | Default NULL ordering is NULLS LAST for ascending and descending sorts, on every backend. |
 | REQ-BACK-002 | String comparison and grouping use binary, case-sensitive collation. |
 | REQ-BACK-003 | Timestamps are compared in UTC. Each backend states its decimal scale and rounding in its capability entry. |
+| REQ-BACK-004 | On every supported backend a query either returns exactly the oracle's rows or is refused before it runs with a typed `unsupported_query` error (`BackendCapabilityError`) that names the missing operations. A wrong value, a raw driver error or a partial result is a defect. DuckDB, the reference backend, never refuses. Certified locally on DuckDB, SQLite and Polars. |

@@ -10,8 +10,10 @@ from typing import Any, Callable, Dict, List, Tuple
 
 from ..logical import LogicalPlan
 from . import leaf_partials, union_all
+from .capabilities import BackendCapabilityError, check_capabilities
 
-__all__ = ["STRATEGIES", "TREES", "choose", "leaf_partials", "union_all"]
+__all__ = ["STRATEGIES", "TREES", "BackendCapabilityError", "check_capabilities", "choose", "leaf_partials",
+           "union_all"]
 
 STRATEGIES: Dict[str, Callable[[LogicalPlan, Any], Any]] = {
     "union_all": union_all.lower,

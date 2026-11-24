@@ -11,6 +11,7 @@ column per measure alias, and ``__depth`` (0 = grand total).  Presence is
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import ibis
@@ -19,6 +20,7 @@ import pyarrow as pa
 from ..ir import CASE_FOLDING_OPS, FORMULA_AGG, MEMBER_AGG, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from ..registry import type_family
+from .capabilities import native_null_safe_semi_join
 from .lowering import lower as lower_measure
 
 __all__ = ["DEPTH", "LevelAggregate", "build", "filtered", "lower", "output_columns", "tree", "tree_of"]
@@ -113,10 +115,64 @@ def _trunc(x: float) -> float:  # type: ignore[empty-body]
     """SQL TRUNC on a double (toward zero), a double result."""
 
 
+_NOT_CONSTANT = object()
+
+
+def _constant(e: Any) -> Any:
+    """A formula subtree without measure references, evaluated once (``None`` is NULL), else ``_NOT_CONSTANT``.
+
+    Only operators with exact IEEE-double semantics are folded; ``round`` stays with the backend's
+    own ROUND. Folding also sidesteps a Polars engine panic on a NULL-guarded min/max of constants
+    inside an aggregation (REQ-BACK-004).
+    """
+    if e.op == "num":
+        return float(e.args[0])
+    if e.op == "null":
+        return None
+    if e.op not in {"+", "-", "*", "/", "neg", "abs", "min", "max", "ceil", "floor", "trunc", "pow"}:
+        return _NOT_CONSTANT
+    xs = [_constant(a) for a in (e.args[:1] if e.op == "pow" else e.args)]
+    if any(x is _NOT_CONSTANT for x in xs):
+        return _NOT_CONSTANT
+    if any(x is None for x in xs):
+        return None
+    x = xs[0]
+    if e.op == "pow":
+        exponent = float(e.args[1])
+        if (exponent != int(exponent) and x < 0) or (exponent < 0 and x == 0):
+            return None
+        try:
+            return math.pow(x, exponent)
+        except OverflowError:
+            return math.copysign(math.inf, x) if exponent == int(exponent) and int(exponent) % 2 else math.inf
+    if e.op in {"ceil", "floor", "trunc"}:
+        if not math.isfinite(x):
+            return x
+        if e.op == "ceil":
+            return float(math.ceil(x))
+        return float(math.floor(x) if e.op == "floor" else math.trunc(x))
+    if e.op == "+":
+        return x + xs[1]
+    if e.op == "-":
+        return x - xs[1]
+    if e.op == "*":
+        return x * xs[1]
+    if e.op == "/":
+        return None if xs[1] == 0 else x / xs[1]
+    if e.op == "neg":
+        return -x
+    if e.op == "abs":
+        return abs(x)
+    return min(xs) if e.op == "min" else max(xs)
+
+
 def _formula(e: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition: Any,
              cell: Optional[Tuple[Any, ...]] = None) -> Any:
     """REQ-AGG-010: a formula over the node's own aggregates; a NULL input or an undefined result is NULL."""
     null = ibis.null().cast("float64")
+    constant = _constant(e)
+    if constant is not _NOT_CONSTANT:
+        return null if constant is None else ibis.literal(constant, type="float64")
     args = e.args
     if e.op == "null":
         return null
@@ -333,8 +389,32 @@ def _semi_join_on_keys(left: Any, right: Any, keys: Sequence[str]) -> Any:
     if not keys:
         return left
     renamed = right.select(**{f"__k_{i}": right[k] for i, k in enumerate(keys)}).distinct()
-    preds = [left[k].identical_to(renamed[f"__k_{i}"]) for i, k in enumerate(keys)]
-    return left.semi_join(renamed, preds)
+    if native_null_safe_semi_join(left):
+        preds = [left[k].identical_to(renamed[f"__k_{i}"]) for i, k in enumerate(keys)]
+        return left.semi_join(renamed, preds)
+    # Portable exact form: null-safe equality as two plain equalities, (k IS NULL, COALESCE(k, zero)),
+    # joined against the distinct keys, so each left row matches at most once (a semi join).
+    pairs = renamed.select(
+        **{f"__n_{i}": renamed[f"__k_{i}"].isnull() for i in range(len(keys))},
+        **{f"__v_{i}": renamed[f"__k_{i}"].coalesce(_zero(renamed[f"__k_{i}"].type())) for i in range(len(keys))},
+    )
+    preds = []
+    for i, k in enumerate(keys):
+        preds += [left[k].isnull() == pairs[f"__n_{i}"], left[k].coalesce(_zero(left[k].type())) == pairs[f"__v_{i}"]]
+    return left.inner_join(pairs, preds).select(*left.columns)
+
+
+def _zero(dtype: Any) -> Any:
+    """A non-NULL literal of ``dtype`` (its value is irrelevant: the NULL flag disambiguates it)."""
+    if dtype.is_string():
+        return ibis.literal("")
+    if dtype.is_boolean():
+        return ibis.literal(False)
+    if dtype.is_timestamp():
+        return ibis.literal("1970-01-01T00:00:00").cast(dtype)
+    if dtype.is_date():
+        return ibis.literal("1970-01-01").cast(dtype)
+    return ibis.literal(0).cast(dtype)
 
 
 def _paths_table(paths: Sequence[Tuple[Any, ...]], keys: Sequence[str], schema: Any) -> Any:
@@ -590,22 +670,19 @@ def tenor_days(text: Any) -> Any:
     def group(pattern: str, i: int) -> Any:
         return text.re_extract(pattern, i).nullif("")
 
+    # Simple CASE (``x WHEN a ...``) and a flat searched CASE keep the SQL shallow: nested IFs repeat
+    # each regex extraction per branch and overflow parsers with a fixed stack (SQLite).
+    null = ibis.null().cast("float64")
     number = group(TENOR_PATTERN, 1).cast("float64")
-    unit = group(TENOR_PATTERN, 2).lower()
-    factor = ibis.null().cast("float64")
-    for letter, days in reversed(list(_UNITS.items())):
-        factor = ibis.ifelse(unit == letter, ibis.literal(days), factor)
+    factor = group(TENOR_PATTERN, 2).lower().cases(*((u, ibis.literal(d)) for u, d in _UNITS.items()), else_=null)
     year, month, day = (group(ISO_PATTERN, i).cast("float64") for i in (1, 2, 3))
     iso = (year - 1970.0) * 365.25 + (month - 1.0) * 30.4375 + day
     my_year = group(MONTH_YEAR_PATTERN, 2).cast("float64")
-    abbr = group(MONTH_YEAR_PATTERN, 1).lower().substr(0, 3)
-    my_month = ibis.null().cast("float64")
-    for n, name in reversed(list(enumerate(_MONTHS, start=1))):
-        my_month = ibis.ifelse(abbr == name, ibis.literal(float(n)), my_month)
+    my_month = group(MONTH_YEAR_PATTERN, 1).lower().substr(0, 3).cases(
+        *((name, ibis.literal(float(n))) for n, name in enumerate(_MONTHS, start=1)), else_=null)
     month_year = (my_year - 1970.0) * 365.25 + (my_month - 1.0) * 30.4375
-    return ibis.ifelse(number.notnull() & factor.notnull(), number * factor,
-                       ibis.ifelse(year.notnull(), iso, ibis.ifelse(month_year.notnull(), month_year,
-                                                                    ibis.null().cast("float64"))))
+    tenor = number * factor
+    return ibis.cases((tenor.notnull(), tenor), (year.notnull(), iso), (month_year.notnull(), month_year), else_=null)
 
 
 def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, int], str]]:

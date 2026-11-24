@@ -103,7 +103,9 @@ class RuntimeRequestRouter:
             return exc.code
         from ..transport.core_bridge import CoreUnsupported
 
-        if isinstance(exc, CoreUnsupported):  # a request the semantic core does not express: a stable code
+        from ..core.physical import BackendCapabilityError
+
+        if isinstance(exc, (CoreUnsupported, BackendCapabilityError)):  # not expressible here: a stable code
             return "unsupported_query"
         return "database_execution_failed"
 

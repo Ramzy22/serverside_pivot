@@ -529,7 +529,7 @@ def test_release_evidence_validator_binds_release_and_complete_control_scope(tmp
     attachment_path.write_text("verified edge scan", encoding="utf-8")
     digest = hashlib.sha256(attachment_path.read_bytes()).hexdigest()
     local_control = {
-        "id": "AUTHORIZATION",
+        "id": "AUTHORIZATION_TENANT_ISOLATION",
         "asvs": [
             {
                 "id": "v5.0.0-V8.3.1",
@@ -540,7 +540,14 @@ def test_release_evidence_validator_binds_release_and_complete_control_scope(tmp
         "state": "verified_locally",
         "owner": "application-security",
         "cadence": "each release",
-        "localEvidence": ["tests/test_production_security.py"],
+        "localEvidence": [
+            "tests/test_production_security.py",
+            "tests/security/test_tenant_isolation_matrix.py",
+            "tests/security/test_rest_isolation_matrix.py",
+            "tests/security/test_flight_isolation.py",
+            "tests/security/test_live_isolation_matrix.py",
+            "serverside_pivot/pivot_engine/pivot_engine/core/authority/verifier.py",
+        ],
         "operatorEvidence": [],
     }
     operator_control = {
@@ -640,6 +647,10 @@ def test_release_evidence_validator_binds_release_and_complete_control_scope(tmp
     ).returncode != 0
 
     assert check([], []).returncode != 0
+    # The tenant-isolation control must keep citing the isolation matrix and the plan verifier.
+    without_matrix = dict(local_control, localEvidence=["tests/test_production_security.py"])
+    assert check([without_matrix], []).returncode != 0
+    assert check([dict(local_control, id="AUTHORIZATION")], []).returncode != 0
     assert check(
         [dict(local_control, asvs=[dict(local_control["asvs"][0], title="Wrong title")])],
         [],

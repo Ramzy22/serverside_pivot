@@ -28,6 +28,20 @@ _RELEASE_FIELDS = frozenset({"tag", "commit", "environment", "deploymentOrigin"}
 _SCOPE_FIELDS = frozenset({"matrixSha256", "controlIds"})
 _EVIDENCE_FIELDS = frozenset({"release", "scope", "generatedAt", "attachments"})
 _STATES = frozenset({"verified_locally", "operator_evidence_required", "not_applicable"})
+# Evidence a control must cite while it claims local verification: dropping it
+# from the matrix would silently weaken the certification.  The tenant
+# isolation matrix enumerates every route, runtime request kind, Flight action,
+# export, live subscription and cache reuse, and the plan verifier is the
+# fail-closed check behind it.
+_REQUIRED_LOCAL_EVIDENCE: dict[str, frozenset[str]] = {
+    "AUTHORIZATION_TENANT_ISOLATION": frozenset({
+        "tests/security/test_tenant_isolation_matrix.py",
+        "tests/security/test_rest_isolation_matrix.py",
+        "tests/security/test_flight_isolation.py",
+        "tests/security/test_live_isolation_matrix.py",
+        "serverside_pivot/pivot_engine/pivot_engine/core/authority/verifier.py",
+    }),
+}
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
@@ -143,6 +157,14 @@ def _matrix_controls(payload: Any, repository_root: Path) -> list[dict[str, Any]
                 raise ValueError(f"Matrix control {control['id']} ASVS reference is not in the pinned catalog.")
         _validate_control_evidence(control, repository_root)
         resolved.append(control)
+
+    for control_id, required in sorted(_REQUIRED_LOCAL_EVIDENCE.items()):
+        control = next((c for c in resolved if c["id"] == control_id), None)
+        if control is None or control["state"] != "verified_locally":
+            raise ValueError(f"Matrix must keep {control_id} verified locally.")
+        missing = sorted(required - set(control["localEvidence"]))
+        if missing:
+            raise ValueError(f"Matrix control {control_id} lacks required evidence: {', '.join(missing)}")
 
     for control in operational_controls:
         if not isinstance(control, dict) or set(control) != _OPERATIONAL_CONTROL_FIELDS:

@@ -58,7 +58,8 @@ LOWERINGS: Dict[str, Lowering] = {
     "avg": lambda col, _t, _m: col.mean(),
     "min": lambda col, _t, _m: col.min(),
     "max": lambda col, _t, _m: col.max(),
-    "count_distinct": lambda col, _t, _m: col.nunique(),  # exact (REQ-AGG-003)
+    # exact, NULL ignored on every backend (REQ-AGG-003)
+    "count_distinct": lambda col, _t, _m: col.nunique(where=col.notnull()),
     "median": lambda col, _t, _m: col.cast("float64").median(),
     "stddev": lambda col, _t, _m: col.cast("float64").std(how="sample"),
     "variance": lambda col, _t, _m: col.cast("float64").var(how="sample"),
