@@ -227,7 +227,8 @@ def _lower(m: Any, table: Any, plan: LogicalPlan, keys: Sequence[str], condition
     if m.agg != MEMBER_AGG:
         return lower_measure(m, table, condition)
     axis = plan.query.unpivot
-    assert axis is not None  # the IR admits MEMBER_AGG only with a per-member axis
+    if axis is None:
+        raise RuntimeError("the IR admits MEMBER_AGG only with a per-member axis")
     dtype = table[axis.value].type()
     if axis.members[0].agg == "array_agg":  # a series axis (REQ-AGG-009): one list type
         dtype = ibis.expr.datatypes.Array(dtype)

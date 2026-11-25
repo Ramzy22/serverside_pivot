@@ -400,16 +400,19 @@ class SufficientStatsProjector:
                 expr = col.count() if col is not None else table.count()
                 projections.append(expr.name(alias))
             elif agg == "sum":
-                assert col is not None
+                if col is None:
+                    raise RuntimeError("invariant violated: col is not None")
                 projections.append(col.sum().name(alias))
                 projections.append(col.count().name(cls.nn_col(alias)))
             elif agg == "avg":
-                assert col is not None
+                if col is None:
+                    raise RuntimeError("invariant violated: col is not None")
                 projections.append(col.mean().name(alias))
                 projections.append(col.sum().name(cls.sum_col(alias)))
                 projections.append(col.count().name(cls.nn_col(alias)))
             elif agg in _WAVG_AGGS:
-                assert col is not None and measure.weighted_field
+                if not (col is not None and measure.weighted_field):
+                    raise RuntimeError("invariant violated: col is not None and measure.weighted_field")
                 w_col = table[measure.weighted_field]
                 if measure.filter_condition:
                     w_col = w_col.where(core_record_filter(table, measure.filter_condition))
@@ -436,11 +439,13 @@ class SufficientStatsProjector:
                 projections.append(masked_nn.sum().name(cls.nn_col(alias)))
             elif agg == "min":
                 # Correction 2.7: Single-pass grouped SQL (no nested aggregate).
-                assert col is not None
+                if col is None:
+                    raise RuntimeError("invariant violated: col is not None")
                 projections.append(col.min().name(alias))
                 projections.append(col.count().name(cls.nn_col(alias)))
             elif agg == "max":
-                assert col is not None
+                if col is None:
+                    raise RuntimeError("invariant violated: col is not None")
                 projections.append(col.max().name(alias))
                 projections.append(col.count().name(cls.nn_col(alias)))
             else:

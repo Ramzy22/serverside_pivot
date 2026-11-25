@@ -1100,7 +1100,8 @@ def _legacy_values(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[
 
 def _ragged_row(record: Mapping[str, Any], query: PivotQuery, values: Dict[str, Any]) -> Dict[str, Any]:
     """REQ-DIM-005: a ragged node in the legacy shape: each path member under the field it came from."""
-    assert query.ragged is not None
+    if query.ragged is None:
+        raise RuntimeError("invariant violated: query.ragged is not None")
     fields = query.ragged.fields
     raw, path = record["values"], record["path"]
     if not path:

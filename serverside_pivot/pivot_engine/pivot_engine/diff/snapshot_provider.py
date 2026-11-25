@@ -12,7 +12,11 @@ This module owns Component 2 of the streaming and analytical diff architecture:
 
 from __future__ import annotations
 
+# Security note (bandit): every ``# nosec B608`` in this module formats only identifiers that went
+# through quote_ident (embedded quotes doubled) and ``?`` placeholders; all values are bound parameters.
+
 from contextlib import contextmanager
+import logging
 from dataclasses import dataclass, field
 import re
 import threading
@@ -45,6 +49,7 @@ from ..resource_governor import (
 from ..streaming.versioned_source_adapter import VersionedSourceAdapter, _extract_raw_duckdb_connection
 from ..util.sql_builder import quote_ident
 
+_LOG = logging.getLogger(__name__)
 _META_TABLE = "__pivot_baselines_meta"
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _DEFAULT_SNAPSHOT_TTL_SECONDS = 3600.0
@@ -269,7 +274,7 @@ class SnapshotProvider:
 
     def _estimate_duckdb_table_bytes(self, raw_con: Any, table: str) -> Tuple[int, int]:
         quoted = quote_ident(table)
-        count_row = raw_con.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()
+        count_row = raw_con.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()  # nosec B608
         row_count = int(count_row[0]) if count_row else 0
         cols_desc = raw_con.execute(f"DESCRIBE {quoted}").fetchall()
         col_count = max(1, len(cols_desc))
@@ -291,7 +296,7 @@ class SnapshotProvider:
                 try:
                     cur.close()
                 except Exception:
-                    pass
+                    _LOG.debug("cursor close failed", exc_info=True)
         else:
             yield base_con
 
@@ -304,11 +309,11 @@ class SnapshotProvider:
                     raw_con.execute(f"DROP TABLE IF EXISTS {quote_ident(physical_table)}")
                 self._ensure_meta_table_locked(raw_con)
                 raw_con.execute(
-                    f"DELETE FROM {quote_ident(_META_TABLE)} WHERE snapshot_id = ?",
+                    f"DELETE FROM {quote_ident(_META_TABLE)} WHERE snapshot_id = ?",  # nosec B608
                     [snapshot_id],
                 )
             except Exception:
-                pass
+                _LOG.debug("snapshot table cleanup failed", exc_info=True)
 
     def _evict_expired_locked(self) -> None:
         now = time.time()
@@ -470,13 +475,13 @@ class SnapshotProvider:
                     try:
                         self._ensure_meta_table_locked(raw_con)
                         raw_con.execute(
-                            f"CREATE TABLE {quote_ident(physical_name)} AS "
+                            f"CREATE TABLE {quote_ident(physical_name)} AS "  # nosec B608
                             f"SELECT * FROM {quote_ident(table)}{where_sql}",
                             where_params,
                         )
                         table_created = True
                         snap_count_row = raw_con.execute(
-                            f"SELECT COUNT(*) FROM {quote_ident(physical_name)}"
+                            f"SELECT COUNT(*) FROM {quote_ident(physical_name)}"  # nosec B608
                         ).fetchone()
                         actual_rows = int(snap_count_row[0]) if snap_count_row else 0
                         actual_bytes = max(
@@ -484,7 +489,7 @@ class SnapshotProvider:
                             int(estimated_bytes * (actual_rows / max(1, row_count))),
                         )
                         raw_con.execute(
-                            f"INSERT INTO {quote_ident(_META_TABLE)} VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            f"INSERT INTO {quote_ident(_META_TABLE)} VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                             [
                                 snapshot_id,
                                 table,
@@ -501,7 +506,7 @@ class SnapshotProvider:
                         try:
                             raw_con.execute("ROLLBACK")
                         except Exception:
-                            pass
+                            _LOG.debug("rollback after failed capture failed", exc_info=True)
                         if table_created:
                             self._drop_physical_table_safe(snapshot_id, physical_name)
                         raise

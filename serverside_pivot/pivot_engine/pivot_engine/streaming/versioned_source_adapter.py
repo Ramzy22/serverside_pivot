@@ -11,6 +11,10 @@ This module owns Component 1 of the streaming and analytical diff architecture:
 
 from __future__ import annotations
 
+# Security note (bandit): every ``# nosec B608`` in this module formats only identifiers that went
+# through quote_ident (embedded quotes doubled) and ``?`` placeholders; all values are bound parameters.
+# ``# nosec B105`` marks capability-tier labels, which bandit mistakes for passwords.
+
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -52,7 +56,7 @@ class SourceCapabilityTier(StrEnum):
     """Explicit backend change-detection capability levels."""
 
     TIER_1_EXACT_CDC = "exact_cdc"
-    TIER_2_CHANGE_TOKEN = "version_tracked"
+    TIER_2_CHANGE_TOKEN = "version_tracked"  # nosec B105
     TIER_3_TIME_TRAVEL_ONLY = "snapshot_pinned"
     TIER_4_PERIODIC_REFRESH = "periodic_refresh"
 
@@ -160,7 +164,7 @@ class SubscriptionInbox:
                 try:
                     self._on_notify()
                 except Exception:  # pragma: no cover - callback isolation
-                    pass
+                    _LOGGER.debug("change listener raised", exc_info=True)
             return
         self._items.append(
             SubscriptionInboxItem(
@@ -174,7 +178,7 @@ class SubscriptionInbox:
             try:
                 self._on_notify()
             except Exception:  # pragma: no cover - callback isolation
-                pass
+                _LOGGER.debug("change listener raised", exc_info=True)
 
     def pop_locked(self) -> Optional[SubscriptionInboxItem]:
         if not self._items:
@@ -422,7 +426,7 @@ class VersionedSourceAdapter:
                 try:
                     cur.close()
                 except Exception:
-                    pass
+                    _LOGGER.debug("cursor close failed", exc_info=True)
         else:
             yield base_con
 
@@ -501,22 +505,22 @@ class VersionedSourceAdapter:
                     try:
                         schema_version, _, _ = self._inspect_schema_locked(table, cur=raw_con)
                     except Exception:
-                        pass
+                        _LOGGER.debug("schema inspection failed; keeping the previous schema version", exc_info=True)
                     self._ensure_revisions_table_locked(raw_con)
                     row = raw_con.execute(
-                        f"SELECT data_revision FROM {quote_ident(_REVISIONS_TABLE)} WHERE table_name = ?",
+                        f"SELECT data_revision FROM {quote_ident(_REVISIONS_TABLE)} WHERE table_name = ?",  # nosec B608
                         [table],
                     ).fetchone()
                     if row is None:
                         committed_rev = max(1, committed_rev)
                         raw_con.execute(
-                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",
+                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",  # nosec B608
                             [table, committed_rev, schema_version, time.time()],
                         )
                     else:
                         committed_rev = int(row[0]) + 1 if revision is None else int(revision)
                         raw_con.execute(
-                            f"UPDATE {quote_ident(_REVISIONS_TABLE)} "
+                            f"UPDATE {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                             "SET data_revision = ?, schema_version = ?, committed_at = ? "
                             "WHERE table_name = ?",
                             [committed_rev, schema_version, time.time(), table],
@@ -543,14 +547,14 @@ class VersionedSourceAdapter:
                 if raw_con is not None:
                     self._ensure_revisions_table_locked(raw_con)
                     row = raw_con.execute(
-                        f"SELECT data_revision, schema_version FROM {quote_ident(_REVISIONS_TABLE)} "
+                        f"SELECT data_revision, schema_version FROM {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                         "WHERE table_name = ?",
                         [table],
                     ).fetchone()
                     if row is None:
                         rev = max(1, self._last_known_revisions.get(table, 0))
                         raw_con.execute(
-                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",
+                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",  # nosec B608
                             [table, rev, schema_version, time.time()],
                         )
                     else:
@@ -559,7 +563,7 @@ class VersionedSourceAdapter:
                         if stored_schema != schema_version:
                             rev += 1
                             raw_con.execute(
-                                f"UPDATE {quote_ident(_REVISIONS_TABLE)} "
+                                f"UPDATE {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                                 "SET data_revision = ?, schema_version = ?, committed_at = ? "
                                 "WHERE table_name = ?",
                                 [rev, schema_version, time.time(), table],
@@ -704,7 +708,7 @@ class VersionedSourceAdapter:
             if not unique_vals:
                 return []
             placeholders = ", ".join("?" for _ in unique_vals)
-            sql = f"SELECT {select_cols} FROM {quoted_table} WHERE {key_col} IN ({placeholders})"
+            sql = f"SELECT {select_cols} FROM {quoted_table} WHERE {key_col} IN ({placeholders})"  # nosec B608
             fetched = raw_con.execute(sql, [_normalize_sql_param(v) for v in unique_vals]).fetchall()
         else:
             unique_tuples = list(dict.fromkeys(key_tuples))
@@ -719,7 +723,7 @@ class VersionedSourceAdapter:
                         parts.append(f"{quote_ident(col)} = ?")
                         params.append(_normalize_sql_param(val))
                 clauses.append("(" + " AND ".join(parts) + ")")
-            sql = f"SELECT {select_cols} FROM {quoted_table} WHERE " + " OR ".join(clauses)
+            sql = f"SELECT {select_cols} FROM {quoted_table} WHERE " + " OR ".join(clauses)  # nosec B608
             fetched = raw_con.execute(sql, params).fetchall()
         return [dict(zip(table_columns, row)) for row in fetched]
 
@@ -740,7 +744,7 @@ class VersionedSourceAdapter:
                 return
             placeholders = ", ".join("?" for _ in unique_vals)
             raw_con.execute(
-                f"DELETE FROM {quoted_table} WHERE {key_col} IN ({placeholders})",
+                f"DELETE FROM {quoted_table} WHERE {key_col} IN ({placeholders})",  # nosec B608
                 [_normalize_sql_param(v) for v in unique_vals],
             )
             return
@@ -757,7 +761,7 @@ class VersionedSourceAdapter:
                     params.append(_normalize_sql_param(val))
             clauses.append("(" + " AND ".join(parts) + ")")
         raw_con.execute(
-            f"DELETE FROM {quoted_table} WHERE " + " OR ".join(clauses),
+            f"DELETE FROM {quoted_table} WHERE " + " OR ".join(clauses),  # nosec B608
             params,
         )
 
@@ -773,7 +777,7 @@ class VersionedSourceAdapter:
         quoted_table = quote_ident(table)
         col_list = ", ".join(quote_ident(c) for c in table_columns)
         placeholders = ", ".join("?" for _ in table_columns)
-        sql = f"INSERT INTO {quoted_table} ({col_list}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {quoted_table} ({col_list}) VALUES ({placeholders})"  # nosec B608
         param_rows = [
             [_normalize_sql_param(row.get(c)) for c in table_columns]
             for row in rows
@@ -857,10 +861,10 @@ class VersionedSourceAdapter:
                         quoted_table = quote_ident(table)
                         select_cols = ", ".join(quote_ident(c) for c in table_columns)
                         existing_all = raw_con.execute(
-                            f"SELECT {select_cols} FROM {quoted_table}"
+                            f"SELECT {select_cols} FROM {quoted_table}"  # nosec B608
                         ).fetchall()
                         old_rows = [dict(zip(table_columns, r)) for r in existing_all]
-                        raw_con.execute(f"DELETE FROM {quoted_table}")
+                        raw_con.execute(f"DELETE FROM {quoted_table}")  # nosec B608
                         full_new = [
                             {c: row.get(c) for c in table_columns} for row in normalized_rows
                         ]
@@ -931,7 +935,7 @@ class VersionedSourceAdapter:
                     now = time.time()
                     post_schema_ver, _, _ = self._inspect_schema_locked(table, cur=raw_con)
                     row_rev = raw_con.execute(
-                        f"SELECT data_revision, schema_version FROM {quote_ident(_REVISIONS_TABLE)} "
+                        f"SELECT data_revision, schema_version FROM {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                         "WHERE table_name = ?",
                         [table],
                     ).fetchone()
@@ -939,14 +943,14 @@ class VersionedSourceAdapter:
                         next_rev = max(1, self._last_known_revisions.get(table, 0) + 1)
                         schema_changed = prev_schema_ver != post_schema_ver
                         raw_con.execute(
-                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",
+                            f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",  # nosec B608
                             [table, next_rev, post_schema_ver, now],
                         )
                     else:
                         next_rev = int(row_rev[0]) + 1
                         schema_changed = str(row_rev[1]) != post_schema_ver
                         raw_con.execute(
-                            f"UPDATE {quote_ident(_REVISIONS_TABLE)} "
+                            f"UPDATE {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                             "SET data_revision = ?, schema_version = ?, committed_at = ? "
                             "WHERE table_name = ?",
                             [next_rev, post_schema_ver, now, table],
@@ -959,7 +963,7 @@ class VersionedSourceAdapter:
                         try:
                             raw_con.execute("ROLLBACK")
                         except Exception:
-                            pass
+                            _LOGGER.debug("rollback after failed write failed", exc_info=True)
                     raise SourceMutationError(f"Atomic mutation failed for table '{table}': {exc}") from exc
 
             # Build exact Change events post-commit (before releasing table lock).
@@ -1069,18 +1073,18 @@ class VersionedSourceAdapter:
             if raw_con is not None:
                 self._ensure_revisions_table_locked(raw_con)
                 row = raw_con.execute(
-                    f"SELECT data_revision FROM {quote_ident(_REVISIONS_TABLE)} WHERE table_name = ?",
+                    f"SELECT data_revision FROM {quote_ident(_REVISIONS_TABLE)} WHERE table_name = ?",  # nosec B608
                     [table],
                 ).fetchone()
                 next_rev = (int(row[0]) + 1) if row is not None else max(1, self._last_known_revisions.get(table, 0) + 1)
                 if row is None:
                     raw_con.execute(
-                        f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",
+                        f"INSERT INTO {quote_ident(_REVISIONS_TABLE)} VALUES (?, ?, ?, ?)",  # nosec B608
                         [table, next_rev, new_schema_ver, now],
                     )
                 else:
                     raw_con.execute(
-                        f"UPDATE {quote_ident(_REVISIONS_TABLE)} "
+                        f"UPDATE {quote_ident(_REVISIONS_TABLE)} "  # nosec B608
                         "SET data_revision = ?, schema_version = ?, committed_at = ? "
                         "WHERE table_name = ?",
                         [next_rev, new_schema_ver, now, table],

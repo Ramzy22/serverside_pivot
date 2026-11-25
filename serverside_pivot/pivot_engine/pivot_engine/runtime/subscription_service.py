@@ -248,10 +248,14 @@ class RuntimeSubscriptionService:
         ctrl_id = id(controller)
         with self._lock:
             if self._broker is not None and self._bound_controller_id == ctrl_id:
-                assert self._source_adapter is not None
-                assert self._snapshot_provider is not None
-                assert self._comparison_service is not None
-                assert self._coordinator is not None
+                if self._source_adapter is None:
+                    raise RuntimeError("invariant violated: self._source_adapter is not None")
+                if self._snapshot_provider is None:
+                    raise RuntimeError("invariant violated: self._snapshot_provider is not None")
+                if self._comparison_service is None:
+                    raise RuntimeError("invariant violated: self._comparison_service is not None")
+                if self._coordinator is None:
+                    raise RuntimeError("invariant violated: self._coordinator is not None")
                 return (
                     self._source_adapter,
                     self._snapshot_provider,

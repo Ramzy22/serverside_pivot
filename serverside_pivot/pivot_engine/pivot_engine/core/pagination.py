@@ -294,5 +294,6 @@ class Pager:
 
     def total_rows(self, query: PivotQuery, resolve: Resolver, *, revision: str = "unversioned") -> int:
         handle, _ = self._materialized(query, resolve, revision, "", None, force=True)
-        assert handle is not None
+        if handle is None:
+            raise RuntimeError("invariant violated: handle is not None")
         return handle.total

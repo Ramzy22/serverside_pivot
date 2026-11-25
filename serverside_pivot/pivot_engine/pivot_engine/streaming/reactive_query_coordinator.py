@@ -687,7 +687,8 @@ class SharedLiveQuery:
                     and self._extract_col_key_from_row(old_r) == self._extract_col_key_from_row(new_r)
                 )
                 if same_coords:
-                    assert old_r is not None and new_r is not None
+                    if not (old_r is not None and new_r is not None):
+                        raise RuntimeError("invariant violated: old_r is not None and new_r is not None")
                     ck = self._extract_col_key_from_row(new_r)
                     full_vals = self._extract_path_tuple(new_r)
                     for depth in range(0, len(row_dims) + 1):

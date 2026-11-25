@@ -533,7 +533,8 @@ class PivotQuery:
                 if m.field is not None or m.weight is not None or m.q is not None or m.order_by is not None:
                     raise IRValidationError(f"formula {m.alias!r} takes only an expression.")
                 check_expr(m.expr)
-                assert m.expr is not None
+                if m.expr is None:
+                    raise RuntimeError("invariant violated: m.expr is not None")
                 for ref in m.expr.refs():
                     if ref not in aliases:
                         raise IRValidationError(f"formula {m.alias!r} references unknown measure {ref!r}.")
@@ -589,7 +590,8 @@ class PivotQuery:
                         raise IRValidationError(f"formula member {axis_member.label!r} references {unknown}: "
                                                 "only plain, non-series measures of the query.")
         for f in formulas.values():
-            assert f.expr is not None
+            if f.expr is None:
+                raise RuntimeError("invariant violated: f.expr is not None")
             if set(f.expr.refs()) & series:
                 raise IRValidationError(f"formula {f.alias!r} over a series measure.")
         visiting: List[str] = []
@@ -602,7 +604,8 @@ class PivotQuery:
                 raise IRValidationError(f"formula {alias!r} references itself.")
             visiting.append(alias)
             expr = formulas[alias].expr
-            assert expr is not None
+            if expr is None:
+                raise RuntimeError("invariant violated: expr is not None")
             for ref in expr.refs():
                 acyclic(ref)
             visiting.pop()
