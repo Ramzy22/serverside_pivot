@@ -1432,6 +1432,32 @@ def _workspace_elements(driver, selector: str):
     )
 
 
+def _workspace_element_with_text(driver, selector: str, text: str):
+    """First visible workspace element matching ``selector`` whose rendered text is ``text``.
+
+    One browser-side lookup (light DOM and open shadow roots): listing elements and then reading
+    ``.text`` one by one races React replacing nodes (Suspense fallbacks), which detaches them."""
+    return driver.execute_script(
+        """
+        const [selector, wanted] = arguments;
+        const roots = [document];
+        for (let i = 0; i < roots.length; i += 1) {
+            for (const element of roots[i].querySelectorAll('*')) {
+                if (element.shadowRoot) roots.push(element.shadowRoot);
+            }
+        }
+        for (const root of roots) {
+            for (const element of root.querySelectorAll(selector)) {
+                if ((element.innerText || '').trim() === wanted && element.getClientRects().length) return element;
+            }
+        }
+        return null;
+        """,
+        selector,
+        text,
+    ) or False
+
+
 def _workspace_element(driver, selector: str, *, required: bool = True):
     matches = _workspace_elements(driver, selector)
     if matches:
@@ -1627,8 +1653,11 @@ def _remove_validated_download(path: Path, *, timeout: float = 5) -> None:
 
 def _click_menu_item(driver, cell, label: str):
     _, _, _, _, ActionChains, _, _, WebDriverWait = _selenium()
+    from selenium.common.exceptions import StaleElementReferenceException
+
     ActionChains(driver).context_click(cell).perform()
-    return WebDriverWait(driver, 15).until(lambda current: next((
+    # The menu re-renders while it opens; a detached item is retried, not a failure.
+    return WebDriverWait(driver, 15, ignored_exceptions=(StaleElementReferenceException,)).until(lambda current: next((
         element for element in _workspace_elements(current, '[role="menuitem"]')
         if element.text.strip() == label and element.is_enabled()
     ), False))
@@ -1904,7 +1933,9 @@ def test_flagship_export_limit_rejection_creates_no_file(
 def test_flagship_sidebar_filter_report_and_chart_entrypoints(flagship_host, flagship_driver, flagship_artifacts):
     _, _, _, _, _, _, _, WebDriverWait = _selenium()
     _switch_to_workspace(flagship_driver, flagship_host)
-    wait = WebDriverWait(flagship_driver, 15)
+    from selenium.common.exceptions import StaleElementReferenceException
+
+    wait = WebDriverWait(flagship_driver, 15, ignored_exceptions=(StaleElementReferenceException,))
     toggle = _wait_for_workspace_element(flagship_driver, "[data-testid='pivot-toggle-sidebar']")
     toggle.click()
     if not _workspace_element(flagship_driver, '[aria-label="Tool Panel"]', required=False):
@@ -1920,10 +1951,8 @@ def test_flagship_sidebar_filter_report_and_chart_entrypoints(flagship_host, fla
     if not _workspace_element(flagship_driver, "[data-add-chart-pane='true']", required=False):
         _wait_for_workspace_element(flagship_driver, "[data-testid='pivot-toolbar-charts']").click()
     _wait_for_workspace_element(flagship_driver, "[data-add-chart-pane='true']").click()
-    wait.until(lambda current: next((element for element in _workspace_elements(current, '*') if element.text.strip() == 'New Chart Pane'), False))
-    wait.until(lambda current: next((
-        element for element in _workspace_elements(current, 'button') if element.text.strip() == 'Cancel'
-    ), False)).click()
+    wait.until(lambda current: _workspace_element_with_text(current, '*', 'New Chart Pane'))
+    wait.until(lambda current: _workspace_element_with_text(current, 'button', 'Cancel')).click()
     _wait_for_workspace_element(flagship_driver, "[data-testid='pivot-mode-report']").click()
     _wait_for_workspace_element(flagship_driver, "[data-testid='pivot-mode-pivot']").click()
     logs = _save_evidence(flagship_driver, flagship_artifacts, "sidebar-filter-report-chart")
