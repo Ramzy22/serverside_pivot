@@ -121,9 +121,15 @@ def assert_number_column(before, shown, restored):
     assert selections(before) and selections(before) == selections(shown) == selections(restored), "Selection lost on row-number toggle"
 
 
+def _on_density_target(cell, height):
+    """Row and cell within one CSS pixel of the target (the cell border takes 1 px); the epsilon absorbs
+    sub-pixel layout offsets (42.99994 is the same 43 px painted cell)."""
+    return abs(cell["rowHeight"] - height) <= 1 + 1e-3 and abs(cell["height"] - height) <= 1 + 1e-3
+
+
 def assert_density(before, after, height):
     assert logical_values(before) == logical_values(after), "Density changed logical rows/values"
-    assert after and all(abs(cell["rowHeight"] - height) <= 1 and abs(cell["height"] - height) <= 1 for cell in after), "Density geometry misses CSS-pixel target"
+    assert after and all(_on_density_target(cell, height) for cell in after), "Density geometry misses CSS-pixel target"
 
 
 def decimal_text(value, places):
@@ -322,7 +328,7 @@ def _run(driver, host, requirement, state, wait, observation):
         for label, height in (("Loose", 56), ("Compact", 36), ("Normal", 44)):
             _section(driver, "view", '[role="group"][aria-label="Row density"] button')
             next(btn for btn in _workspace_elements(driver, '[role="group"][aria-label="Row density"] button') if btn.is_displayed() and btn.text.strip() == label).click()
-            wait.until(lambda current: all(abs(cell["rowHeight"] - height) <= 1 and abs(cell["height"] - height) <= 1 for cell in cells(current)))
+            wait.until(lambda current: all(_on_density_target(cell, height) for cell in cells(current)))
             after = cells(driver)
             assert_density(before, after, height)
             assert _element(driver, '[role="group"][aria-label="Row density"] button[aria-pressed="true"]').text.strip() == label

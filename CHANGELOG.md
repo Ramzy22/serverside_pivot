@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 - The physical planner chooses `leaf_partials` only with two or more visible levels and no pivot columns, where it measured faster (10M fully expanded: 304 vs 468 ms); `union_all` serves every other query.
 
+### Fixed
+- A pinned pivot column no longer makes the grid re-request its viewport endlessly once scrolled away from it: the delivered column window is the leading index run of the schema reply, not its last entry (the server appends pinned columns, so `[57..74, 0]` read as `57..57`). The loop starved later work, such as "Copy Current Table", on slower machines.
+
 ## [0.0.97] - 2026-11-26
 
 ### Changed

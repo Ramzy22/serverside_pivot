@@ -404,7 +404,10 @@ def _custom(driver, wait, observation):
     # Remove the two original row fields with their native close controls.
     for label in ("Account", "Region"):
         chip = _element(driver, f'[data-sidebar-drop-zone="rows"] [aria-label="Move {label}"]')
-        chip.find_element("css selector", 'span[style*="cursor: pointer"]').click()
+        close = chip.find_element("css selector", 'span[style*="cursor: pointer"]')
+        # The rows zone can sit below the host frame's fold (Streamlit); bring it into view like a user.
+        driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});", close)
+        close.click()
     _move(driver, "IncludedGroup", "pool", "rows")
     observation["created"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales("custom"), custom=True))
     dimensions = observation["created"]["request"]["state"]["customDimensions"]

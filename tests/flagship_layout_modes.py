@@ -120,7 +120,13 @@ def layout_snapshot(driver, mode, checkpoint):
             continue
         if not any(item.get("value") == "Included" for item in request.get("filters", {}).get("scope", {}).get("conditions", [])):
             continue
-        schema = reply.get("colSchema") or {}
+        # An unchanged layout is referenced by revision, not resent (an expansion reply omits the
+        # schema the client already holds): resolve it from the latest delivered schema of that revision.
+        schema = reply.get("colSchema") or next((
+            earlier["colSchema"] for earlier in reversed(trace)
+            if earlier["phase"] == "response" and earlier["at"] <= reply["at"] and earlier.get("colSchema")
+            and earlier["colSchema"].get("layoutRevision") == reply.get("layoutRevision")
+        ), {})
         expected_columns = {column for _, column in axis_expected_cells(False)}
         columns = schema.get("columns") or []
         if (not reply.get("layoutRevision") or reply["layoutRevision"] != schema.get("layoutRevision")

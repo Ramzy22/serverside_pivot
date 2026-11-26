@@ -1934,6 +1934,32 @@ export const mergeSparseColSchema = (previousSchema, incomingSchema, fallbackSiz
     };
 };
 
+/**
+ * The center-column window a sparse schema response delivered.
+ *
+ * The server sends the requested window in index order and then appends the
+ * pinned columns it always includes (`[57..74, 0]` with column 0 pinned). The
+ * window is the contiguous index run of the leading columns; an appended pinned
+ * index never widens or shrinks it. Reading the last entry instead made the
+ * window `57..57`, so a just-loaded block never covered the visible columns and
+ * the viewport refetched it forever.
+ * @param {any} [columns] @returns {{start: number|null, end: number|null}}
+ */
+export const deliveredSchemaWindow = (columns) => {
+    /** @type {number[]} */
+    const indexes = (Array.isArray(columns) ? columns : [])
+        .map(column => Number(column && column.index))
+        .filter(index => Number.isFinite(index))
+        .map(index => Math.max(0, Math.floor(index)));
+    if (indexes.length === 0) return { start: null, end: null };
+    const delivered = new Set(indexes);
+    let start = indexes[0];
+    let end = indexes[0];
+    while (delivered.has(start - 1)) start -= 1;
+    while (delivered.has(end + 1)) end += 1;
+    return { start, end };
+};
+
 /** @param {any} [schema] @param {any} [start] @param {any} [end] @returns {any} */
 export const isSparseSchemaRangeLoaded = (schema, start, end) => {
     if (!schema || !Array.isArray(schema.columns)) return false;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { estimateUrgentHorizontalColumnRange } from '../utils/horizontalViewport';
+import { deliveredSchemaWindow } from './usePivotNormalization';
 
 /** @type {Record<string, any>} */
 const DEFAULT_VISIBLE_RANGE = { start: 0, end: 0 };
@@ -130,25 +131,9 @@ export const useServerSideViewportController = ({
         if (!serverSide || !responseSchema) {
             return { start: null, end: null };
         }
-        /** @type {any} */
-        const schemaColumns = Array.isArray(responseSchema.columns)
-            ? responseSchema.columns
-            : [];
-        if (schemaColumns.length === 0) {
-            return { start: null, end: null };
-        }
-        /** @type {any} */
-        const firstIndex = coerceTransportNumber(schemaColumns[0] && schemaColumns[0].index, null);
-        /** @type {any} */
-        const lastIndex = coerceTransportNumber(schemaColumns[schemaColumns.length - 1] && schemaColumns[schemaColumns.length - 1].index, null);
-        if (!Number.isFinite(firstIndex) || !Number.isFinite(lastIndex)) {
-            return { start: null, end: null };
-        }
-        return {
-            start: Math.max(0, Math.floor(firstIndex)),
-            end: Math.max(Math.floor(firstIndex), Math.floor(lastIndex)),
-        };
-    }, [coerceTransportNumber, responseSchema, serverSide]);
+        // Appended pinned columns are not part of the delivered window.
+        return deliveredSchemaWindow(responseSchema.columns);
+    }, [responseSchema, serverSide]);
 
     /** @type {(...args: any[]) => any} */
     const markRequestPending = useCallback((requestMeta) => {

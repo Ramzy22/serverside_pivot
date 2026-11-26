@@ -24,7 +24,7 @@ function load(relativePath) {
 }
 
 const {reconcilePivotLayoutOrder, pivotLayoutRequestFields} = load('src/lib/utils/columnOrder.js');
-const {mergeSparseColSchema} = load('src/lib/hooks/usePivotNormalization.js');
+const {mergeSparseColSchema, deliveredSchemaWindow} = load('src/lib/hooks/usePivotNormalization.js');
 const schema = {layoutRevision: 'a'.repeat(64), total_center_cols: 3, columns: [
   {index: 0, id: 'A_sales', layoutId: 'p:A'},
   {index: 1, id: 'B_sales', layoutId: 'p:B'},
@@ -48,6 +48,17 @@ const nextSchema = mergeSparseColSchema(oldSchema, {layoutRevision: 'b'.repeat(6
   total_center_cols: 3, columns: [{index: 0, id: 'C_sales'}]});
 assert.equal(nextSchema.columns[0].id, 'C_sales');
 assert.equal(nextSchema.columns[1], null);
+
+// The server appends pinned columns after the requested window ([57..74, 0]):
+// the delivered window is the leading run, never 57..57 (an endless refetch).
+const indexed = (...indexes) => indexes.map(index => ({index, id: `c${index}`}));
+const windowOf = indexes => deliveredSchemaWindow(indexed(...indexes));
+assert.deepEqual(windowOf([...Array.from({length: 18}, (_, i) => 57 + i), 0]), {start: 57, end: 74});
+assert.deepEqual(windowOf([46, 47, 48, 3, 0]), {start: 46, end: 48});
+assert.deepEqual(windowOf([1, 2, 3, 0]), {start: 0, end: 3});
+assert.deepEqual(windowOf([5, 6, 7]), {start: 5, end: 7});
+assert.deepEqual(deliveredSchemaWindow([]), {start: null, end: null});
+assert.deepEqual(deliveredSchemaWindow(undefined), {start: null, end: null});
 
 const {useRuntimeDataCommit} = load('src/lib/hooks/useRuntimeDataCommit.js');
 const savedManifest = ['p:A', 'p:B'];
