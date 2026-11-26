@@ -150,7 +150,7 @@ def test_hierarchy_view_contract():
     assert (gt["_id"], gt["_isTotal"], gt["_path"], gt["v_sum"], gt["r"]) == ("Grand Total", True, "__grand_total__", 15,
                                                                                None)
     assert view["total_rows"] == 8  # 7 nodes + the grand total
-    assert [r["_path"] for r in view["grand_total_formula_source_rows"]] == ["A", "B", ""]
+    assert "grand_total_formula_source_rows" not in view  # formulas are evaluated on the total node (REQ-AGG-010)
     assert view["profile"]["controller"]["engine"] == "core" and view["profile"]["controller"]["operation"] == "hierarchy_view"
 
 
@@ -165,7 +165,7 @@ def test_hierarchy_view_windows_and_collapsed_paths():
     con = _con()
     window = core_hierarchy_view(con.table, spec(totals=True), [["__ALL__"]], 1, 2)
     assert [r["_path"] for r in window["rows"]] == ["A|||x", "A|||y"]
-    assert window["grand_total_row"] is None and window["grand_total_formula_source_rows"] is None
+    assert window["grand_total_row"] is None
     tail = core_hierarchy_view(con.table, spec(totals=True), [["__ALL__"]], 6, 9)
     assert [r["_path"] for r in tail["rows"]] == ["|||y", "__grand_total__"]
     collapsed = core_hierarchy_view(con.table, spec(totals=True), [["A"]], 0, 100)
@@ -195,13 +195,25 @@ def test_ambiguous_column_keys_are_unsupported():
         core_hierarchy_view(con.table, s, [], 0, 10)
 
 
-def test_total_rows_cache_is_keyed_by_query_meaning():
+@pytest.mark.parametrize("tabular", [False, True])
+@pytest.mark.parametrize("start,end", [(0, 1), (2, 4), (5, 9), (40, 50)])
+def test_a_view_is_one_statement_with_its_total_and_grand_total(monkeypatch, tabular, start, end):
+    """The window, the total row count and the grand total come from one statement, at any window."""
+    import pivot_engine.core.exec as core_exec
+
     con = _con()
-    cache: dict = {}
-    core_hierarchy_view(con.table, spec(), [["__ALL__"]], 0, 1, total_cache=cache)
-    core_hierarchy_view(con.table, spec(), [["__ALL__"]], 5, 9, total_cache=cache)  # same meaning, other window
-    core_hierarchy_view(con.table, spec(), [["A"]], 0, 1, total_cache=cache)
-    assert sorted(cache.values()) == [6, 8]
+    s = replace(spec(), totals=True)
+    whole = core_hierarchy_view(con.table, s, [["__ALL__"]], 0, None, include_grand_total_row=True,
+                                tabular_subtotals=tabular)
+    statements = []
+    real = core_exec.materialize
+    monkeypatch.setattr(core_exec, "materialize", lambda expr: statements.append(expr) or real(expr))
+    view = core_hierarchy_view(con.table, s, [["__ALL__"]], start, end, include_grand_total_row=True,
+                               tabular_subtotals=tabular)
+    assert len(statements) == 1
+    assert view["total_rows"] == whole["total_rows"] == 8  # 7 nodes and the grand total
+    assert view["grand_total_row"] == whole["grand_total_row"]
+    assert [r["_path"] for r in view["rows"]] == [r["_path"] for r in whole["rows"][start:end + 1]]
 
 
 def test_measure_filter_view_has_visible_totals():
@@ -680,7 +692,7 @@ def test_formula_totals_are_the_formula_of_the_total_measures():  # REQ-AGG-010
     assert [(r["_path"], r["margin"]) for r in view["rows"]] == [
         ("South", pytest.approx(90 / 200)), ("North", pytest.approx(60 / 200)),
         ("__grand_total__", pytest.approx(150 / 400))]
-    assert view["grand_total_formula_source_rows"] == []
+    assert "grand_total_formula_source_rows" not in view
 
 
 def test_sorts_naming_no_column_of_the_view_are_ignored():  # REQ-SORT-004

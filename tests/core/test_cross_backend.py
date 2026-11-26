@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from pivot_engine.core.exec import execute
-from pivot_engine.core.ir import Expr, MeasureFilter, MeasureRef, PivotQuery
+from pivot_engine.core.ir import Expr, MeasureFilter, MeasureRef, PivotQuery, Window
 from pivot_engine.core.physical import BackendCapabilityError
 
 from .test_core_semantics import (
@@ -34,6 +34,15 @@ def _connect(name: str, table: pa.Table):
     return con
 
 
+def _disconnect(con) -> None:
+    disconnect = getattr(con, "disconnect", None)
+    if callable(disconnect):
+        try:
+            disconnect()
+        except Exception:  # noqa: BLE001 - best-effort test cleanup
+            pass
+
+
 def _run(name, table, query):
     con = _connect(name, table)
     try:
@@ -42,6 +51,8 @@ def _run(name, table, query):
         assert name != "duckdb", f"the reference backend refused: {exc}"
         assert exc.backend == name and exc.operations
         return None
+    finally:
+        _disconnect(con)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -84,10 +95,13 @@ def test_count_distinct_ignores_nulls_on_every_backend(backend):  # REQ-AGG-003
 
 def test_a_missing_aggregation_is_a_typed_refusal_before_execution():
     con = _connect("sqlite", pa.table({"r": ["A"], "v": pa.array([1], pa.int64())}))
-    query = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("m", "median", "v"),))
-    with pytest.raises(BackendCapabilityError) as info:
-        execute(query, con.table)
-    assert info.value.code == "unsupported_query" and "Median" in info.value.operations
+    try:
+        query = PivotQuery(dataset="t", rows=("r",), measures=(MeasureRef("m", "median", "v"),))
+        with pytest.raises(BackendCapabilityError) as info:
+            execute(query, con.table)
+        assert info.value.code == "unsupported_query" and "Median" in info.value.operations
+    finally:
+        _disconnect(con)
 
 
 @pytest.mark.parametrize("backend, measure, gap", [
@@ -98,10 +112,13 @@ def test_a_missing_aggregation_is_a_typed_refusal_before_execution():
 def test_a_known_execution_gap_is_refused_before_it_runs(backend, measure, gap):
     table = pa.table({"r": ["A", "A", "B"], "k": ["x", "y", "z"], "v": pa.array([None, 2, 5], pa.int64())})
     con = _connect(backend, table)
-    query = PivotQuery(dataset="t", rows=("r",), measures=(measure,))
-    with pytest.raises(BackendCapabilityError) as info:
-        execute(query, con.table)
-    assert gap in info.value.operations[0]
+    try:
+        query = PivotQuery(dataset="t", rows=("r",), measures=(measure,))
+        with pytest.raises(BackendCapabilityError) as info:
+            execute(query, con.table)
+        assert gap in info.value.operations[0]
+    finally:
+        _disconnect(con)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -127,3 +144,39 @@ def test_a_formula_over_constants_is_folded_on_every_backend(backend):  # REQ-AG
         return
     got = {path: (v["f"], v["n"], v["z"], v["p"]) for path, v in rows}
     assert got == {(): (5.0, None, None, None), ("A",): (0.0, None, None, None), ("B",): (5.0, None, None, None)}
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("window", [Window(0, 2), Window(2, 3), Window(1, None), Window(9, 4)])
+def test_a_window_reads_the_whole_trees_total_and_grand_total(backend, window):
+    """One statement where the backend has window functions, else page + count + grand total: same frame."""
+    table = pa.table({"r": ["A", "A", "B", "C"], "c": ["x", "y", "x", "z"], "v": pa.array([1, 2, 4, 8], pa.int64())})
+    query = PivotQuery(dataset="t", rows=("r", "c"), measures=(MeasureRef("s", "sum", "v"),), window=window)
+    con = _connect(backend, table)
+    try:
+        whole = execute(PivotQuery(dataset="t", rows=("r", "c"), measures=(MeasureRef("s", "sum", "v"),)), con.table)
+        frame = execute(query, con.table, grand_total=True)
+        end = None if window.limit is None else window.offset + window.limit
+        assert [r["path"] for r in frame.records()] == [r["path"] for r in whole.records()][window.offset:end]
+        assert frame.total == whole.table.num_rows == 8
+        assert frame.grand_total_record()["values"] == {"s": 15}
+    finally:
+        _disconnect(con)
+
+
+def test_a_percentile_cell_on_polars_is_a_typed_refusal():
+    """Polars evaluates a percentile cell's condition at the measure axis's length: refused, never wrong."""
+    from pivot_engine.core.ir import Unpivot, UnpivotMember
+
+    table = pa.table({"r": ["A", "A", "B"], "k": ["x", "y", "x"], "v": pa.array([1, None, 5], pa.int64()),
+                      "w": pa.array([2, 3, None], pa.int64())})
+    axis = Unpivot("mn", "mv", "mk", (UnpivotMember("V", "v", 0), UnpivotMember("W", "w", 1)), False)
+    query = PivotQuery(dataset="t", rows=("mn", "r"), measures=(MeasureRef("p", "percentile", "mv", q=0.0),),
+                       unpivot=axis, columns=("k",), column_members=(("x",),))
+    con = _connect("polars", table)
+    try:
+        with pytest.raises(BackendCapabilityError) as info:
+            execute(query, con.table)
+        assert "percentile pivot cell over the measure axis" in info.value.operations
+    finally:
+        _disconnect(con)

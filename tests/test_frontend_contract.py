@@ -691,7 +691,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     assert "layout_mode: layoutMode" in export_payload.group(0)
     assert "allRows: Boolean(allRows)" in export_payload.group(0)
     assert "const getExportGroupSeparator" in export_presentation_source
-    assert "getExportGroupSeparator(effectiveGroupSeparator)" in export_presentation_source
+    assert "getExportGroupSeparator(columnFormat.groupSeparator)" in export_presentation_source
     assert "plain_space: ' '" in helpers_source
 
     server_export = re.search(
@@ -2621,14 +2621,14 @@ async def test_pivot_column_catalog_cache_reuses_discovery(adapter, monkeypatch)
 
     from pivot_engine.transport import core_bridge
 
-    original_catalog = core_bridge.core_column_catalog
+    original_catalog = core_bridge.core_column_catalog_members
     call_count = {"value": 0}
 
     def counting_catalog(*args, **kwargs):
         call_count["value"] += 1
         return original_catalog(*args, **kwargs)
 
-    monkeypatch.setattr(core_bridge, "core_column_catalog", counting_catalog)
+    monkeypatch.setattr(core_bridge, "core_column_catalog_members", counting_catalog)
 
     await adapter._discover_pivot_column_values(pivot_spec)
     await adapter._discover_pivot_column_values(pivot_spec)
@@ -2943,8 +2943,10 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
     assert any(q["rows"] == ["row_id"] and q["offset"] == 49901 and q["limit"] == 200 for q in core_queries), (core_queries,
         "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
     )
-    # One grand-total query per request outside the first window (REQ-PAGE: the core orders it first).
-    assert sum(1 for q in core_queries if q["offset"] == 0 and q["limit"] == 1) == 2
+    # One core read per request: the window statement also carries the grand total and the total
+    # (ResultFrame.grand_total / total), so no separate grand-total or count query runs.
+    assert core_queries == [{"rows": ["row_id"], "offset": 49901, "limit": 200},
+                            {"rows": ["row_id"], "offset": 99801, "limit": 200}], core_queries
 
 
 def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():

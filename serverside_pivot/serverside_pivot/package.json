@@ -1,6 +1,6 @@
 {
   "name": "serverside_pivot",
-  "version": "0.0.96",
+  "version": "0.0.97",
   "description": "Enterprise-grade analytical pivot table & virtualized data grid for React. Dual-engine: zero-network in-browser analytics (DuckDB-WASM & in-memory) and scalable server-side pushdown. Built with TanStack Table v8, ECharts 6, and 2D virtualization.",
   "main": "build/index.js",
   "scripts": {
@@ -16,7 +16,7 @@
     "@tanstack/react-virtual": "^3.0.0",
     "file-saver": "^2.0.5",
     "ramda": "^0.26.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "npm:@e965/xlsx@^0.20.3"
   },
   "devDependencies": {
     "@babel/core": "^7.5.4",
@@ -30,11 +30,10 @@
     "css-loader": "^7.1.2",
     "npm": "^11.7.0",
     "prop-types": "^15.7.2",
-    "react": "^16.8.6",
-    "react-docgen": "^4.1.1",
-    "react-dom": "^16.8.6",
+    "react": "^18.3.1",
+    "react-docgen": "^8.0.3",
+    "react-dom": "^18.3.1",
     "style-loader": "^0.23.1",
-    "styled-components": "^5.3.11",
     "webpack": "^5.104.1",
     "webpack-cli": "^6.0.1",
     "webpack-dev-server": "^5.0.0"
@@ -44,7 +43,7 @@
     "react-dom": ">=16.8.6"
   },
   "engines": {
-    "node": ">=8.11.0",
-    "npm": ">=6.1.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }

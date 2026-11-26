@@ -10,7 +10,12 @@ import pytest
 import requests
 from dash import Dash, Input, Output, callback_context, dcc, html
 from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, WebDriverException
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -961,9 +966,17 @@ def _numeric_text_value(text):
     return float(match.group(0).replace(",", ""))
 
 
+def _wait(driver, timeout=30):
+    return WebDriverWait(
+        driver,
+        timeout,
+        ignored_exceptions=(NoSuchElementException, StaleElementReferenceException),
+    )
+
+
 def _wait_for_numeric_cell(driver, row_id, col_id, expected, timeout=30):
     selector = _cell_selector(row_id, col_id)
-    wait = WebDriverWait(driver, timeout)
+    wait = _wait(driver, timeout)
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
 
     def _matches(_driver):
@@ -976,21 +989,45 @@ def _wait_for_numeric_cell(driver, row_id, col_id, expected, timeout=30):
 
 def _wait_for_cell_absent(driver, row_id, col_id, timeout=30):
     selector = _cell_selector(row_id, col_id)
-    return WebDriverWait(driver, timeout).until(
+    return _wait(driver, timeout).until(
         lambda _driver: len(_driver.find_elements(By.CSS_SELECTOR, selector)) == 0
     )
 
 
 def _find_sidebar_chip(driver, selector, text, timeout=30):
-    wait = WebDriverWait(driver, timeout)
+    wait = _wait(driver, timeout)
 
     def _match(_driver):
-        for element in _driver.find_elements(By.CSS_SELECTOR, selector):
-            if " ".join(element.text.split()) == text:
-                return element
-        return False
+        return _driver.execute_script(
+            """
+            const [sel, wanted] = arguments;
+            for (const element of document.querySelectorAll(sel)) {
+                const normalized = (element.innerText || element.textContent || '')
+                    .trim()
+                    .replace(/\\s+/g, ' ');
+                if (normalized === wanted) {
+                    return element;
+                }
+            }
+            return null;
+            """,
+            selector,
+            text,
+        ) or False
 
     return wait.until(_match)
+
+
+def _sidebar_zone_chip_labels(driver, zone_id):
+    return driver.execute_script(
+        """
+        const zone = arguments[0];
+        return Array.from(
+            document.querySelectorAll(`[data-sidebar-drop-zone="${zone}"] [data-sidebar-field-chip="zone"]`)
+        ).map((el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' '));
+        """,
+        zone_id,
+    )
 
 
 def _remove_sidebar_value_chip(driver, label):
@@ -1127,27 +1164,28 @@ def _severe_browser_logs(driver):
 
 def _wait_for_sparkline_cell(driver, row_id, col_id, expected_points, timeout=30):
     selector = f'{_cell_selector(row_id, col_id)} [data-pivot-sparkline-cell="true"]'
-    wait = WebDriverWait(driver, timeout)
+    wait = _wait(driver, timeout)
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
 
     def _matches(_driver):
-        try:
-            element = _driver.find_element(By.CSS_SELECTOR, selector)
-            points = element.get_attribute("data-pivot-sparkline-points")
-            return element if points == str(expected_points) else False
-        except StaleElementReferenceException:
-            return False
+        element = _driver.find_element(By.CSS_SELECTOR, selector)
+        points = element.get_attribute("data-pivot-sparkline-points")
+        return element if points == str(expected_points) else False
 
     return wait.until(_matches)
 
 
 def _click_row_expander(driver, row_id, timeout=30):
     selector = f'{_cell_selector(row_id, "hierarchy")} button'
-    button = WebDriverWait(driver, timeout).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-    )
-    button.click()
-    return button
+
+    def _click_current(_driver):
+        button = EC.element_to_be_clickable((By.CSS_SELECTOR, selector))(_driver)
+        if not button:
+            return False
+        button.click()
+        return button
+
+    return _wait(driver, timeout).until(_click_current)
 
 
 def test_measure_axis_rows_browser_renders_aggregate_first_pivot(measure_axis_browser_server, chrome_driver):
@@ -1372,7 +1410,7 @@ def test_measure_axis_rows_browser_drag_measure_names_to_second_row_position_the
     )
     _drag_sidebar_chip_before_row_chip(chrome_driver, measure_names_chip, desk_row_chip)
 
-    WebDriverWait(chrome_driver, 30).until(
+    _wait(chrome_driver, 30).until(
         lambda driver: _find_sidebar_chip(
             driver,
             '[data-sidebar-drop-zone="rows"] [data-sidebar-field-chip="zone"]',
@@ -1380,14 +1418,7 @@ def test_measure_axis_rows_browser_drag_measure_names_to_second_row_position_the
             timeout=1,
         )
     )
-    row_chip_labels = [
-        " ".join(element.text.split())
-        for element in chrome_driver.find_elements(
-            By.CSS_SELECTOR,
-            '[data-sidebar-drop-zone="rows"] [data-sidebar-field-chip="zone"]',
-        )
-    ]
-    assert row_chip_labels == ["Region", "Measure Name", "Desk"]
+    assert _sidebar_zone_chip_labels(chrome_driver, "rows") == ["Region", "Measure Name", "Desk"]
     values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, '[title="Values placement"]')
     assert values_as_select.get_attribute("value") == "rows"
 
@@ -1445,7 +1476,7 @@ def test_measure_axis_rows_browser_drag_measure_names_renders_array_agg_sparklin
     time.sleep(0.2)
     _html5_drop(chrome_driver, rows_zone)
 
-    WebDriverWait(chrome_driver, 30).until(
+    _wait(chrome_driver, 30).until(
         lambda driver: _find_sidebar_chip(
             driver,
             '[data-sidebar-drop-zone="rows"] [data-sidebar-field-chip="zone"]',
@@ -1453,17 +1484,13 @@ def test_measure_axis_rows_browser_drag_measure_names_renders_array_agg_sparklin
             timeout=1,
         )
     )
-    row_chip_labels = [
-        " ".join(element.text.split())
-        for element in chrome_driver.find_elements(
-            By.CSS_SELECTOR,
-            '[data-sidebar-drop-zone="rows"] [data-sidebar-field-chip="zone"]',
-        )
-    ]
-    assert row_chip_labels == ["Instrument", "Measure Name"]
+    assert _sidebar_zone_chip_labels(chrome_driver, "rows") == ["Instrument", "Measure Name"]
     values_as_select = chrome_driver.find_element(By.CSS_SELECTOR, '[title="Values placement"]')
     assert values_as_select.get_attribute("value") == "rows"
 
+    _wait(chrome_driver, 30).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, _cell_selector("AAA", "Amount")))
+    )
     _click_row_expander(chrome_driver, "AAA")
     _wait_for_sparkline_cell(chrome_driver, "AAA|||Price 20D", "Amount", 20)
     _wait_for_sparkline_cell(chrome_driver, "AAA|||PnL 20D", "Amount", 20)

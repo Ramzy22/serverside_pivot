@@ -66,7 +66,9 @@ export const stripAggLabelSuffix = (label) => {
     return text.replace(KNOWN_AGG_LABEL_SUFFIX_RE, '');
 };
 
-export const DEFAULT_NUMBER_GROUP_SEPARATOR = 'thin_space';
+// Numbers are formatted with en-US conventions (Intl 'en-US'), so the default
+// grouping matches that locale. Hosts opt into other separators explicitly.
+export const DEFAULT_NUMBER_GROUP_SEPARATOR = 'comma';
 export const DEFAULT_CURRENCY_SYMBOL = '$';
 
 /** @type {any} */

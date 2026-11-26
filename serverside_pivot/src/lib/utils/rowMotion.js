@@ -7,6 +7,8 @@
 export const ROW_MOTION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 export const MAX_FLIP_DISTANCE_PX = 1400;
 export const MAX_SHEET_TRAVEL_PX = 480;
+/** Height of the gap a slow expand opens beneath its row for the loading band. */
+export const ROW_LOADER_BAND_HEIGHT_PX = 30;
 export const SKELETON_FILL_DURATION_MS = 220;
 export const SKELETON_FILL_STAGGER_MS = 14;
 export const SKELETON_FILL_MAX_STAGGER_MS = 110;

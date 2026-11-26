@@ -819,8 +819,8 @@ pytest
 # In-process runtime benchmark (100k rows, cold/warm cache latency)
 python scripts/benchmark_pivot_runtime.py --rows 100000 --repeat-runs 5
 
-# Benchmark comparison vs. AG Grid Enterprise SSRM
-python scripts/benchmark_vs_aggrid.py
+# Server benchmark vs. the native AG Grid SSRM datasource (cell-checked; docs/BENCHMARK.md)
+python scripts/benchmark_core_vs_aggrid.py --sizes 200000,1000000
 
 # Run flagship certification suite (Selenium headless Chrome, 207 cases)
 python scripts/certify_flagship.py

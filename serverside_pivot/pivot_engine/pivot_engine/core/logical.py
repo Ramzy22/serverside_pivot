@@ -29,6 +29,21 @@ class Level:
     # Parent paths (length depth-1) whose children are visible; None = all.
     visible_parents: Optional[FrozenSet[Tuple[Any, ...]]]
 
+    @property
+    def parent_keys(self) -> Tuple[str, ...]:
+        return self.keys[:-1]
+
+    def parent_restriction(self) -> Optional[Tuple[Tuple[str, ...], FrozenSet[Tuple[Any, ...]]]]:
+        """The records this level aggregates: those under a visible parent, as (parent keys, parent paths).
+
+        Every record of a node shares the node's parent path, so aggregating
+        only the records under visible parents leaves each visible node's
+        value unchanged, over E and over E0. ``None``: every record.
+        """
+        if self.visible_parents is None or not self.parent_keys:
+            return None
+        return self.parent_keys, self.visible_parents
+
 
 @dataclass(frozen=True)
 class LogicalPlan:

@@ -250,7 +250,7 @@ export function useRenderHelpers({
         maxWidth: '120px',
         height: '10px',
         borderRadius: '999px',
-        background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
+        background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(148,163,184,0.14) 0%, rgba(148,163,184,0.28) 45%, rgba(148,163,184,0.14) 100%))',
         backgroundSize: '220% 100%',
         animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite',
     }), []);
@@ -1373,14 +1373,18 @@ export function useRenderHelpers({
         const compactHeaderControls = headerControlsMode === 'hover' && !isGroupHeader && !isEmptyPlaceholder
             && headerWidth < headerPadding * 2 + 92;
         const compactActionsHeight = Math.max(0, Math.min(16, Math.floor(computedHeaderHeight / 2) - 1));
+        // The whole header is draggable; the grip is only an affordance. It sits
+        // in the left padding, out of the label's flow, and appears on hover, so
+        // it never costs label width.
         const dragControl = headerControlsMode !== 'never' && !isEmptyPlaceholder && !isGroupHeader && header.column.id !== '__row_number__' && header.column.id !== 'hierarchy' && (
             <span
-                className="sp-header-control"
-                style={{ color: theme.textSec, opacity: 0.4, cursor: 'grab', fontSize: '13px', marginRight: '2px', flexShrink: 0, lineHeight: 1 }}
+                className="sp-header-drag-handle"
+                style={{ color: theme.textSec }}
                 title="Drag to reorder"
                 aria-hidden="true"
             >⠿</span>
         );
+        const isColumnFilterActive = Boolean(filterColumnId && filters[filterColumnId]);
         const filterControl = headerControlsMode !== 'never' && !isGroupHeader && filterColumnId && header.column.id !== '__row_number__' && !isEmptyPlaceholder && (
             <div
                 className="sp-header-control"
@@ -1439,6 +1443,26 @@ export function useRenderHelpers({
                 <Icons.MoreVert/>
             </div>
         );
+        // Control placement. 'always': controls sit inline after the label.
+        // 'hover': they live in an overlay cluster that fades in over the
+        // label's far end, so revealing them never reflows or re-truncates the
+        // label. An active filter stays visible inline in every mode.
+        const usesHoverCluster = headerControlsMode === 'hover' && !compactHeaderControls && !isGroupHeader && !isEmptyPlaceholder;
+        const inlineFilterControl = compactHeaderControls
+            ? (isColumnFilterActive ? filterControl : null)
+            : (headerControlsMode === 'always' || isColumnFilterActive ? filterControl : null);
+        const inlineAbsoluteSortBadge = absoluteSortBadgeHoverOnly ? null : absoluteSortBadge;
+        const inlineColumnMenu = headerControlsMode === 'always' ? columnMenu : null;
+        const hoverActionCluster = usesHoverCluster && (columnMenu || (!isColumnFilterActive && filterControl) || (absoluteSortBadgeHoverOnly && absoluteSortBadge)) ? (
+            <div
+                className="sp-header-actions"
+                data-side={resolvedHeaderJustify === 'flex-end' ? 'left' : 'right'}
+            >
+                {!isColumnFilterActive && filterControl}
+                {absoluteSortBadgeHoverOnly && absoluteSortBadge}
+                {columnMenu}
+            </div>
+        ) : null;
         const headerCellElement = (
             <div key={isSpanningHeaderCell ? undefined : header.id} style={{
                 ...headerStateStyle,
@@ -1567,7 +1591,6 @@ export function useRenderHelpers({
                 }}
                 data-header-content="true"
                 data-header-column-id={String(header.column.id)}>
-                {!compactHeaderControls && dragControl}
                 {(() => {
                     /** @type {any} */
                     const rawHeaderLabel = typeof header.column.columnDef.header === 'string'
@@ -1621,7 +1644,7 @@ export function useRenderHelpers({
                     );
                 })()}
 
-                {!compactHeaderControls && filterControl}
+                {inlineFilterControl}
 
                 {!isGroupHeader && isSorted && sortIndicatorMode === 'arrow' && (
                     <span style={{display: 'inline-flex', alignItems: 'center', color: sortIconColor}}>
@@ -1631,16 +1654,19 @@ export function useRenderHelpers({
                 {shouldShowSortPriorityBadge && showSortPriorityBadge && (
                     <span style={sortPriorityBadgeStyle} title={`Sort priority ${sortIndex + 1}`}>{sortIndex + 1}</span>
                 )}
-                {!compactHeaderControls && absoluteSortBadge}
+                {inlineAbsoluteSortBadge}
 
-                {!compactHeaderControls && columnMenu}
+                {inlineColumnMenu}
                 </div>
+
+                {dragControl}
+
+                {hoverActionCluster}
 
                 {compactHeaderControls && (
                     <div className="sp-header-compact-actions" style={{ height: compactActionsHeight }}>
-                        {dragControl}
-                        {filterControl}
-                        {absoluteSortBadge}
+                        {!isColumnFilterActive && filterControl}
+                        {absoluteSortBadgeHoverOnly && absoluteSortBadge}
                         {columnMenu}
                     </div>
                 )}

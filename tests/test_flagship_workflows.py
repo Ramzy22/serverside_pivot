@@ -754,7 +754,7 @@ def installed_workflow_hosts():
         record = release / "release-artifacts" / "python-env.location.json"
         python = _create_python_environment(release / "release-artifacts" / "python-env")
         subprocess.run([str(python), "-m", "pip", "--isolated", "install", "--force-reinstall",
-                        f"{wheel}[streamlit,api]"], cwd=release, check=True, capture_output=True)
+                        f"{wheel}[dash,streamlit,api]"], cwd=release, check=True, capture_output=True)
         binding = ArtifactBinding(
             source_commit=previous_binding["sourceCommit"], sha256=previous_binding["sha256"],
             versions=previous_binding["versions"],

@@ -44,14 +44,13 @@ const DrillThroughModal = ({ drillState, onClose, onPageChange, onSort, onFilter
         }
     };
 
-    // Overlay styles — full-screen frosted backdrop
+    // Overlay styles — full-screen dimmed backdrop (no blur: a full-viewport
+    // backdrop-filter repaints the whole grid every frame)
     /** @type {Record<string, any>} */
     const overlayStyle = {
         position: 'fixed', zIndex: 10003, top: 0, left: 0,
         width: '100%', height: '100%',
         backgroundColor: 'rgba(15,23,42,0.38)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: '20px',
         boxSizing: 'border-box',

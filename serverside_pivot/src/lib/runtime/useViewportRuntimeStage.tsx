@@ -681,8 +681,26 @@ export function useViewportRuntimeStage(input, transport) {
     const hasFilterableValue = value !== null && value !== undefined && String(value).trim() !== '';
     actions.push('separator');
     if (hasFilterableValue) {
+      // Show the value as the cell displays it (formatted, grouped, scaled);
+      // the filter itself still matches the underlying value.
+      const filterColumn = stage.table && typeof stage.table.getColumn === 'function' ? stage.table.getColumn(colId) : null;
+      let displayedFilterValue = String(value);
+      if (filterColumn && row && typeof stage.getExportCellDisplayValue === 'function') {
+        try {
+          const formatted = stage.getExportCellDisplayValue(row, filterColumn, row.index, value);
+          if (formatted !== undefined && formatted !== null && String(formatted).trim() !== '') displayedFilterValue = String(formatted).trim();
+        } catch (_error) {
+          // Fall back to the raw value when the column has no display formatter.
+        }
+      }
+      const FILTER_LABEL_MAX_CHARS = 40;
+      const fullFilterLabel = `Filter by "${displayedFilterValue}"`;
+      if (displayedFilterValue.length > FILTER_LABEL_MAX_CHARS) {
+        displayedFilterValue = `${displayedFilterValue.slice(0, FILTER_LABEL_MAX_CHARS - 1)}…`;
+      }
       actions.push({
-        label: `Filter by "${value}"`,
+        label: `Filter by "${displayedFilterValue}"`,
+        title: fullFilterLabel,
         icon: <Icons.Filter />,
         onClick: () => {
           stage.handleHeaderFilter(colId, {
@@ -1628,9 +1646,14 @@ export function useViewportRuntimeStage(input, transport) {
     }, 800);
     if (stage.serverSide) {
       stage.captureExpansionScrollPosition();
+      // Every row index changes, but the rows already on screen stay valid for
+      // the old layout until the expansion response lands. Keep them painted
+      // (stale-while-revalidate) and let the deferred-invalidation effect drop
+      // every block outside the refreshed window once the new rows arrive —
+      // the same contract single-row expansion uses. Wiping the cache here
+      // would replace known data with skeletons for a full round-trip.
       stage.pendingExpansionRef.current = {
         anchorBlock: 0,
-        alreadyCleared: true,
         baselineDataVersion: Number(stage.dataVersion || 0)
       };
       stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
@@ -1645,9 +1668,6 @@ export function useViewportRuntimeStage(input, transport) {
           };
         }
       }
-      // Expanding/collapsing ALL rows changes every row index — full cache wipe.
-      // (This path bypasses onExpandedChange so invalidateFromBlock won't run.)
-      stage.clearCache();
       if (!shouldExpand && stage.viewMode === 'tree' && stage.treeHasDefaultExpansion) {
         const collapsedPaths = {};
         stage.table.getRowModel().rows.forEach(row => {
@@ -2606,12 +2626,12 @@ export function useViewportRuntimeStage(input, transport) {
     }
     toExpand.forEach(row => expandedPaths.add(row._path));
     stage.captureExpansionScrollPosition();
+    // Stale-while-revalidate, as for Expand All: rows stay painted until the
+    // expansion response lands, then later blocks are invalidated.
     stage.pendingExpansionRef.current = {
       anchorBlock: 0,
-      alreadyCleared: true,
       baselineDataVersion: Number(stage.dataVersion || 0)
     };
-    stage.clearCache();
     stage.setExpanded(prev => {
       const base = prev !== null && typeof prev === 'object' ? prev : {};
       const next = {

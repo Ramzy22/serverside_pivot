@@ -12,23 +12,40 @@ column per measure alias, and ``__depth`` (0 = grand total).  Presence is
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 import ibis
 import pyarrow as pa
 
+from ..frame import DEPTH, ORD, TOTAL
 from ..ir import CASE_FOLDING_OPS, FORMULA_AGG, MEMBER_AGG, STRING_OPS, Predicate, PredicateGroup
 from ..logical import Level, LogicalPlan
 from ..registry import type_family
-from .capabilities import native_null_safe_semi_join
+from .capabilities import backend_name, native_null_safe_semi_join, window_functions
 from .lowering import lower as lower_measure
 
-__all__ = ["DEPTH", "LevelAggregate", "build", "filtered", "lower", "output_columns", "tree", "tree_of"]
+__all__ = ["AggregateProvider", "DEPTH", "LevelAggregate", "ORD", "Restriction", "TOTAL", "build", "filtered",
+           "lower", "output_columns",
+           "ordered_tree", "restrict", "tree", "tree_of", "windowed"]
 
-# (keys) -> relation with ``keys`` + one column per measure alias.
-LevelAggregate = Callable[[Sequence[str]], Any]
+# (keys, restriction) -> relation with ``keys`` + one column per measure alias, over the records the
+# restriction keeps (``Level.parent_restriction``; None = every record).
+Restriction = Optional[Tuple[Tuple[str, ...], FrozenSet[Tuple[Any, ...]]]]
+LevelAggregate = Callable[[Sequence[str], Restriction], Any]
 
-DEPTH = "__depth"
+@dataclass
+class AggregateProvider:
+    """Alternative aggregate source; raw schema remains authoritative for output typing."""
+
+    source: Any
+    schema: Any
+    eligible: Any
+    aggregate: LevelAggregate
+    member_min: Callable[[Sequence[str], Restriction, str, str], Any]
+    cell_values: Callable[[Sequence[str], Restriction, Sequence[Any]], Any]
+
+
 _CMP = {
     "=": lambda c, v: c == v,
     "!=": lambda c, v: c != v,
@@ -57,10 +74,10 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
             hit = text.contains(needle)
         elif p.op == "not_contains":
             hit = ~text.contains(needle)
-        elif p.op == "starts_with":
-            hit = text.startswith(needle)
+        elif p.op == "starts_with":  # an exact prefix: Ibis lowers startswith to LIKE on SQLite, unescaped
+            hit = text.substr(0, len(needle)) == needle
         else:
-            hit = text.endswith(needle)
+            hit = text.right(len(needle)) == needle if needle else ibis.literal(True)
         return col.notnull() & hit.fill_null(False)  # never matches NULL
     if p.op == "between":
         low, high = p.value
@@ -86,7 +103,8 @@ def _leaf_predicate(table: Any, p: Predicate) -> Any:
         outside = col.notin(values).fill_null(False)
         return (outside & col.notnull()) if null_listed else (outside | col.isnull())
     if p.op in {"is_empty", "is_not_empty"}:  # REQ-NULL-004
-        empty = col.isnull() | (col.strip() == "") if col.type().is_string() else col.isnull()
+        # Oracle returns NULL for a trimmed string of spaces.
+        empty = col.strip().length().fill_null(0) == 0 if col.type().is_string() else col.isnull()
         return empty if p.op == "is_empty" else ~empty
     if p.op == "is_null":
         return col.isnull()
@@ -355,7 +373,7 @@ def with_ragged(relation: Any, ragged: Any) -> Any:
         present.append(ok.fill_null(False))
     counts, running = [], ibis.literal(0, type="int64")
     for ok in present:
-        running = running + ok.cast("int64")
+        running = running + ok.ifelse(1, 0)
         counts.append(running)
     cols: Dict[str, Any] = {}
     for i in range(1, len(ragged.fields) + 1):
@@ -396,19 +414,30 @@ def _semi_join_on_keys(left: Any, right: Any, keys: Sequence[str]) -> Any:
     # Portable exact form: null-safe equality as two plain equalities, (k IS NULL, COALESCE(k, zero)),
     # joined against the distinct keys, so each left row matches at most once (a semi join).
     pairs = renamed.select(
-        **{f"__n_{i}": renamed[f"__k_{i}"].isnull() for i in range(len(keys))},
+        **{f"__n_{i}": renamed[f"__k_{i}"].isnull().ifelse(1, 0) for i in range(len(keys))},
         **{f"__v_{i}": renamed[f"__k_{i}"].coalesce(_zero(renamed[f"__k_{i}"].type())) for i in range(len(keys))},
     )
     preds = []
     for i, k in enumerate(keys):
-        preds += [left[k].isnull() == pairs[f"__n_{i}"], left[k].coalesce(_zero(left[k].type())) == pairs[f"__v_{i}"]]
+        preds += [left[k].isnull().ifelse(1, 0) == pairs[f"__n_{i}"],
+                  left[k].coalesce(_zero(left[k].type())) == pairs[f"__v_{i}"]]
     return left.inner_join(pairs, preds).select(*left.columns)
+
+
+def _lookup_predicates(left: Any, right: Any, keys: Sequence[str], prefix: str) -> List[Any]:
+    if backend_name(left) not in {"", "polars"}:
+        return [left[k].identical_to(right[f"{prefix}{j}"]) for j, k in enumerate(keys)]
+    predicates = []
+    for j, k in enumerate(keys):
+        a, b = left[k], right[f"{prefix}{j}"]
+        predicates.extend([a.isnull() == b.isnull(), a.coalesce(_zero(a.type())) == b.coalesce(_zero(b.type()))])
+    return predicates
 
 
 def _zero(dtype: Any) -> Any:
     """A non-NULL literal of ``dtype`` (its value is irrelevant: the NULL flag disambiguates it)."""
     if dtype.is_string():
-        return ibis.literal("")
+        return ibis.literal("0")  # Oracle stores '' as NULL; the separate NULL flag disambiguates "0".
     if dtype.is_boolean():
         return ibis.literal(False)
     if dtype.is_timestamp():
@@ -447,29 +476,78 @@ def _eligible(e0: Any, plan: LogicalPlan) -> Any:
     return e
 
 
+# Above this many distinct first-key groups a multi-key restriction is a semi join on the records
+# instead of a literal predicate (a flat IN list serves one key at any size).
+_LITERAL_GROUPS = 64
+
+
+def restrict(relation: Any, restriction: Restriction, schema: Any) -> Any:
+    """The records of ``relation`` under the restriction's parent paths (null-safe), before any aggregation.
+
+    A literal predicate (one key: ``IN`` plus ``IS NULL``; several: ``k0 = v AND ...`` per first-key
+    group) lets the scan skip other parents' records; many multi-key paths use a semi join on the records.
+    """
+    if restriction is None:
+        return relation
+    keys, paths = restriction
+    ordered = sorted(paths, key=repr)
+    if len(keys) > 1 and len({p[0] for p in ordered}) > _LITERAL_GROUPS:
+        return _semi_join_on_keys(relation, _paths_table(ordered, keys, schema), keys)
+    return relation.filter(_path_predicate(relation, list(keys), ordered, schema))
+
+
+def _path_predicate(relation: Any, keys: List[str], paths: List[Tuple[Any, ...]], schema: Any) -> Any:
+    column = relation[keys[0]]
+    if len(keys) == 1:
+        values = [p[0] for p in paths if p[0] is not None]
+        terms = [column.isin([ibis.literal(v, type=schema[keys[0]]) for v in values])] if values else []
+        if any(p[0] is None for p in paths):
+            terms.append(column.isnull())
+        return _any(terms)
+    groups: Dict[Any, List[Tuple[Any, ...]]] = {}
+    for p in paths:
+        groups.setdefault(p[0], []).append(p[1:])
+    terms = []
+    for value, rest in groups.items():
+        head = column.isnull() if value is None else column == ibis.literal(value, type=schema[keys[0]])
+        terms.append(head & _path_predicate(relation, keys[1:], rest, schema))
+    return _any(terms)
+
+
+def _any(terms: List[Any]) -> Any:
+    if not terms:
+        return ibis.literal(False)
+    out = terms[0]
+    for term in terms[1:]:
+        out = out | term
+    return out
+
+
 def _direct(source: Any, plan: LogicalPlan) -> LevelAggregate:
-    def aggregate(keys: Sequence[str]) -> Any:
+    schema = source.schema()
+
+    def aggregate(keys: Sequence[str], restriction: Restriction) -> Any:
+        rel = restrict(source, restriction, schema)
         if keys:
-            return source.group_by(list(keys)).aggregate(**_measures(source, plan, (), keys))
-        return source.aggregate(**_measures(source, plan, (), keys))
+            return rel.group_by(list(keys)).aggregate(**_measures(rel, plan, (), keys))
+        return rel.aggregate(**_measures(rel, plan, (), keys))
 
     return aggregate
 
 
 def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: LogicalPlan, schema: Any) -> Any:
     keys = list(level.keys)
-    rel = aggregate(keys)
+    rel = aggregate(keys, level.parent_restriction())  # only the records under visible parents
     if plan.query.ragged is not None and keys:  # REQ-DIM-005: a path that has ended is no node
         rel = rel.filter(rel[keys[-1]].notnull())
     if plan.values_from == "E0" and keys:
-        rel = _semi_join_on_keys(rel, eligible.select(keys), keys)  # shown iff E ∩ n ≠ ∅
-    if level.visible_parents is not None:
-        parent_keys = keys[:-1]
-        parents = _paths_table(sorted(level.visible_parents, key=repr), parent_keys, schema)
-        rel = _semi_join_on_keys(rel, parents, parent_keys)
+        shown = eligible(keys, level.parent_restriction()) if callable(eligible) else eligible
+        rel = _semi_join_on_keys(rel, shown.select(keys), keys)  # shown iff E intersects this node
     cols: Dict[str, Any] = {}
     for k in plan.rows:
-        cols[k] = rel[k] if k in keys else ibis.null().cast(schema[k])
+        # Totals introduce NULL members even when the source has a NOT NULL constraint.
+        dtype = schema[k].copy(nullable=True)
+        cols[k] = rel[k].cast(dtype) if k in keys else ibis.null().cast(dtype)
     for name in plan.query.aggregate_columns():
         cols[name] = rel[name]
     cols[DEPTH] = ibis.literal(level.depth, type="int16")
@@ -487,16 +565,23 @@ def tree_of(plan: LogicalPlan, relation: Any) -> Tuple[Any, List[Any]]:
 
 
 def tree(
-    plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]
+    plan: LogicalPlan, relation: Any, level_aggregate: Optional[Callable[[Any, LogicalPlan], LevelAggregate]],
+    prepare_source: Optional[Callable[[Any, LogicalPlan], AggregateProvider]] = None,
 ) -> Tuple[Any, List[Any]]:
     """Shared skeleton: E0/E, one aggregate per level, typed UNION ALL, and the order key."""
     q = plan.query
     relation = prepared(relation, q)
     schema = relation.schema()
     e0 = filtered(relation, q)
-    e = _eligible(e0, plan)
-    source = e if plan.values_from == "E" else e0
-    aggregate = level_aggregate(source, plan)
+    provider = prepare_source(e0, plan) if prepare_source is not None else None
+    if provider is None:
+        e = _eligible(e0, plan)
+        source = e if plan.values_from == "E" else e0
+        if level_aggregate is None:
+            raise ValueError("a level aggregate or aggregate provider is required")
+        aggregate = level_aggregate(source, plan)
+    else:
+        schema, e, source, aggregate = provider.schema, provider.eligible, provider.source, provider.aggregate
     parts: List[Any] = [_level_rows(aggregate, e, level, plan, schema) for level in plan.levels]
     # Align measure types across levels (a global aggregate and a grouped one
     # may differ in nullability/width on some backends).
@@ -506,14 +591,14 @@ def tree(
     for part in parts[1:]:
         union = union.union(part, distinct=False)
     union, ancestor = _with_ancestor_measures(union, parts, plan)
-    union, member_key = _with_member_keys(union, source, plan)
-    union, cell_sort = _with_cell_sorts(union, source, plan)
+    union, member_key = _with_member_keys(union, source, plan, provider)
+    union, cell_sort = _with_cell_sorts(union, source, plan, provider)
     if q.subtotals == "none":
         flat = _flat_order(union, plan, member_key, cell_sort)
         return _with_derived(union, flat, plan) if q.derived else (union, flat)
     order: List[Any] = []
     for i, k in enumerate(q.rows, start=1):
-        below = (union[DEPTH] >= i).cast("int8")  # 1 for the descendants of a level-i group
+        below = (union[DEPTH] >= i).ifelse(1, 0)  # 1 for the descendants of a level-i group
         # REQ-LAYOUT-001: the group row first (pre-order) or after its descendants (post-order).
         order.append(below if q.subtotals == "before" else below.desc())
         dimension_sorted = False
@@ -532,13 +617,12 @@ def tree(
                 value = value.abs()
             order += [_null_rank(value, nulls_first), value.desc() if desc else value.asc()]
         if not dimension_sorted:  # deterministic tie-break: the member value, ascending
-            order += [union[k].isnull().cast("int8"), union[k].asc()]
+            order += [union[k].isnull().ifelse(1, 0), union[k].asc()]
     if q.derived:
         return _with_derived(union, order, plan)
     return union, order
 
 
-ORD = "__ord"
 
 
 def _with_derived(union: Any, order: List[Any], plan: LogicalPlan) -> Tuple[Any, List[Any]]:
@@ -567,7 +651,7 @@ def _with_derived(union: Any, order: List[Any], plan: LogicalPlan) -> Tuple[Any,
                                          value.cast("float64") / total.cast("float64"))
         elif d.func in {"rank", "dense_rank"}:
             w = ibis.window(group_by=partition,
-                            order_by=[value.isnull().cast("int8"), value.desc() if d.desc else value.asc()])
+                            order_by=[value.isnull().ifelse(1, 0), value.desc() if d.desc else value.asc()])
             ranked = (ibis.rank() if d.func == "rank" else ibis.dense_rank()).over(w) + 1
             exprs[d.alias] = ibis.ifelse(value.isnull(), ibis.null().cast("int64"), ranked.cast("int64"))
         else:
@@ -605,7 +689,7 @@ def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> 
             names[(i, alias)] = f"__sort{i}_{alias}"
             renamed[names[(i, alias)]] = part[alias]
         ancestors = part.select(**renamed)
-        predicates = [union[k].identical_to(ancestors[f"__anc{i}_{j}"]) for j, k in enumerate(keys)]
+        predicates = _lookup_predicates(union, ancestors, keys, f"__anc{i}_")
         joined = union.left_join(ancestors, predicates)
         union = joined.select(*[joined[c] for c in union.columns],
                               *[joined[names[(i, a)]] for a in dict.fromkeys(measures)])
@@ -614,14 +698,14 @@ def _with_ancestor_measures(union: Any, parts: List[Any], plan: LogicalPlan) -> 
 
 def _null_rank(value: Any, nulls_first: bool) -> Any:
     """The NULL position key of a sort entry: NULLS LAST (REQ-BACK-001), or first (REQ-SORT-006)."""
-    return (value.notnull() if nulls_first else value.isnull()).cast("int8")
+    return (value.notnull() if nulls_first else value.isnull()).ifelse(1, 0)
 
 
 def _flat_order(union: Any, plan: LogicalPlan, member_key: Dict[str, str],
                 cell_sort: Dict[Tuple[int, int], str]) -> List[Any]:
     """REQ-LAYOUT-002: leaves ordered by the sort entries in precedence, then every row dimension; grand total last."""
     leaf = len(plan.rows)
-    order: List[Any] = [(union[DEPTH] == 0).cast("int8")]
+    order: List[Any] = [(union[DEPTH] == 0).ifelse(1, 0)]
     for n, (field, desc, is_measure, absolute, nulls_first) in enumerate(plan.sort):
         if is_measure and (leaf, n) in cell_sort:
             value = union[cell_sort[(leaf, n)]]
@@ -636,20 +720,42 @@ def _flat_order(union: Any, plan: LogicalPlan, member_key: Dict[str, str],
                if not is_measure and not absolute and field not in member_key}
     for k in plan.rows:
         if k not in ordered:  # an entry already orders by this value: a tie-break adds nothing
-            order += [union[k].isnull().cast("int8"), union[k].asc()]
+            order += [union[k].isnull().ifelse(1, 0), union[k].asc()]
     return order
 
 
-def _with_member_keys(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[str, str]]:
+def _level_restriction(levels: Dict[int, Level], depth: int) -> Restriction:
+    """The records under the nodes at ``depth`` that rows at depth >= ``depth`` descend from.
+
+    A level the plan shows has its parent restriction; a level it skips (the
+    flat layout's intermediate levels) restricts nothing.
+    """
+    level = levels.get(depth)
+    return None if level is None else level.parent_restriction()
+
+
+def _with_member_keys(
+    union: Any, source: Any, plan: LogicalPlan, provider: Optional[AggregateProvider] = None,
+) -> Tuple[Any, Dict[str, str]]:
     """Attach MIN(key) over each node's level-i ancestor records, for dimensions ordered by a key (REQ-SORT-003)."""
     names: Dict[str, str] = {}
+    levels = {level.depth: level for level in plan.levels}
+    deepest = max(levels, default=0)
+    schema = source.schema()
     for dim, by in plan.member_keys:
         i = plan.rows.index(dim) + 1
         keys = list(plan.rows[:i])
         name = names[dim] = f"__key{i}"
-        lookup = source.group_by(keys).aggregate(**{name: source[by].min()})
+        if i > deepest:  # no row at depth >= i: the key orders nothing
+            union = union.mutate(**{name: ibis.null().cast(provider.schema[by] if provider else source[by].type())})
+            continue
+        if provider is None:
+            records = restrict(source, _level_restriction(levels, i), schema)
+            lookup = records.group_by(keys).aggregate(**{name: records[by].min()})
+        else:
+            lookup = provider.member_min(keys, _level_restriction(levels, i), by, name)
         lookup = lookup.select(**{f"__kanc{i}_{j}": lookup[k] for j, k in enumerate(keys)}, **{name: lookup[name]})
-        predicates = [union[k].identical_to(lookup[f"__kanc{i}_{j}"]) for j, k in enumerate(keys)]
+        predicates = _lookup_predicates(union, lookup, keys, f"__kanc{i}_")
         joined = union.left_join(lookup, predicates)
         union = joined.select(*[joined[c] for c in union.columns], joined[name])
     for dim, _kind in plan.semantic_keys:  # REQ-SORT-005: a key of the member value itself
@@ -686,7 +792,9 @@ def tenor_days(text: Any) -> Any:
     return ibis.cases((tenor.notnull(), tenor), (year.notnull(), iso), (month_year.notnull(), month_year), else_=null)
 
 
-def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, Dict[Tuple[int, int], str]]:
+def _with_cell_sorts(
+    union: Any, source: Any, plan: LogicalPlan, provider: Optional[AggregateProvider] = None,
+) -> Tuple[Any, Dict[Tuple[int, int], str]]:
     """Attach, per level i, a measure's value within one column member for each cell sort entry (REQ-SORT-004).
 
     A conditional aggregate over the node's records, so a member outside the
@@ -699,17 +807,33 @@ def _with_cell_sorts(union: Any, source: Any, plan: LogicalPlan) -> Tuple[Any, D
         return union, names
     schema = source.schema()
     measures = {m.alias: m for m in q.measures}
+    levels = {level.depth: level for level in plan.levels}
+    deepest = max(levels, default=0)
     for i in range(1, len(plan.rows) + 1):
         keys = list(plan.rows[:i])
-        aggregates = {}
-        for n, s, member in entries:
-            names[(i, n)] = f"__cell{i}_{n}"
-            condition = _member_condition(source, schema, q.columns, tuple(member))
-            aggregates[names[(i, n)]] = _lower(measures[s.field], source, plan, keys, condition, tuple(member))
-        lookup = source.group_by(keys).aggregate(**aggregates)
+        if provider is not None:
+            for n, _s, _member in entries:
+                names[(i, n)] = f"__cell{i}_{n}"
+            if i > deepest:
+                union = union.mutate(**{names[(i, n)]: ibis.null().cast(
+                    _lower(measures[s.field], source, plan, keys).type()) for n, s, _member in entries})
+                continue
+            lookup = provider.cell_values(keys, _level_restriction(levels, i), entries)
+            aggregates = {names[(i, n)]: lookup[names[(i, n)]] for n, _s, _member in entries}
+        else:
+            records = restrict(source, _level_restriction(levels, i), schema)
+            aggregates = {}
+            for n, s, member in entries:
+                names[(i, n)] = f"__cell{i}_{n}"
+                condition = _member_condition(records, schema, q.columns, tuple(member))
+                aggregates[names[(i, n)]] = _lower(measures[s.field], records, plan, keys, condition, tuple(member))
+            if i > deepest:  # no row at depth >= i: the value orders nothing
+                union = union.mutate(**{name: ibis.null().cast(value.type()) for name, value in aggregates.items()})
+                continue
+            lookup = records.group_by(keys).aggregate(**aggregates)
         lookup = lookup.select(**{f"__canc{i}_{j}": lookup[k] for j, k in enumerate(keys)},
                                **{name: lookup[name] for name in aggregates})
-        predicates = [union[k].identical_to(lookup[f"__canc{i}_{j}"]) for j, k in enumerate(keys)]
+        predicates = _lookup_predicates(union, lookup, keys, f"__canc{i}_")
         joined = union.left_join(lookup, predicates)
         union = joined.select(*[joined[c] for c in union.columns], *[joined[name] for name in aggregates])
     return union, names
@@ -719,11 +843,55 @@ def part_type(parts: List[Any], alias: str) -> Any:
     return parts[-1].schema()[alias]
 
 
-def build(plan: LogicalPlan, relation: Any, level_aggregate: Callable[[Any, LogicalPlan], LevelAggregate]) -> Any:
-    """Ordered and windowed tree."""
-    union, order = tree(plan, relation, level_aggregate)
-    q = plan.query
-    ordered = (union.order_by(order) if order else union).select(*output_columns(plan))
-    if q.window.limit is not None or q.window.offset:
-        ordered = ordered.limit(q.window.limit, offset=q.window.offset)
+def build(plan: LogicalPlan, relation: Any, level_aggregate: Optional[Callable[[Any, LogicalPlan], LevelAggregate]],
+          prepare_source: Optional[Callable[[Any, LogicalPlan], AggregateProvider]] = None) -> Any:
+    """The ordered tree, windowed by ``plan.query.window`` (``windowed``).
+
+    On a backend with window functions it carries ``ORD``, each row's 0-based
+    display position, so one statement serves a page with its total.
+    """
+    union, order = tree(plan, relation, level_aggregate, prepare_source)
+    return windowed(ordered_tree(plan, relation, union, order), plan.query.window)
+
+
+def ordered_tree(plan: LogicalPlan, relation: Any, union: Any, order: List[Any]) -> Any:
+    """Order the whole tree using the raw backend's window capability, without paging."""
+    if window_functions(relation):
+        # The display position and the tree's row count in one projection, sorted once: few nesting levels
+        # (SQLite's parser bounds the depth of nested subqueries).
+        total = {TOTAL: union[DEPTH].count().over(ibis.window())}
+        position = {} if ORD in union.columns else {ORD: ibis.row_number().over(order_by=order)}
+        union = union.mutate(**position, **total)
+        ordered = union.select(*output_columns(plan), ORD, TOTAL).order_by(ORD)
+    else:
+        ordered = (union.order_by(order) if order else union).select(*output_columns(plan))
     return ordered
+
+
+def windowed(ordered: Any, window: Any, *, grand_total: bool = False) -> Any:
+    """The statement of one read of the ordered tree: its window, its row count and (asked) its grand total.
+
+    With ``ORD`` (a backend with window functions) it is one statement: every
+    row of the ordered tree carries ``TOTAL``, its row count; the first row is always kept,
+    so the count arrives even for a window past the end, and the grand total
+    (depth 0) when ``grand_total``.  The caller separates them
+    (``frame.split_window``).  Without ``ORD`` it is the window alone (``LIMIT``)
+    and the executor reads the count and the grand total from the same tree.
+    An unwindowed read without the grand total is the ordered tree itself.
+    """
+    if window.limit is None and not window.offset and not grand_total:
+        return ordered
+    if ORD not in ordered.columns:
+        if window.limit is None and not window.offset:
+            return ordered
+        return ordered.limit(window.limit, offset=window.offset)
+    op = ordered.op()
+    rows = op.parent.to_expr() if isinstance(op, ibis.expr.operations.Sort) else ordered  # filter before the sort
+    position = rows[ORD]
+    keep = position >= window.offset
+    if window.limit is not None:
+        keep = keep & (position < window.offset + window.limit)
+    keep = keep | (position == 0)
+    if grand_total:
+        keep = keep | (rows[DEPTH] == 0)
+    return rows.filter(keep).order_by(rows[ORD])

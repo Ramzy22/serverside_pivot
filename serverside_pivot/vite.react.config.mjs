@@ -41,7 +41,6 @@ export default defineConfig({
                 'react',
                 'react-dom',
                 'react-dom/client',
-                'styled-components',
             ],
             output: {
                 entryFileNames: 'index.mjs',

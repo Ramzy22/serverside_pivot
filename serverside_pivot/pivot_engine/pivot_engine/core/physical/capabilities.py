@@ -18,7 +18,7 @@ from ibis.common.graph import Graph
 from ibis.expr.operations.udf import AggUDF, ScalarUDF
 
 __all__ = ["BackendCapabilityError", "backend_name", "check_capabilities", "native_null_safe_semi_join",
-           "refusing_untranslatable"]
+           "refusing_untranslatable", "window_functions"]
 
 # Value nodes that shape a relation instead of computing a value: backends
 # translate them as part of their parent and do not list them as operations.
@@ -30,6 +30,16 @@ _STRUCTURAL = (ops.SortKey, ScalarUDF, AggUDF)
 # (tests/core/test_cross_backend.py). Every other backend gets the portable
 # equality-only form, which is exact everywhere but ~35% slower on DuckDB.
 _NATIVE_NULL_SAFE_SEMI_JOIN = frozenset({"duckdb"})
+
+# In-process engines that read a cached Arrow cube back as a memtable without an upload
+# (tests/core/test_physical_cube.py). A server database would receive every cube row as an
+# INSERT on each read (Oracle also rejects Decimal binds there), so it computes partials in place.
+_ARROW_CUBE_REUSE = frozenset({"duckdb", "sqlite", "polars"})
+
+
+def arrow_cube_reuse(backend: Any) -> bool:
+    """The backend re-reads cached Arrow cubes in process (the partial-cube cache applies)."""
+    return str(getattr(backend, "name", "")) in _ARROW_CUBE_REUSE
 
 
 def _filtered_ordered_aggregate(node: Any) -> bool:
@@ -46,8 +56,18 @@ def _sample_dispersion(node: Any) -> bool:
     return isinstance(node, (ops.Variance, ops.StandardDev))
 
 
+# Polars (1.3 via Ibis 12): a percentile pivot cell (a quantile of a member-conditional value) over the
+# measure axis (a union of the member columns) raises "cannot evaluate two Series of different lengths".
+def _conditional_quantile_over_union(node: Any) -> bool:
+    if not isinstance(node, ops.Quantile):
+        return False
+    kinds = {type(n) for n in Graph.from_bfs(node.arg).keys()}
+    return ops.IfElse in kinds and ops.Union in kinds
+
+
 _KNOWN_GAPS: Dict[str, Tuple[Tuple[Callable[[Any], bool], str], ...]] = {
-    "polars": ((_filtered_ordered_aggregate, "ordered aggregate with a filter (first/last/array_agg)"),),
+    "polars": ((_filtered_ordered_aggregate, "ordered aggregate with a filter (first/last/array_agg)"),
+               (_conditional_quantile_over_union, "percentile pivot cell over the measure axis")),
     "sqlite": ((_sample_dispersion, "sample variance/stddev"),),
 }
 
@@ -61,6 +81,16 @@ def backend_name(expr: Any) -> str:
 
 def native_null_safe_semi_join(expr: Any) -> bool:
     return backend_name(expr) in _NATIVE_NULL_SAFE_SEMI_JOIN
+
+
+def window_functions(expr: Any) -> bool:
+    """The backend runs ``ROW_NUMBER``/``COUNT`` over windows (an unbound expression: assumed, as DuckDB)."""
+    try:
+        backend = expr._find_backend()
+    except Exception:  # noqa: BLE001 - an unbound expression (memtables only)
+        return True
+    has = getattr(backend, "has_operation", None)
+    return has is None or all(has(op) for op in (ops.WindowFunction, ops.RowNumber, ops.CountStar))
 
 
 class BackendCapabilityError(ValueError):

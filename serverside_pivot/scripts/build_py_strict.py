@@ -180,6 +180,111 @@ def validate_generated_metadata(package_root: Path) -> bool:
     return True
 
 
+def write_optional_dash_package_init(package_root: Path) -> None:
+    """Emit a Dash-optional package __init__.py so base installs expose __version__."""
+    init_path = package_root / "serverside_pivot" / "__init__.py"
+    init_source = '''from __future__ import print_function as _
+
+import json
+import os as _os
+import sys as _sys
+
+__version__ = None
+
+_basepath = _os.path.dirname(__file__)
+_filepath = _os.path.abspath(_os.path.join(_basepath, 'package-info.json'))
+
+with open(_filepath, encoding='utf-8') as f:
+    package = json.load(f)
+
+package_name = package['name'].replace(' ', '_').replace('-', '_')
+__version__ = package['version']
+
+_current_path = _os.path.dirname(_os.path.abspath(__file__))
+_this_module = _sys.modules[__name__]
+
+
+def _package_external_url(filename):
+    return 'https://unpkg.com/{}/@{}/{}/{}'.format(
+        package_name,
+        __version__,
+        package_name,
+        filename,
+    )
+
+
+def _discover_async_js_dist():
+    chunk_suffix = '.{}.min.js'.format(package_name)
+    main_bundle = '{}.min.js'.format(package_name)
+    try:
+        filenames = sorted(_os.listdir(_current_path))
+    except OSError:
+        return []
+    return [
+        {
+            'relative_package_path': filename,
+            'external_url': _package_external_url(filename),
+            'namespace': package_name,
+            'dynamic': True,
+        }
+        for filename in filenames
+        if filename.endswith(chunk_suffix) and filename != main_bundle
+    ]
+
+
+_js_dist = [
+    {
+        'relative_package_path': '{}.min.js'.format(package_name),
+        'external_url': _package_external_url('{}.min.js'.format(package_name)),
+        'namespace': package_name,
+    },
+    {
+        'relative_package_path': '{}.min.js.map'.format(package_name),
+        'external_url': _package_external_url('{}.min.js.map'.format(package_name)),
+        'namespace': package_name,
+        'dynamic': True,
+    },
+    {
+        'dev_package_path': 'proptypes.js',
+        'dev_only': True,
+        'namespace': package_name,
+    },
+    *_discover_async_js_dist(),
+]
+
+_css_dist = []
+
+try:
+    import dash as _dash
+except ImportError:
+    _dash = None
+
+if _dash is not None:
+    if not hasattr(_dash, '__version__'):
+        raise TypeError('Dash requires code to be generated')
+    # noinspection PyUnresolvedReferences
+    from ._imports_ import *  # noqa: F401,F403
+    from ._imports_ import __all__ as _generated_all
+    from .DashTanstackPivot import DashTanstackPivot
+
+    __all__ = [*list(_generated_all), 'DashTanstackPivot']
+    for _component in __all__:
+        setattr(locals()[_component], '_js_dist', _js_dist)
+        setattr(locals()[_component], '_css_dist', _css_dist)
+else:
+    __all__ = ['DashTanstackPivot']
+
+
+def __getattr__(name):
+    if name in __all__:
+        raise ImportError(
+            'Dash support is optional. Install serverside-pivot[dash].'
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+'''
+    init_path.write_text(init_source, encoding="utf-8", newline="\n")
+
+
 def main() -> int:
     package_root = Path(__file__).resolve().parents[1]
     public_component = package_root / "src" / "lib" / "components" / "DashTanstackPivot.react.tsx"
@@ -199,6 +304,7 @@ def main() -> int:
             # published metadata contract.
             metadata=deepcopy(metadata),
         )
+        write_optional_dash_package_init(package_root)
         metadata_path = package_root / "serverside_pivot" / "metadata.json"
         metadata_path.write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
     except (OSError, RuntimeError, ValueError) as error:

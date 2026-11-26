@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.97] - 2026-11-26
+
+### Changed
+- Golden core read path (M6.1–M6.3): one statement per view returns the window, its total and the grand total; dead formula-source rows, the separate count statement and per-row JSON keys are removed; column members are resolved once per request.
+- Child levels are aggregated only over their visible parents' records (parent restriction), in every strategy and in sort-key lookups.
+- Partial-cube strategy: mergeable measures (sum, count, min, max, avg), including pivot cells and member-key sorts, are merged from one long-form scan, with a cube cache tier bound to the data epoch, scope and cache budget. A forced refresh bypasses it.
+- Upgraded the React toolchain to React 18 and removed the `styled-components` peer dependency; the workspace shell gains a compact layout under 720 px.
+- Added the server benchmark harness against AG Grid's SSRM datasource (`scripts/benchmark_core_vs_aggrid.py`).
+
+### Fixed
+- SQLite: deep core trees no longer hit "parser stack overflow" (derived tables are flattened into CTEs); `starts_with`/`ends_with` filters no longer treat `%`/`_` as wildcards.
+- Polars: percentile pivot cells over the measure axis are refused with a typed capability error instead of failing mid-request.
+
 ## [0.0.96] - 2026-11-18
 
 ### Changed

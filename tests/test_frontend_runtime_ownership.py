@@ -271,8 +271,11 @@ def test_workspace_controls_receive_bounded_presentation_models():
     controls_source = _source("components/PivotWorkspaceControls.js")
     model_source = _source("runtime/workspaceViewModel.ts")
 
-    assert "workspace.controls.toolbar" in shell_source
-    assert "workspace.controls.sidebar" in shell_source
+    # The shell hands the bounded controls model to its frame, which owns the compact layout.
+    assert "controls={workspace.controls}" in shell_source
+    assert "const toolbar = controls && controls.toolbar;" in shell_source
+    assert "const sidebar = controls && controls.sidebar;" in shell_source
+    assert "<PivotWorkspaceSidebar sidebar={sidebar} />" in shell_source
     assert "PivotWorkspaceToolbar" in controls_source
     assert "PivotWorkspaceSidebar" in controls_source
     assert "LazySidebarPanel" in controls_source
@@ -287,7 +290,8 @@ def test_workspace_canvas_receives_its_bounded_presentation_model():
     canvas_source = _source("components/PivotWorkspaceCanvas.js")
     model_source = _source("runtime/workspaceViewModel.ts")
 
-    assert "<PivotWorkspaceCanvas canvas={workspace.canvas} />" in shell_source
+    assert "canvas={workspace.canvas}" in shell_source
+    assert "<PivotWorkspaceCanvas canvas={canvas} />" in shell_source
     assert "export function PivotWorkspaceCanvas({ canvas })" in canvas_source
     assert "workspace.presentation" not in canvas_source
     assert "domains.workspace.canvas" in model_source

@@ -205,6 +205,10 @@ const StatusBar = ({
         [selectedCells]
     );
 
+    /** @type {(value: any, decimals?: number) => string} */
+    const fmtStat = statusModel && statusModel.selection && typeof statusModel.selection.formatValue === 'function'
+        ? statusModel.selection.formatValue
+        : (value, decimals = 2) => fmt(value, decimals, numberGroupSeparator);
     /** @type {any} */
     const dataSummary = statusModel && statusModel.data ? statusModel.data : {};
     /** @type {any} */
@@ -275,9 +279,9 @@ const StatusBar = ({
                             <StatusMetric label="Cells" value={fmt(selectionSummary.totalSelected, 0, numberGroupSeparator)} />
                             {selectionSummary.numericCount > 0 ? (
                                 <>
-                                    <StatusMetric label="Sum" value={fmt(selectionSummary.sum, 2, numberGroupSeparator)} />
-                                    <StatusMetric label="Avg" value={fmt(selectionSummary.avg, 2, numberGroupSeparator)} />
-                                    <StatusMetric label="Median" value={fmt(selectionSummary.median, 2, numberGroupSeparator)} />
+                                    <StatusMetric label="Sum" value={fmtStat(selectionSummary.sum, 2)} />
+                                    <StatusMetric label="Avg" value={fmtStat(selectionSummary.avg, 2)} />
+                                    <StatusMetric label="Median" value={fmtStat(selectionSummary.median, 2)} />
                                 </>
                             ) : null}
                         </StatusPanel>
@@ -337,8 +341,8 @@ const StatusBar = ({
                     <StatusMetric label="Cols" value={fmt(dataSummary.totalCenterColumns, 0, numberGroupSeparator)} />
                     <StatusMetric label="Filters" value={fmt(dataSummary.activeFilterCount, 0, numberGroupSeparator)} />
                     <StatusMetric label="Cells" value={fmt(selectionSummary.totalSelected, 0, numberGroupSeparator)} />
-                    <StatusMetric label="Mean" value={selectionSummary.numericCount > 0 ? fmt(selectionSummary.avg, 2, numberGroupSeparator) : '--'} />
-                    <StatusMetric label="Std Dev" value={selectionSummary.numericCount > 0 ? fmt(selectionSummary.stdDev, 2, numberGroupSeparator) : '--'} />
+                    <StatusMetric label="Mean" value={selectionSummary.numericCount > 0 ? fmtStat(selectionSummary.avg, 2) : '--'} />
+                    <StatusMetric label="Std Dev" value={selectionSummary.numericCount > 0 ? fmtStat(selectionSummary.stdDev, 2) : '--'} />
                 </div>
             ) : null}
 

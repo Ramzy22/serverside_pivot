@@ -18,7 +18,7 @@ from .authority.scope import current_scope
 
 __all__ = ["CacheKey", "CacheManager", "TIERS", "key_for"]
 
-TIERS = ("plan", "result", "reactive", "snapshot")
+TIERS = ("plan", "result", "cube", "reactive", "snapshot")
 
 
 @dataclass(frozen=True)

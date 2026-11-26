@@ -364,7 +364,6 @@ import {
                         inset: 0,
                         zIndex: 10000,
                         background: 'rgba(15, 23, 42, 0.38)',
-                        backdropFilter: 'blur(4px)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',

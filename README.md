@@ -162,7 +162,17 @@ When developers build analytical dashboards with large enterprise datasets, they
 ### 1. Installation
 
 ```bash
+# Core Python analytical engine (pivot_engine: DuckDB, PyArrow, Ibis)
 pip install serverside-pivot
+
+# Plotly Dash component host
+pip install "serverside-pivot[dash]"
+
+# Streamlit V2 component host
+pip install "serverside-pivot[streamlit]"
+
+# FastAPI V1 runtime HTTP server (for standalone React HttpPivotTransport)
+pip install "serverside-pivot[api]"
 ```
 
 *For distributed multi-worker caching with Redis:*
@@ -174,6 +184,13 @@ pip install "serverside-pivot[redis]"
 ```bash
 npm install serverside_pivot
 ```
+
+| Ecosystem / Host | Install Package | Primary Import |
+| :--- | :--- | :--- |
+| **Core Analytical Engine** | `pip install serverside-pivot` | `from pivot_engine import create_tanstack_adapter, PivotRuntimeService` |
+| **Plotly Dash** | `pip install "serverside-pivot[dash]"` | `from serverside_pivot import DashTanstackPivot` |
+| **Streamlit** | `pip install "serverside-pivot[streamlit]"` | `from streamlit_pivot import st_serverside_pivot` |
+| **Standalone React** | `npm install serverside_pivot` | `import { PivotWorkspace } from 'serverside_pivot/react'` |
 
 ---
 

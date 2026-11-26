@@ -1,4 +1,4 @@
-import { j as e, I as E, a1 as ke, a2 as Or, a3 as Nr, a4 as wt, a5 as it, a6 as Hr, a7 as Ur, a8 as Vr, a9 as Ne, aa as st, ab as dt, G as Kr, ac as Yr, ad as Zr, ae as Gr, af as Je, ag as ur, ah as Xr, ai as qt, T as ne, aj as qr, ak as Jr, al as Qr, am as Jt, an as en, ao as tn } from "./index-D68SRNaU.js";
+import { j as e, I as E, a1 as ke, a2 as Or, a3 as Nr, a4 as wt, a5 as it, a6 as Hr, a7 as Ur, a8 as Vr, a9 as Ne, aa as st, ab as dt, G as Kr, ac as Yr, ad as Zr, ae as Gr, af as Je, ag as ur, ah as Xr, ai as qt, T as ne, aj as qr, ak as Jr, al as Qr, am as Jt, an as en, ao as tn } from "./index-BvjmMxCj.js";
 import { a as de, R as u } from "./charts-DthW1Q8W.js";
 const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: j, onLoadMoreOptions: y, onOpen: F }) => {
   const [s, b] = de.useState(!1), W = l && (l.conditions || l.value), P = () => b(!1), M = () => {
@@ -525,7 +525,7 @@ const fn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
   })
 ), gn = u.lazy(() => import(
   /* webpackChunkName: "pivot-report-editor" */
-  "./ReportEditor-C_ZAjb_a.js"
+  "./ReportEditor-Bnxi-MaY.js"
 ).then((t) => ({
   default: t.ReportEditor
 }))), yn = (t) => /* @__PURE__ */ e.jsx(u.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(gn, { ...t }) });
@@ -800,7 +800,6 @@ function lr({
           inset: 0,
           zIndex: 1e4,
           background: "rgba(15, 23, 42, 0.38)",
-          backdropFilter: "blur(4px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

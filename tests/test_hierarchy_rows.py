@@ -48,7 +48,6 @@ def test_hierarchy_row_window_owns_visibility_total_placement_and_paths():
         [["North"]],
         start_row=0,
         end_row=4,
-        collect_formula_source_rows=True,
     )
 
     assert [row["_id"] for row in window["rows"]] == ["North", "USA", "Canada", "South", "Grand Total"]
@@ -56,7 +55,6 @@ def test_hierarchy_row_window_owns_visibility_total_placement_and_paths():
     assert window["rows"][-1]["_path"] == "__grand_total__"
     assert window["total_rows"] == 5
     assert window["grand_total_row"]["_id"] == "Grand Total"
-    assert [row["_id"] for row in window["grand_total_formula_source_rows"]] == ["North", "South"]
     assert window["color_scale_stats"]["byCol"]["sales_sum"] == {"min": 40, "max": 100}
 
 

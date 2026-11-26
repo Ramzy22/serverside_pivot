@@ -776,6 +776,8 @@ export function useWorkspaceRuntimeStage(input) {
     propagationLogRef: workspace.propagationLogRef,
     propagationLogEpoch: workspace.propagationLogEpoch,
     requestVisibleViewportRefresh: workspace.requestVisibleViewportRefresh,
+    resolveColumnValueFormat: workspace.resolveColumnValueFormat,
+    numberGroupSeparator: workspace.numberGroupSeparator,
     rowEditStatusSummary: workspace.rowEditStatusSummary,
     rowFields: workspace.rowFields,
     rows: workspace.rows,

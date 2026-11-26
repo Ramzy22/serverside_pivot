@@ -521,6 +521,11 @@ test('workspace initial bootstrap survives StrictMode unmount/remount with Lates
             useImperativeHandle: noop,
             useDebugValue: noop,
             readContext: ctx => api.useContext(ctx),
+            // React 18 hooks: the real ones resolve the dispatcher, which is this object (infinite recursion).
+            useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+            useDeferredValue: value => value,
+            useTransition: () => [false, fn => fn()],
+            useInsertionEffect: (fn, deps) => api.useEffect(fn, deps),
         };
         const dispatcher = RealReact.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
         return {
@@ -815,6 +820,11 @@ test('workspace fieldPanelSizes updates settle cleanly without echo loop or snap
             useImperativeHandle: noop,
             useDebugValue: noop,
             readContext: ctx => api.useContext(ctx),
+            // React 18 hooks: the real ones resolve the dispatcher, which is this object (infinite recursion).
+            useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+            useDeferredValue: value => value,
+            useTransition: () => [false, fn => fn()],
+            useInsertionEffect: (fn, deps) => api.useEffect(fn, deps),
         };
         const dispatcher = RealReact.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
         return {
@@ -1417,6 +1427,11 @@ test('removing a row or column field dispatches only 1 structural computation wi
             useImperativeHandle: noop,
             useDebugValue: noop,
             readContext: ctx => api.useContext(ctx),
+            // React 18 hooks: the real ones resolve the dispatcher, which is this object (infinite recursion).
+            useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+            useDeferredValue: value => value,
+            useTransition: () => [false, fn => fn()],
+            useInsertionEffect: (fn, deps) => api.useEffect(fn, deps),
         };
         const dispatcher = RealReact.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
         return {

@@ -38,7 +38,7 @@ pnpm add serverside_pivot
 
 ### Peer Dependencies
 ```bash
-npm install react react-dom styled-components
+npm install react react-dom
 ```
 
 ---
@@ -166,9 +166,10 @@ export function EnterpriseAnalytics() {
 ## 🌐 Multi-Framework Ecosystem
 
 `serverside_pivot` is part of the `serverside-pivot` ecosystem:
-- **Standalone React**: `serverside_pivot` (this package)
-- **Python Plotly Dash**: `pip install serverside-pivot`
-- **Streamlit**: `pip install "serverside-pivot[streamlit]"`
+- **Standalone React**: `npm install serverside_pivot` (`import { PivotWorkspace } from 'serverside_pivot/react'`)
+- **Core Python Engine**: `pip install serverside-pivot` (`import pivot_engine`)
+- **Python Plotly Dash**: `pip install "serverside-pivot[dash]"` (`from serverside_pivot import DashTanstackPivot`)
+- **Streamlit**: `pip install "serverside-pivot[streamlit]"` (`from streamlit_pivot import st_serverside_pivot`)
 - **Backend Pushdown**: Powered by **DuckDB**, **PyArrow**, and **Ibis** (Snowflake, BigQuery, Postgres, ClickHouse, MotherDuck, Databricks, Trino)
 
 For comprehensive documentation, live Python/Dash showcases, and interactive examples, visit the **[GitHub Repository](https://github.com/Ramzy22/serverside_pivot)**.

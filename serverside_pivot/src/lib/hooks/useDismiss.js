@@ -150,7 +150,14 @@ export function OverlayPortal({ children, theme, anchorEl = null, zIndex = 10000
             style={{
                 ...themeVars,
                 colorScheme: theme && theme.isDark ? 'dark' : 'light',
-                fontFamily: (theme && theme.fontFamily) || undefined,
+                // The portal mounts under <body>, outside the workspace root, so
+                // it must set the UI typography itself rather than inherit the
+                // host page's (often a serif browser default).
+                fontFamily: (theme && theme.fontFamily) || "var(--sp-font-sans, 'Inter', ui-sans-serif, system-ui, sans-serif)",
+                fontSize: 'var(--sp-fs-base, 13px)',
+                lineHeight: 1.4,
+                color: (theme && theme.text) || undefined,
+                WebkitFontSmoothing: 'antialiased',
                 position: 'fixed',
                 top: 0,
                 left: 0,

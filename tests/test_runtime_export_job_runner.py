@@ -11,7 +11,7 @@ import pytest
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
 from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits, ResourceExhaustedError, WorkloadAccount
 from pivot_engine.runtime import PivotRuntimeService, PivotRequestContext, PivotViewState
-from pivot_engine.runtime.export_jobs import ExportJobSnapshot
+from pivot_engine.runtime.export_jobs import EXPORT_JOB_TERMINAL_PHASES, ExportJobSnapshot
 from pivot_engine.runtime.export_job_store import LocalExportJobStore
 from pivot_engine.runtime.payload_store import RuntimePayloadStore
 from pivot_engine.tanstack_adapter import TanStackResponse
@@ -35,13 +35,13 @@ class Adapter:
     handle_virtual_scroll_request = handle_request
 
 
-def setup_runner(tmp_path, adapter=None, store=None, export_slots=1, governor=None, **options):
+def setup_runner(tmp_path, adapter=None, store=None, export_slots=1, governor=None, lease_seconds=5.0, **options):
     cls = importlib.import_module("pivot_engine.runtime.export_job_runner").ExportJobRunner
     governor = governor or ResourceGovernor(ResourceLimits.for_testing(max_exports=export_slots, export_bytes=100_000,
                                total_bytes=10_000_000, tenant_bytes=1_000_000, system_bytes=1_000_000,
                                payload_bytes=100_000, worker_hard_limit_bytes=20_000_000), rss_bytes_getter=lambda: 0)
     service = PivotRuntimeService(lambda: adapter or Adapter(), resource_governor=governor)
-    store = store or LocalExportJobStore(lease_seconds=.3)
+    store = store or LocalExportJobStore(lease_seconds=lease_seconds)
     payloads = RuntimePayloadStore(governor=governor)
     runner = cls(service, store, payloads, temp_directory=tmp_path, poll_interval_seconds=.01, **options)
     context = PivotRequestContext(table="sales", accounting_account=WorkloadAccount.tenant("trusted"))
@@ -332,7 +332,7 @@ def test_job_heartbeats_while_waiting_and_fenced_owner_cannot_publish(tmp_path):
                 await asyncio.sleep(.01)
             return await super().handle_request()
         handle_virtual_scroll_request = handle_request
-    runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, Slow())
+    runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, Slow(), lease_seconds=.3)
     try:
         runner.start(job, context, PivotViewState(export_request={"format": "csv"}))
         assert started.wait(2)
@@ -641,7 +641,7 @@ def test_real_flat_all_rows_exports_use_bounded_arrow_pages_before_python_conver
                            export_request={"format": fmt, "allRows": True})
     try:
         runner.start(job, context, state)
-        done = wait_for(lambda: (item := snapshot(store)).phase in {"failed", "completed"} and item, timeout=10)
+        done = wait_for(lambda: (item := snapshot(store)).phase in EXPORT_JOB_TERMINAL_PHASES and item, timeout=10)
         assert done.phase == "completed"
         assert done.rows_written == 350
         assert len(limits) >= 3 and sum(seen) == 350

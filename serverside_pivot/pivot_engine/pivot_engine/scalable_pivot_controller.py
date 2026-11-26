@@ -8,6 +8,7 @@ through ``transport.core_bridge``; the controller exposes the stable
 """
 from typing import Optional, Any, Dict, List, Mapping, Tuple, Union, Callable, Generator
 import asyncio
+import contextlib
 import decimal
 import logging
 import threading
@@ -25,20 +26,24 @@ from .cache_coordinator import CacheCoordinator
 from .cdc.cdc_manager import PivotCDCManager
 from .core.authority.scope import run_in_executor_scoped
 from .core.cache import CacheManager, key_for
+from .core.cube_cache import CubeAccess
 from .editing.mutation_executor import DatabaseMutationExecutor
 from .execution_locks import TableExecutionLockRegistry
 from .export_executor import PivotExportExecutor
 from .lifecycle import get_task_manager
 from .query_execution_service import PivotQueryExecutor, spec_fingerprint
-from .resource_governor import ResourceGovernor, ResourceLimits, get_worker_resource_governor
+from .resource_governor import (
+    ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits,
+    current_workload_account, get_worker_resource_governor,
+)
 from .streaming.streaming_processor import IncrementalMaterializedViewManager, StreamAggregationProcessor
 from .types.pivot_spec import PivotSpec
 from .util.sql_builder import quote_ident
 
 #: Core visible-node counts (keyed by plan fingerprint) depend on the data:
 #: every data load or mutation clears them through the cache coordinator.
-CORE_VISIBLE_COUNT_NAMESPACE = "core.visible_count"
 CORE_RESULT_NAMESPACE = "core.result"
+CORE_CUBE_NAMESPACE = "core.cube"
 
 
 class ScalablePivotController:
@@ -104,24 +109,17 @@ class ScalablePivotController:
         self.cache_coordinator = CacheCoordinator(generation_guard=generation_guard)
         if generation_guard is not None:
             self.cache = GenerationGuardedCache(self.cache, generation_guard)
-        self.core_visible_counts: Dict[str, int] = {}
         # Every invalidation of a core tier (local or from another process) bumps the epoch under this
         # lock; a read stores what it computed only if the epoch it started under is still current, so
         # a read that overlaps a load or mutation can never put its stale result back.
         self._core_epoch = 0
         self._core_epoch_lock = threading.Lock()
-        self.cache_coordinator.register_namespace(
-            CORE_VISIBLE_COUNT_NAMESPACE,
-            owner="controller",
-            key_dimensions=("plan_fingerprint", "scope_fingerprint"),
-            size_getter=lambda: {"entries": len(self.core_visible_counts)},
-            invalidator=lambda _event: self._invalidate_core(self.core_visible_counts.clear),
-        )
         # The core result tier: pivot tables keyed by spec fingerprint under the active scope (REQ-SEC-004),
         # dropped for a table on its load or mutation and expired after ``cache_ttl``.
         self.core_cache = CacheManager(
-            budgets={"result": self.resource_governor.limits.cache_bytes},
-            sizeof=lambda entry: int(getattr(entry[1], "nbytes", 1024)),
+            budgets={"result": self.resource_governor.limits.cache_bytes,
+                     "cube": self.resource_governor.limits.cache_bytes},
+            sizeof=lambda entry: int(entry.nbytes if hasattr(entry, "nbytes") else getattr(entry[1], "nbytes", 1024)),
         )
         self._core_result_ttl = float(cache_ttl)
         self.cache_coordinator.register_namespace(
@@ -131,6 +129,14 @@ class ScalablePivotController:
             size_getter=lambda: {"bytes": self.core_cache.used_bytes("result")},
             invalidator=lambda event: self._invalidate_core(
                 lambda: self.core_cache.invalidate(dataset=event.table, tiers=("result",))),
+        )
+        self.cache_coordinator.register_namespace(
+            CORE_CUBE_NAMESPACE,
+            owner="controller",
+            key_dimensions=("dataset", "cube_fingerprint", "scope_fingerprint", "policy_version", "revision"),
+            size_getter=lambda: {"bytes": self.core_cache.used_bytes("cube")},
+            invalidator=lambda event: self._invalidate_core(
+                lambda: self.core_cache.invalidate(dataset=event.table, tiers=("cube", "plan"))),
         )
 
         self.enable_streaming = enable_streaming
@@ -196,7 +202,7 @@ class ScalablePivotController:
         """Clear every controller-owned cache (forces fresh reads)."""
         if self.cache is not None and hasattr(self.cache, "clear"):
             self.cache.clear()
-        self._invalidate_core(lambda: (self.core_visible_counts.clear(), self.core_cache.invalidate()))
+        self._invalidate_core(self.core_cache.invalidate)
 
     def _invalidate_core(self, drop: Callable[[], Any]) -> None:
         with self._core_epoch_lock:
@@ -208,10 +214,36 @@ class ScalablePivotController:
         with self._core_epoch_lock:
             return self._core_epoch
 
-    def store_core_visible_count(self, key: str, total: int, epoch: int) -> None:
-        with self._core_epoch_lock:
-            if epoch == self._core_epoch:
-                self.core_visible_counts[key] = total
+    def cube_access(self, refresh: bool = False) -> Union[CubeAccess, contextlib.nullcontext]:
+        """Bind this read's cube lifetime to the synchronized data generation and trusted account.
+
+        On a backend that cannot re-read Arrow cubes in process (a server database) no cube
+        access is bound, and the core computes its partials in the database.
+        """
+        from .core.physical.capabilities import arrow_cube_reuse
+        if not arrow_cube_reuse(self.con):
+            return contextlib.nullcontext()
+        self._sync_controller_cache_generation()
+        epoch = self.core_epoch()
+
+        def current() -> bool:
+            self._sync_controller_cache_generation()
+            return epoch == self.core_epoch()
+
+        def publish(key: Any, entry: Any) -> None:
+            self._sync_controller_cache_generation()
+            with self._core_epoch_lock:
+                if epoch != self._core_epoch:
+                    return
+                try:
+                    entry.lease = self.resource_governor.reserve(
+                        ResourceKind.CACHE, entry.nbytes, account=current_workload_account.get())
+                except ResourceExhaustedError:
+                    return  # caching is optional; this read still uses its exact partials
+                self.core_cache.put(key, entry)
+
+        return CubeAccess(self.core_cache, str(epoch), publish, current,
+                          ttl=self._core_result_ttl, backend=self.con, refresh=refresh)
 
     def cached_core_result(self, spec: Any) -> Optional[pa.Table]:
         """The core pivot table of ``spec`` from the result tier (under the active scope), if fresh."""
@@ -357,7 +389,8 @@ class ScalablePivotController:
         table = None if force_refresh else self.cached_core_result(normalized)
         if table is None:
             epoch = self.core_epoch()  # before the read: a write during it voids the store
-            table = core_locked_call(self, normalized.table, lambda: core_pivot_table(self.resolve_table, normalized))
+            table = core_locked_call(self, normalized.table, lambda: core_pivot_table(self.resolve_table, normalized),
+                                     refresh=force_refresh)
             self.store_core_result(normalized, table, epoch)
         return self._convert_table_to_dict(table, normalized) if return_format == "dict" else table
 
@@ -902,7 +935,7 @@ class ScalablePivotController:
     def _clear_mutation_caches(self, table_name: Optional[str] = None, structural: bool = False) -> None:
         """Invalidate the caches a row mutation makes stale, without flushing unrelated namespaces."""
         self.cache_coordinator.invalidate(
-            [CORE_VISIBLE_COUNT_NAMESPACE, CORE_RESULT_NAMESPACE],
+            [CORE_RESULT_NAMESPACE, CORE_CUBE_NAMESPACE],
             event="mutation",
             reason="row_mutation",
             table=table_name,

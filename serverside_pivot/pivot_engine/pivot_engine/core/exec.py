@@ -17,7 +17,8 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .cache import CacheKey, CacheManager, key_for
-from .frame import ResultFrame
+from .cube_cache import current_cube_access
+from .frame import ResultFrame, split_window
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
 from .logical import plan as logical_plan
@@ -47,7 +48,11 @@ def materialize(expr: Any) -> Any:
     check_capabilities(expr)
     runner = _RUNNER.get()
     with refusing_untranslatable(expr):
-        return expr.to_pyarrow() if runner is None else runner(expr)
+        if runner is not None:
+            return runner(expr)
+        from .physical.fetch import to_pyarrow
+        access = current_cube_access()
+        return to_pyarrow(expr, access.backend if access is not None else None)
 
 
 @contextmanager
@@ -165,7 +170,12 @@ def _database_table() -> Any:
 
 def compiled_sql(backend: Any, expr: Any) -> str:
     """``backend.compile(expr)``, memoized on the expression's structure."""
+    from ibis.expr.operations import InMemoryTable
+
     op = expr.op()
+    if op.find(InMemoryTable):
+        # Request-owned Arrow buffers must never escape into the entry-counted compile tier.
+        return str(backend.compile(expr))
     key = key_for("plan", "", f"sql:{backend.name}:{hash(op)}")
     sql = _cached(key, op)
     if sql is None:
@@ -174,13 +184,42 @@ def compiled_sql(backend: Any, expr: Any) -> str:
     return str(sql)
 
 
-def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> Any:
-    """``strategy=None`` lets the physical planner choose."""
+def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
+                  grand_total: bool = False) -> Any:
+    """The read's one statement: the window, the tree's row count and (``grand_total``) the grand total.
+
+    ``strategy=None`` lets the physical planner choose.  An unwindowed read
+    without the grand total is the ordered tree (with its ``__ord`` column).
+    """
+    from .physical.union_all import windowed
+
+    tree = _tree(query, resolve, strategy)
+    expr = windowed(tree, query.window, grand_total=grand_total)
+    if expr is not tree:
+        verify_scoped(expr)
+    return expr
+
+
+def _tree(query: PivotQuery, resolve: Resolver, strategy: Optional[str]) -> Any:
+    """The whole ordered tree of ``query`` (any window), from the plan tier of the compile cache."""
     from .physical.union_all import prepared
 
     relation = resolve(query.dataset)
     query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
     whole = replace(query, window=Window())
+    from .physical import leaf_partials
+
+    plan = logical_plan(whole)
+    selected = strategy or choose(plan, prepared(relation, query).schema())
+    access = current_cube_access()
+    if selected == "leaf_partials" and access is not None:
+        tree = access.program(whole)
+        if tree is not None:
+            return tree
+        tree = leaf_partials.lower(plan, relation, partial_provider=_partial_provider)
+        verify_scoped(tree)
+        access.store_program(whole, tree)
+        return tree
     source = relation.op()
     key = key_for("plan", query.dataset, hashlib.sha256(f"{canonical(whole)}|{strategy}".encode()).hexdigest())
     tree = _cached(key, source)
@@ -190,33 +229,90 @@ def compile_query(query: PivotQuery, resolve: Resolver, *, strategy: Optional[st
         tree = STRATEGIES[strategy or choose(plan, relation.schema())](plan, relation)
         verify_scoped(tree)
         _remember(key, source, tree)
-    if query.window.limit is None and not query.window.offset:
-        return tree
-    expr = tree.limit(query.window.limit, offset=query.window.offset)
-    verify_scoped(expr)
-    return expr
+    return tree
 
 
-def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> ResultFrame:
-    expr = compile_query(query, resolve, strategy=strategy)
+def _partial_provider(plan: Any, e0: Any, grain: Sequence[str], restriction: Any) -> Any:
+    """Materialize verified E0 partials, or read matching versioned partials under this request's grant."""
+    import ibis
+
+    from .physical import leaf_partials
+    from .physical.arrow_relation import release
+    from .physical.union_all import restrict
+
+    access = current_cube_access()
+    if access is None:
+        raise RuntimeError("partial provider requires a bound cube access")
+    # The grand total and roots share one complete root cube. Deeper levels are disjoint parent extensions.
+    requested = tuple(dict.fromkeys([*plan.rows[:1], *grain]))
+
+    def build(missing: Any) -> Any:
+        expr = leaf_partials.partials(restrict(e0, missing, e0.schema()), plan, requested)
+        verify_scoped(expr)
+        return materialize(expr)
+
+    table = access.get(plan.query, requested, restriction, build)
+    token = id(table)
+    relation = access.relations.get(token)
+    if relation is None:
+        relation = ibis.memtable(table)
+        access.relations[token] = relation
+        access.on_exit(lambda: release(access.backend, relation))
+    return relation
+
+
+def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
+            grand_total: bool = False) -> ResultFrame:
+    """The window's rows, with ``total`` and (``grand_total``) the grand total: one statement on a backend
+    with window functions, else the window, the count and the grand total read from the same tree."""
+    from .physical.union_all import windowed
+
+    tree = _tree(query, resolve, strategy)
+    statements = _statements(tree, windowed(tree, query.window, grand_total=grand_total), query, grand_total)
+    return _frame([materialize(s) for s in statements], query, grand_total)
+
+
+async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
+                        grand_total: bool = False) -> ResultFrame:
+    from .physical.union_all import windowed
+
+    tree = _tree(query, resolve, strategy)  # resolve + verify on the caller's context
+    statements = _statements(tree, windowed(tree, query.window, grand_total=grand_total), query, grand_total)
+    loop = asyncio.get_running_loop()
+    return _frame([await run_in_executor_scoped(loop, None, materialize, s) for s in statements], query, grand_total)
+
+
+def _statements(tree: Any, page: Any, query: PivotQuery, grand_total: bool) -> List[Any]:
+    """The verified statements of one read: the page, then (a backend without window functions, windowed)
+    the tree's row count and its grand total."""
+    from .frame import DEPTH, ORD
+
+    statements = [page]
+    windowed = query.window.limit is not None or bool(query.window.offset)
+    if ORD not in tree.columns and windowed:
+        statements.append(tree.count())
+        if grand_total:
+            statements.append(tree.filter(tree[DEPTH] == 0))
+    for statement in statements:
+        if statement is not tree:
+            verify_scoped(statement)
+    return statements
+
+
+def _frame(results: List[Any], query: PivotQuery, grand_total: bool) -> ResultFrame:
+    window = (query.window.offset, query.window.limit)
+    body, total, grand = split_window(results[0], window)
+    if len(results) > 1:  # the count and grand total statements of a backend without window functions
+        body, total = results[0], int(results[1].as_py())
+        grand = results[2] if len(results) > 2 else grand
     return ResultFrame(
-        table=materialize(expr),
+        table=body,
         rows=tuple(query.rows),
         measures=tuple(query.value_columns()),
         fingerprint=fingerprint(query),
-        window=(query.window.offset, query.window.limit),
-    )
-
-
-async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None) -> ResultFrame:
-    expr = compile_query(query, resolve, strategy=strategy)  # resolve + verify on the caller's context
-    table = await run_in_executor_scoped(asyncio.get_running_loop(), None, materialize, expr)
-    return ResultFrame(
-        table=table,
-        rows=tuple(query.rows),
-        measures=tuple(query.value_columns()),
-        fingerprint=fingerprint(query),
-        window=(query.window.offset, query.window.limit),
+        window=window,
+        total=total,
+        grand_total=grand if grand_total else None,
     )
 
 
@@ -240,6 +336,15 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
     keyed = axis is not None and axis.label in query.columns  # REQ-DIM-006: the label orders by member order
     extra = [axis.key] if keyed and axis is not None else []
     e0 = filtered(relation, query)
+    access = current_cube_access()
+    if access is not None:
+        from .physical import leaf_partials
+
+        plan = logical_plan(query)
+        keyed_order = any(o.by is not None and o.field in query.columns for o in order)  # needs record minima
+        if (not keyed_order and leaf_partials.supports(plan, e0.schema())
+                and choose(plan, e0.schema()) == "leaf_partials"):
+            e0 = _partial_provider(plan, e0, leaf_partials.grain(plan, query.rows[:1]), None)
     source = e0.select(*query.columns, *extra).distinct()
     by_field: Dict[str, ColumnOrder] = {o.field: o for o in order if o.field in query.columns}
     aliases = {m.alias for m in query.measures} | {d.alias for d in query.derived}
@@ -274,10 +379,10 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
     expr_order: List[Any] = []
     for c in query.columns:
         if keyed and axis is not None and c == axis.label:
-            expr_order += [source[axis.key].isnull().cast("int8"), source[axis.key].asc(), source[c].asc()]
+            expr_order += [source[axis.key].isnull().ifelse(1, 0), source[axis.key].asc(), source[c].asc()]
             continue
         if c not in by_key:
-            expr_order += [source[c].isnull().cast("int8"), source[c].asc()]
+            expr_order += [source[c].isnull().ifelse(1, 0), source[c].asc()]
             continue
         name, o = by_key[c]
         value = source[name] if name is not None else source[c]
@@ -285,7 +390,7 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
             value = value.abs()
         expr_order += [_null_rank(value, o.nulls_first), value.desc() if o.desc else value.asc()]
         if name is not None:  # ties: the member value ascending, NULLS LAST
-            expr_order += [source[c].isnull().cast("int8"), source[c].asc()]
+            expr_order += [source[c].isnull().ifelse(1, 0), source[c].asc()]
     expr = source.order_by(expr_order)
     if limit is not None or offset:
         expr = expr.limit(limit, offset=offset)

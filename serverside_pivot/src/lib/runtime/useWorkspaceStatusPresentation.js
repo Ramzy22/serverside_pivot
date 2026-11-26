@@ -1,6 +1,14 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { countActiveFilters } from '../hooks/usePivotNormalization';
+import { formatValue } from '../utils/helpers';
+
+/** @param {string} [selectionKey] @returns {string} */
+const selectionKeyColumnId = (selectionKey) => {
+  const key = String(selectionKey || '');
+  const separator = key.lastIndexOf(':');
+  return separator >= 0 ? key.slice(separator + 1) : '';
+};
 
 /**
  * Builds the status-bar model and its commands from named runtime inputs.
@@ -34,6 +42,8 @@ export function useWorkspaceStatusPresentation({
   propagationLogRef,
   propagationLogEpoch,
   requestVisibleViewportRefresh,
+  resolveColumnValueFormat,
+  numberGroupSeparator,
   rowEditStatusSummary,
   rowFields,
   rows,
@@ -53,9 +63,38 @@ export function useWorkspaceStatusPresentation({
   valConfigs,
   viewMode,
 }) {
+  // Selection statistics (sum, mean, …) read like the cells they summarise:
+  // when every numeric selected cell shares one column format, the stats use
+  // it; mixed formats fall back to a plain grouped number.
+  /** @type {any} */
+  const sharedSelectionFormat = useMemo(() => {
+    if (typeof resolveColumnValueFormat !== 'function') return null;
+    /** @type {Map<string, any>} */
+    const formatsBySignature = new Map();
+    for (const [selectionKey, value] of Object.entries(selectedCells || {})) {
+      if (!Number.isFinite(Number(value)) || value === null || value === '') continue;
+      const colId = selectionKeyColumnId(selectionKey);
+      if (!colId) continue;
+      const columnFormat = resolveColumnValueFormat(colId);
+      formatsBySignature.set(JSON.stringify(columnFormat), columnFormat);
+      if (formatsBySignature.size > 1) return null;
+    }
+    return formatsBySignature.size === 1 ? formatsBySignature.values().next().value : null;
+  }, [resolveColumnValueFormat, selectedCells]);
+  /** @type {(value: any, fallbackDecimals?: number) => string} */
+  const formatSelectionValue = useCallback((value, fallbackDecimals = 2) => {
+    if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '--';
+    if (sharedSelectionFormat) {
+      return formatValue(Number(value), sharedSelectionFormat.format, sharedSelectionFormat.decimalPlaces ?? fallbackDecimals, sharedSelectionFormat.groupSeparator, {
+        valueScale: sharedSelectionFormat.valueScale,
+        unitSuffix: sharedSelectionFormat.unitSuffix,
+      });
+    }
+    return formatValue(Number(value), null, fallbackDecimals, numberGroupSeparator);
+  }, [numberGroupSeparator, sharedSelectionFormat]);
   /** @type {any} */
   const statusAccessoryModel = useMemo(() => ({
-    selection: { selectedCells },
+    selection: { selectedCells, formatValue: formatSelectionValue },
     data: {
       viewMode,
       rowCount: statusRowCount,
@@ -95,7 +134,7 @@ export function useWorkspaceStatusPresentation({
       dockedPaneCount: chartCanvasPanes.filter(/** @param {any} [pane] @returns {any} */ pane => !pane.floating).length,
       floatingPaneCount: chartCanvasPanes.filter(/** @param {any} [pane] @returns {any} */ pane => pane.floating).length
     }
-  }), [chartCanvasPanes, colFields.length, columnAdvisory, comparisonValueState.activeCount, editValueDisplayMode, filters, isRequestPending, loadedRows.length, managedChartDefinitions.length, rowEditStatusSummary, rowFields.length, rows.length, serverSide, sorting, statusRowCount, totalCenterCols, transactionHistoryState.pending, transactionHistoryState.redoCount, transactionHistoryState.undoCount, propagationLogEpoch, valConfigs.length, viewMode, selectedCells]);
+  }), [chartCanvasPanes, colFields.length, columnAdvisory, comparisonValueState.activeCount, editValueDisplayMode, filters, isRequestPending, loadedRows.length, managedChartDefinitions.length, rowEditStatusSummary, rowFields.length, rows.length, serverSide, sorting, statusRowCount, totalCenterCols, transactionHistoryState.pending, transactionHistoryState.redoCount, transactionHistoryState.undoCount, propagationLogEpoch, valConfigs.length, viewMode, selectedCells, formatSelectionValue]);
   /** @type {any} */
   const statusAccessoryActions = useMemo(() => ({
     canClearSelection: Object.keys(selectedCells || {}).length > 0,

@@ -12,10 +12,15 @@ const Notification = ({ message, type, onClose }) => {
                 : 'var(--sp-primary, #4F46E5)';
     return (
         <div role="status" aria-live="polite" className="sp-toast-surface" style={{
+            // Centred with auto margins rather than a transform, so the enter
+            // animation owns transform without having to repeat the centring.
             position: 'fixed',
             bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
+            left: 0,
+            right: 0,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+            width: 'max-content',
             padding: '10px 14px 10px 16px',
             borderRadius: 'var(--sp-radius-pill, 999px)',
             color: 'var(--sp-text, #f8fafc)',

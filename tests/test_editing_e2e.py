@@ -718,20 +718,34 @@ def _toggle_hierarchy_row(driver, row_id):
 
 def _click_row_edit_action(driver, row_id, action, timeout=20):
     selector = f'button[data-row-edit-action="{action}"][data-row-edit-rowid="{row_id}"]'
-    button = WebDriverWait(driver, timeout).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-    )
-    button.click()
-    return button
+
+    def _click_current(current_driver):
+        try:
+            button = EC.element_to_be_clickable((By.CSS_SELECTOR, selector))(current_driver)
+            if not button:
+                return False
+            button.click()
+            return button
+        except StaleElementReferenceException:
+            return False
+
+    return WebDriverWait(driver, timeout).until(_click_current)
 
 
 def _click_button_by_text(driver, text, timeout=20):
     xpath = f'//button[normalize-space()="{text}"]'
-    button = WebDriverWait(driver, timeout).until(
-        EC.element_to_be_clickable((By.XPATH, xpath))
-    )
-    button.click()
-    return button
+
+    def _click_current(current_driver):
+        try:
+            button = EC.element_to_be_clickable((By.XPATH, xpath))(current_driver)
+            if not button:
+                return False
+            button.click()
+            return button
+        except StaleElementReferenceException:
+            return False
+
+    return WebDriverWait(driver, timeout).until(_click_current)
 
 
 def _open_chart_pane(driver):

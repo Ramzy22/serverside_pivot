@@ -5,9 +5,15 @@ import { useDismiss, OverlayPortal } from '../../hooks/useDismiss';
 const OPEN_DELAY = 80;
 const CLOSE_DELAY = 220;
 
-// Renders the items for either the root menu or a sub-menu
+const ICON_GUTTER_PX = 16;
+
+// Renders the items for either the root menu or a sub-menu. When any item in
+// the menu carries an icon, every item reserves the same icon gutter so all
+// labels start on one vertical line.
 /** @param {any} p0 @returns {any} */
-const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyDown }) => (
+const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyDown }) => {
+    const reserveIconGutter = actions.some(/** @param {any} [action] @returns {boolean} */ (action) => Boolean(action && action !== 'separator' && action.icon));
+    return (
     <>
         {actions.map(/** @param {any} [action] @param {any} [i] @returns {any} */ (action, i) => {
             if (action === 'separator') {
@@ -64,12 +70,12 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                         userSelect: 'none',
                     }}
                 >
-                    {action.icon && (
-                        <span style={{ color: theme?.textSec || 'var(--sp-text-sec, #64748b)', display: 'flex', flexShrink: 0 }}>
-                            {action.icon}
+                    {(action.icon || reserveIconGutter) && (
+                        <span aria-hidden="true" style={{ color: theme?.textSec || 'var(--sp-text-sec, #64748b)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: ICON_GUTTER_PX, flexShrink: 0 }}>
+                            {action.icon || null}
                         </span>
                     )}
-                    <span style={{ flex: 1 }}>{action.label}</span>
+                    <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{action.label}</span>
                     {hasChildren && (
                         <span aria-hidden="true" style={{ color: theme?.textSec || 'var(--sp-text-sec, #64748b)', display: 'inline-flex', alignItems: 'center', marginLeft: '4px' }}>
                             {Icons && Icons.ChevronRight ? <Icons.ChevronRight /> : '>'}
@@ -79,7 +85,8 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
             );
         })}
     </>
-);
+    );
+};
 
 /** @param {any} [theme] @returns {any} */
 const menuStyle = (theme) => ({
@@ -91,8 +98,9 @@ const menuStyle = (theme) => ({
     padding: '5px',
     borderRadius: 'var(--sp-radius-lg, 10px)',
     fontSize: 'var(--sp-fs-base, 13px)',
-    minWidth: '190px',
-    maxWidth: '300px',
+    minWidth: '200px',
+    // Labels stay on one line; the menu widens to fit them, up to the viewport.
+    maxWidth: 'min(380px, calc(100vw - 16px))',
     maxHeight: 'calc(100vh - 16px)',
     overflowY: 'auto',
     pointerEvents: 'auto',
@@ -193,14 +201,18 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
     useLayoutEffect(() => {
         /** @returns {any} */
         const clamp = () => {
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
+            // clientWidth/Height exclude the page scrollbars, so the menu is
+            // clamped to the area it can actually be seen in.
+            const vw = document.documentElement.clientWidth || window.innerWidth;
+            const vh = document.documentElement.clientHeight || window.innerHeight;
             /** @type {any} */
-            const rect = menuRef.current?.getBoundingClientRect();
+            const menuEl = menuRef.current;
+            // offsetWidth/Height are layout sizes, unaffected by the enter
+            // animation's scale transform (getBoundingClientRect is not).
             /** @type {any} */
-            const mw = rect?.width || 210;
+            const mw = (menuEl && menuEl.offsetWidth) || 210;
             /** @type {any} */
-            const mh = Math.min(rect?.height || actions.length * 32 + 20, vh - 16);
+            const mh = Math.min((menuEl && menuEl.offsetHeight) || actions.length * 32 + 20, vh - 16);
             const pad = 8;
             /** @type {any} */
             const ax = Math.max(pad, Math.min(x, vw - mw - pad));
@@ -224,8 +236,8 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
         if (!anchorRect || openIdx === null) return;
         const el = submenuRef.current;
         if (!el) return;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
+        const vw = document.documentElement.clientWidth || window.innerWidth;
+        const vh = document.documentElement.clientHeight || window.innerHeight;
         /** @type {any} */
         const mw = el.offsetWidth || 200;
         /** @type {any} */

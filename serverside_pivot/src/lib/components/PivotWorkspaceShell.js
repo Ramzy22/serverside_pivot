@@ -40,6 +40,75 @@ const PivotChartPanel = (props) => (
     </React.Suspense>
 );
 
+const COMPACT_LAYOUT_MAX_WIDTH_PX = 720;
+
+/**
+ * The zoomed workspace frame: toolbar, sidebar and canvas, plus the overlays
+ * passed as children (inside the error boundary).
+ *
+ * It owns the compact layout. Below COMPACT_LAYOUT_MAX_WIDTH_PX the field
+ * sidebar can't share the row with the grid, so it becomes an overlay drawer
+ * and the grid keeps the full width. The drawer has its own open state, so
+ * narrowing the window never rewrites the saved view's sidebarOpen.
+ * @param {any} props @returns {any}
+ */
+function PivotWorkspaceFrame({ zoomLevel, showToolbar, sidebarEnabled, sidebarOpen, controls, canvas, fontFamily, fontSize, children }) {
+    const frameRef = React.useRef(/** @type {HTMLDivElement | null} */ (null));
+    const [compactLayout, setCompactLayout] = React.useState(false);
+    const [compactDrawerOpen, setCompactDrawerOpen] = React.useState(false);
+    React.useEffect(() => {
+        const frameEl = frameRef.current;
+        if (!frameEl || typeof ResizeObserver !== 'function') return undefined;
+        const observer = new ResizeObserver((entries) => {
+            const entry = entries && entries[0];
+            const width = entry && entry.contentRect ? entry.contentRect.width : frameEl.clientWidth;
+            if (width > 0) setCompactLayout(width < COMPACT_LAYOUT_MAX_WIDTH_PX);
+        });
+        observer.observe(frameEl);
+        return () => observer.disconnect();
+    }, []);
+    React.useEffect(() => {
+        setCompactDrawerOpen(false);
+    }, [compactLayout]);
+    const toolbar = controls && controls.toolbar;
+    const toolbarControls = compactLayout && toolbar
+        ? { ...toolbar, sidebarOpen: compactDrawerOpen, setSidebarOpen: setCompactDrawerOpen }
+        : toolbar;
+    const sidebarVisible = Boolean(sidebarEnabled) && (compactLayout ? compactDrawerOpen : Boolean(sidebarOpen));
+    const sidebar = controls && controls.sidebar;
+    return (
+        <div
+            ref={frameRef}
+            data-compact-layout={compactLayout ? 'true' : undefined}
+            style={{display:'flex', flexDirection:'column', flex:1, overflow:'hidden', zoom: zoomLevel / 100}}
+        >
+            {/* The toolbar stays outside PivotErrorBoundary so its controls
+                remain usable even if the table renderer hits an error state. */}
+            {showToolbar && <PivotWorkspaceToolbar toolbar={toolbarControls} />}
+            <PivotErrorBoundary>
+                <div style={{display:'flex', flex:1, overflow:'hidden', position: 'relative', fontFamily, fontSize}}>
+                    {sidebarVisible && !compactLayout && (
+                        <PivotWorkspaceSidebar sidebar={sidebar} />
+                    )}
+                    <PivotWorkspaceCanvas canvas={canvas} />
+                    {sidebarVisible && compactLayout && (
+                        <>
+                            <div
+                                aria-hidden="true"
+                                className="sp-compact-drawer-scrim"
+                                onClick={() => setCompactDrawerOpen(false)}
+                            />
+                            <div className="sp-compact-drawer" data-pivot-compact-drawer="true">
+                                <PivotWorkspaceSidebar sidebar={sidebar} />
+                            </div>
+                        </>
+                    )}
+                </div>
+                {children}
+            </PivotErrorBoundary>
+        </div>
+    );
+}
 const GOOGLE_FONTS_IMPORT_STYLE = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');\n`;
 const baseAnimationStyles = `
 [data-pivot-workspace-root], [data-pivot-workspace-root] *, [data-pivot-workspace-root] *::before, [data-pivot-workspace-root] *::after { box-sizing: border-box; }
@@ -48,39 +117,104 @@ const baseAnimationStyles = `
     background-image: linear-gradient(var(--sp-row-hover-tint, rgba(15,23,42,0.032)), var(--sp-row-hover-tint, rgba(15,23,42,0.032)));
 }
 [data-pivot-workspace-root] [data-pivot-scroll-container] { overscroll-behavior: contain; }
-[data-pivot-workspace-root][data-header-controls="hover"] .sp-header-control {
+[data-pivot-workspace-root] .sp-compact-drawer-scrim {
+    position: absolute;
+    inset: 0;
+    /* Above the grid's own layers (sticky headers, pinned rows, loaders),
+       below workspace dialogs and menus (10000+). */
+    z-index: 900;
+    background: rgba(15, 23, 42, 0.36);
+    animation: pivot-backdrop-enter var(--sp-dur-fast, 140ms) ease-out both;
+}
+[data-pivot-workspace-root] .sp-compact-drawer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 901;
+    display: flex;
+    max-width: calc(100% - 48px);
+    overflow: auto;
+    background: var(--sp-surface-bg, inherit);
+    box-shadow: var(--sp-shadow-md, 0 18px 48px rgba(0, 0, 0, 0.32));
+    animation: pivot-drawer-enter var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+[data-pivot-workspace-root][data-header-controls="never"] .sp-header-control,
+[data-pivot-workspace-root][data-header-controls="never"] .sp-header-drag-handle { display: none !important; }
+/* Header controls reveal with opacity/transform only: nothing in the header
+   changes size on hover, so labels never reflow or re-truncate. */
+[data-pivot-workspace-root] .sp-header-drag-handle {
+    position: absolute;
+    left: 2px;
+    top: 50%;
+    font-size: 11px;
+    line-height: 1;
+    cursor: grab;
     opacity: 0;
-    max-width: 0;
-    overflow: hidden;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    transform: translateY(-50%);
     pointer-events: none;
-    transform: scale(0.88);
-    transition: opacity 150ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), max-width 150ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), transform 150ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
+    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
 }
-[data-pivot-workspace-root][data-header-controls="hover"] [role="columnheader"]:not(:hover):not(:focus-within) .sp-header-control.sp-header-badge {
-    border-left-width: 0 !important;
-    border-right-width: 0 !important;
+[data-pivot-workspace-root] [role="columnheader"]:hover > .sp-header-drag-handle,
+[data-pivot-workspace-root] [role="columnheader"]:focus-within > .sp-header-drag-handle {
+    opacity: 0.45;
 }
-[data-pivot-workspace-root][data-header-controls="hover"] [role="columnheader"]:hover .sp-header-control,
-[data-pivot-workspace-root][data-header-controls="hover"] [role="columnheader"]:focus-within .sp-header-control {
+[data-pivot-workspace-root] .sp-header-actions {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+    background: inherit;
+    z-index: 2;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), transform var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
+}
+[data-pivot-workspace-root] .sp-header-actions[data-side="right"] { right: 1px; transform: translateX(4px); }
+[data-pivot-workspace-root] .sp-header-actions[data-side="left"] { left: 1px; transform: translateX(-4px); }
+/* Soft edge so the cluster fades over the label instead of clipping it. */
+[data-pivot-workspace-root] .sp-header-actions::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 16px;
+    background: inherit;
+    pointer-events: none;
+}
+[data-pivot-workspace-root] .sp-header-actions[data-side="right"]::before {
+    right: 100%;
+    -webkit-mask-image: linear-gradient(to left, #000, transparent);
+    mask-image: linear-gradient(to left, #000, transparent);
+}
+[data-pivot-workspace-root] .sp-header-actions[data-side="left"]::before {
+    left: 100%;
+    -webkit-mask-image: linear-gradient(to right, #000, transparent);
+    mask-image: linear-gradient(to right, #000, transparent);
+}
+[data-pivot-workspace-root] [role="columnheader"]:hover > .sp-header-actions,
+[data-pivot-workspace-root] [role="columnheader"]:focus-within > .sp-header-actions {
     opacity: 1;
-    max-width: 32px;
-    padding-left: 2px !important;
-    padding-right: 2px !important;
+    transform: none;
     pointer-events: auto;
-    transform: scale(1);
 }
-[data-pivot-workspace-root][data-header-controls="never"] .sp-header-control { display: none !important; }
 [data-pivot-workspace-root] .sp-header-compact-actions {
     position: absolute;
     inset: auto 1px 1px;
     display: flex;
     align-items: center;
     justify-content: center;
+    opacity: 0;
     pointer-events: none;
+    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
+}
+[data-pivot-workspace-root] [role="columnheader"]:hover > .sp-header-compact-actions,
+[data-pivot-workspace-root] [role="columnheader"]:focus-within > .sp-header-compact-actions {
+    opacity: 1;
+    pointer-events: auto;
 }
 [data-pivot-workspace-root] .sp-header-compact-actions > .sp-header-control {
     flex-shrink: 1 !important;
@@ -111,7 +245,7 @@ const baseAnimationStyles = `
     box-shadow: 0 2px 10px var(--sp-focus-ring, rgba(37,99,235,0.18)) !important;
 }
 [data-pivot-workspace-root] [data-sidebar-field-chip] {
-    transition: transform 140ms var(--sp-ease-apple, ease), box-shadow 140ms var(--sp-ease-apple, ease), border-color 140ms var(--sp-ease-apple, ease), background-color 140ms var(--sp-ease-apple, ease);
+    transition: transform var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), box-shadow var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), border-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), background-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease);
 }
 [data-pivot-workspace-root] [data-sidebar-field-chip]:hover {
     transform: translateY(-0.5px);
@@ -122,7 +256,7 @@ const baseAnimationStyles = `
     transform: scale(0.985);
 }
 [data-pivot-workspace-root] .sp-search-shell {
-    transition: border-color 150ms var(--sp-ease-apple, ease), box-shadow 150ms var(--sp-ease-apple, ease), background-color 150ms var(--sp-ease-apple, ease);
+    transition: border-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), box-shadow var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), background-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease);
 }
 [data-pivot-workspace-root] .sp-search-shell:focus-within {
     border-color: var(--sp-primary) !important;
@@ -130,7 +264,7 @@ const baseAnimationStyles = `
 }
 [data-pivot-workspace-root] .sp-search-shell input:focus-visible { outline: none !important; }
 [data-pivot-workspace-root] .sp-resize-pill {
-    transition: background-color 140ms var(--sp-ease-apple, ease), opacity 140ms var(--sp-ease-apple, ease), box-shadow 140ms var(--sp-ease-apple, ease);
+    transition: background-color var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease), box-shadow var(--sp-dur-fast, 140ms) var(--sp-ease-apple, ease);
 }
 [data-pivot-workspace-root] .sp-resize-handle:hover .sp-resize-pill,
 [data-pivot-workspace-root] .sp-resize-handle[data-resizing="true"] .sp-resize-pill {
@@ -140,7 +274,7 @@ const baseAnimationStyles = `
 }
 [data-pivot-workspace-root] .sp-expander-btn {
     border-radius: 5px;
-    transition: background-color 120ms ease, transform 110ms var(--sp-ease-apple, ease);
+    transition: background-color var(--sp-dur-instant, 100ms) ease, transform var(--sp-dur-instant, 100ms) var(--sp-ease-apple, ease);
 }
 [data-pivot-workspace-root] .sp-expander-btn:focus:not(:focus-visible) {
     outline: none;
@@ -149,17 +283,17 @@ const baseAnimationStyles = `
 [data-pivot-workspace-root] .sp-expander-btn:hover { background: var(--sp-hover); }
 [data-pivot-workspace-root] .sp-expander-btn:active { transform: scale(0.92); }
 [data-pivot-workspace-root] .sp-tab {
-    transition: color 140ms ease, border-color 180ms var(--sp-ease-apple, ease), background-color 140ms ease;
+    transition: color var(--sp-dur-fast, 140ms) ease, border-color var(--sp-dur-base, 200ms) var(--sp-ease-apple, ease), background-color var(--sp-dur-fast, 140ms) ease;
 }
 [data-pivot-workspace-root] .sp-tab:hover { color: var(--sp-text) !important; }
 [data-pivot-workspace-root] .sp-menu-surface {
-    animation: pivot-menu-enter 140ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    animation: pivot-menu-enter var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
     transform-origin: top left;
 }
 [data-pivot-workspace-root] .sp-menu-item {
     border-radius: 6px;
     padding: 7px 10px;
-    transition: background-color 100ms ease, color 100ms ease;
+    transition: background-color var(--sp-dur-instant, 100ms) ease, color var(--sp-dur-instant, 100ms) ease;
 }
 [data-pivot-workspace-root] .sp-menu-item:not([aria-disabled="true"]):hover,
 [data-pivot-workspace-root] .sp-menu-item:not([aria-disabled="true"]):focus-visible {
@@ -167,13 +301,13 @@ const baseAnimationStyles = `
     outline: none;
 }
 [data-pivot-workspace-root] .sp-dialog-backdrop {
-    animation: pivot-backdrop-enter 160ms ease-out both;
+    animation: pivot-backdrop-enter var(--sp-dur-fast, 140ms) ease-out both;
 }
 [data-pivot-workspace-root] .sp-dialog-surface {
-    animation: pivot-surface-enter 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    animation: pivot-surface-enter var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
 [data-pivot-workspace-root] .sp-toast-surface {
-    animation: pivot-toast-enter 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    animation: pivot-toast-enter var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
 [data-pivot-workspace-root] button:focus-visible,
 [data-pivot-workspace-root] [role="button"]:focus-visible,
@@ -190,6 +324,10 @@ const baseAnimationStyles = `
     from { opacity: 0; transform: translateY(6px) scale(0.985); }
     to { opacity: 1; transform: none; }
 }
+@keyframes pivot-drawer-enter {
+    from { opacity: 0; transform: translateX(-12px); }
+    to { opacity: 1; transform: none; }
+}
 @keyframes pivot-backdrop-enter {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -199,8 +337,12 @@ const baseAnimationStyles = `
     to { opacity: 1; transform: none; }
 }
 @keyframes pivot-toast-enter {
-    from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.97); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+    from { opacity: 0; transform: translateY(10px) scale(0.97); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes pivot-bar-slide {
+    0% { transform: translateX(-150%); }
+    100% { transform: translateX(350%); }
 }
 @keyframes pivot-row-loader-enter {
     from { opacity: 0; transform: translateY(-6px); }
@@ -274,7 +416,7 @@ const baseAnimationStyles = `
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: content-box;
-    transition: background-color 150ms ease;
+    transition: background-color var(--sp-dur-fast, 140ms) ease;
 }
 [data-pivot-workspace-root] *::-webkit-scrollbar-thumb:hover {
     background-color: var(--sp-scrollbar-thumb-hover, rgba(148,163,184,0.52));
@@ -283,7 +425,7 @@ const baseAnimationStyles = `
     display: grid;
     grid-template-rows: 0fr;
     opacity: 0;
-    transition: grid-template-rows 220ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), opacity 180ms ease;
+    transition: grid-template-rows var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), opacity var(--sp-dur-base, 200ms) ease;
 }
 [data-pivot-workspace-root] .sp-disclosure-grid[data-expanded="true"] {
     grid-template-rows: 1fr;
@@ -297,7 +439,7 @@ const baseAnimationStyles = `
     opacity: 0.55;
     border-radius: 5px;
     padding: 2px;
-    transition: opacity 130ms ease, background-color 130ms ease, color 130ms ease, transform 110ms var(--sp-ease-apple, ease);
+    transition: opacity var(--sp-dur-fast, 140ms) ease, background-color var(--sp-dur-fast, 140ms) ease, color var(--sp-dur-fast, 140ms) ease, transform var(--sp-dur-instant, 100ms) var(--sp-ease-apple, ease);
 }
 [data-pivot-workspace-root] .sp-chip-remove:hover {
     opacity: 1 !important;
@@ -309,29 +451,36 @@ const baseAnimationStyles = `
 }
 [data-pivot-workspace-root] .sp-drop-line {
     box-shadow: 0 0 10px var(--sp-focus-ring, rgba(59,130,246,0.45));
-    animation: pivot-backdrop-enter 120ms ease both;
+    animation: pivot-backdrop-enter var(--sp-dur-instant, 100ms) ease both;
 }
 [data-pivot-workspace-root] .sp-toolbar-drawer {
-    animation: pivot-menu-enter 160ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    animation: pivot-menu-enter var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
 [data-pivot-workspace-root] .sp-drawer-slide {
-    animation: pivot-surface-enter 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    animation: pivot-surface-enter var(--sp-dur-base, 200ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
+/* Column-tree pin buttons overlay the row's right edge and fade in; the label
+   keeps its width, so hovering a row never reflows it. */
+[data-pivot-workspace-root] .sp-col-tree-row { position: relative; }
 [data-pivot-workspace-root] .sp-col-pin-controls {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
     display: inline-flex;
     align-items: center;
     gap: 1px;
-    flex-shrink: 0;
-    max-width: 0;
+    padding: 0 6px 0 10px;
+    background: inherit;
     opacity: 0;
-    overflow: hidden;
+    transform: translateX(4px);
     pointer-events: none;
-    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), max-width var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
+    transition: opacity var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1)), transform var(--sp-dur-fast, 140ms) var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1));
 }
 [data-pivot-workspace-root] .sp-col-tree-row:hover .sp-col-pin-controls,
 [data-pivot-workspace-root] .sp-col-tree-row:focus-within .sp-col-pin-controls {
-    max-width: 68px;
     opacity: 1;
+    transform: none;
     pointer-events: auto;
 }
 [data-pivot-workspace-root] [data-pivot-scroll-container][data-scrolled-y="true"] [data-pivot-sticky-header="true"] {
@@ -386,12 +535,11 @@ export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelA
     const safeSubtleBg = theme?.headerSubtleBg || theme?.hover || 'rgba(128,128,128,0.12)';
     const safeText = theme?.text || 'inherit';
     return (
-        <div role="dialog" aria-label="Export progress" aria-modal="true" data-export-phase={phase || 'running'} className="sp-dialog-backdrop" style={{position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', zIndex: 10003, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16}}>
+        <div role="dialog" aria-label="Export progress" aria-modal="true" data-export-phase={phase || 'running'} className="sp-dialog-backdrop" style={{position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.44)', zIndex: 10003, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16}}>
             <div className="sp-dialog-surface" style={{background: safeBg, color: safeText, borderRadius: 14, padding: '28px 34px 24px', boxShadow: theme?.shadowMd || '0 18px 48px rgba(0,0,0,0.32)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, minWidth: 300, maxWidth: '92vw', border: `1px solid ${safeBorder}`}}>
                 <span role="status" aria-live="polite" style={{fontSize: 14, fontWeight: 600}}>{isCopying ? 'Copying to clipboard…' : labels[phase] || 'Exporting all rows…'}</span>
                 {!terminal && <div role="progressbar" aria-label="Export rows" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : percent}
                     style={{width: '100%', height: 6, background: safeBorder, borderRadius: 999, overflow: 'hidden', position: 'relative'}}>
-                    <style>{`@keyframes pivot-bar-slide{0%{transform:translateX(-150%)}100%{transform:translateX(350%)}}`}</style>
                     <div style={{position: 'absolute', left: 0, top: 0, height: '100%', width: percent === null ? '40%' : '100%', borderRadius: 999,
                         transform: percent === null ? undefined : `scaleX(${Math.max(0, Math.min(100, Number(percent) || 0)) / 100})`,
                         transformOrigin: 'left center',
@@ -434,14 +582,17 @@ export function PivotWorkspaceShell({ workspace }) {
         showFloatingFilters, showRowNumbers, showRowTotals, showSubtotals, sidebarOpen,
         sparklineDataModal, srOnly, stickyHeaders, style, styles, table, theme, themeCssVars, uiConfig,
         updateChartCanvasPane, viewMode, visibleLeafColumns, zoomLevel,
-        loadWebFonts = true, immersiveExitPosition = 'top-right',
+        loadWebFonts = false, immersiveExitPosition = 'top-right',
         effectiveFontFamily, effectiveFontSize,
         rowHeight, headerHeight,
         setColFields, setValConfigs,
     } = model;
 
+    // Web fonts are opt-in: a component library must not make third-party
+    // requests (privacy, CSP, offline) unless the host asks for them. Without
+    // them the font stacks fall back to system UI fonts.
     /** @type {any} */
-    const shouldLoadWebFonts = loadWebFonts !== false && !(theme && theme.fontFamily);
+    const shouldLoadWebFonts = loadWebFonts === true && !(theme && theme.fontFamily);
     /** @type {any} */
     const computedAnimationStyles = (shouldLoadWebFonts ? GOOGLE_FONTS_IMPORT_STYLE : '') + baseAnimationStyles;
     /** @type {any} */
@@ -527,17 +678,16 @@ return (
                 setEditValueDisplayMode={setEditValueDisplayMode}
                 hasComparedValues={comparisonValueState.activeCount > 0}
             >
-            {/* PivotAppBar stays outside PivotErrorBoundary so toolbar controls
-                remain usable even if the table renderer hits an error state. */}
-            <div style={{display:'flex', flexDirection:'column', flex:1, overflow:'hidden', zoom: zoomLevel / 100}}>
-            {!immersiveMode && uiConfig.showToolbar && <PivotWorkspaceToolbar toolbar={workspace.controls.toolbar} />}
-        <PivotErrorBoundary>
-            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: resolvedFontFamily, fontSize: resolvedFontSize}}>
-                {!immersiveMode && uiConfig.showSidebar && sidebarOpen && (
-                    <PivotWorkspaceSidebar sidebar={workspace.controls.sidebar} />
-                )}
-                <PivotWorkspaceCanvas canvas={workspace.canvas} />
-            </div>
+            <PivotWorkspaceFrame
+                zoomLevel={zoomLevel}
+                showToolbar={!immersiveMode && uiConfig.showToolbar}
+                sidebarEnabled={!immersiveMode && uiConfig.showSidebar}
+                sidebarOpen={sidebarOpen}
+                controls={workspace.controls}
+                canvas={workspace.canvas}
+                fontFamily={resolvedFontFamily}
+                fontSize={resolvedFontSize}
+            >
             {contextMenu && (
                 <React.Suspense fallback={null}>
                     <LazyContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />
@@ -551,7 +701,7 @@ return (
                 /** @type {Record<string, any>} */
                 const btnBase = { padding: '7px 16px', borderRadius: theme.radiusSm || '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' };
                 return (
-                    <div className="sp-dialog-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', zIndex: 10050, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="sp-dialog-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)', zIndex: 10050, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <div className="sp-dialog-surface" style={{ background: theme.surfaceBg || theme.background, border: `1px solid ${theme.border}`, borderRadius: theme.radius || '16px', boxShadow: theme.shadowMd || '0 16px 48px rgba(0,0,0,0.32)', width: '86vw', maxWidth: '1160px', height: '80vh', maxHeight: '840px', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: fontFamily }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: `1px solid ${theme.border}`, flexShrink: 0, background: theme.headerBg || theme.surfaceBg || theme.background }}>
                                 <span style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>New Chart Pane</span>
@@ -637,7 +787,7 @@ return (
                 /** @type {Record<string, any>} */
                 const btnBase = { padding:'6px 12px', borderRadius:'6px', border:'none', cursor:'pointer', fontSize:'12px', fontWeight:600, transition:'opacity .15s' };
                 return (
-                    <div className="sp-dialog-backdrop" style={{ position:'fixed', inset:0, background:'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', zIndex:10002, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <div className="sp-dialog-backdrop" style={{ position:'fixed', inset:0, background:'rgba(15, 23, 42, 0.45)', zIndex:10002, display:'flex', alignItems:'center', justifyContent:'center' }}>
                         <div className="sp-dialog-surface" style={{ background:theme.surfaceBg || theme.background, border: `1px solid ${theme.border}`, color:theme.text, borderRadius:'14px', padding:'24px', boxShadow: theme.shadowMd || '0 12px 40px rgba(0,0,0,0.3)', width:'440px', maxWidth:'94vw', maxHeight:'85vh', display:'flex', flexDirection:'column', gap:'14px', fontFamily: resolvedFontFamily || "ui-sans-serif,system-ui,sans-serif" }}>
                             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                                 <span style={{ fontWeight:700, fontSize:'15px' }}>{mode === 'copy' ? 'Copy Table — Large Dataset' : 'Export — Large Dataset'}</span>
@@ -727,7 +877,7 @@ return (
             {sparklineDataModal && (
                 <div
                     className="sp-dialog-backdrop"
-                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     onClick={() => setSparklineDataModal(null)}
                 >
                     <div
@@ -812,8 +962,7 @@ return (
                     </div>
                 </div>
             )}
-        </PivotErrorBoundary>
-            </div>{/* end zoom wrapper */}
+            </PivotWorkspaceFrame>
             </PivotValueDisplayProvider>
             </PivotConfigProvider>
             </PivotThemeProvider>

@@ -7,11 +7,7 @@ the latest release before reporting a suspected issue where possible.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately to the repository maintainer or your
-organization’s designated security contact. Include the affected version,
-reproduction steps, impact, and any relevant logs with credentials and
-customer data removed. Do not open a public issue for a suspected active
-authorization bypass.
+Please report vulnerabilities privately using [GitHub Private Vulnerability Reporting](https://github.com/Ramzy22/serverside_pivot/security/advisories/new), or by emailing **ramzyelawady@gmail.com** if GitHub Advisories is unavailable. Include the affected version, reproduction steps, impact, and any relevant logs with credentials and customer data removed. Do not open a public issue for a suspected active authorization bypass.
 
 The maintainer will acknowledge reports, assess severity, coordinate a fix,
 and agree on disclosure timing with the reporter. Deployment-specific concerns

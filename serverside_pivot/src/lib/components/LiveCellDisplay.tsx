@@ -2,7 +2,8 @@
  * Granular Per-Cell Reactive Live & Diff Renderer (Component 6).
  *
  * Subscribes ONLY to its own `(rowKey, colId)` entry inside `ViewportSubscriptionStore`:
- * - Triggers GPU-composited `Element.animate()` green/red tick flashes with ZERO React timers.
+ * - Triggers compositor-only tick flashes (an overlay's opacity via `Element.animate()`, ZERO React timers)
+ *   with a ▲/▼ glyph so the direction is never conveyed by colour alone.
  * - Renders 4-way Diff Display (`Value`, `Δ`, `%Δ` or `pp`, `Split`) with tabular-nums.
  * - Renders `NEW` / `REMOVED` row badges on hierarchy cells & `softStale` syncing indicator.
  * - Renders an institutional **PnL Explain & 30-Point Rolling Sparkline** popover on hover.
@@ -156,6 +157,8 @@ export const LiveCellDisplay: React.FC<LiveCellDisplayProps> = React.memo(({
     );
 
     const hostRef = useRef<HTMLSpanElement | null>(null);
+    const flashRef = useRef<HTMLSpanElement | null>(null);
+    const tickGlyphRef = useRef<HTMLSpanElement | null>(null);
     const lastAnimatedSeqRef = useRef<number>(meta ? meta.tickSeq : 0);
     const [popoverAnchor, setPopoverAnchor] = useState<{ x: number; y: number } | null>(null);
     const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -182,30 +185,40 @@ export const LiveCellDisplay: React.FC<LiveCellDisplayProps> = React.memo(({
     const status = store.getStatus();
     const displayMode: DiffDisplayMode = status.diffDisplayMode;
 
-    // GPU-composited Element.animate() directional flash — zero React timers!
+    // Directional tick flash, zero React timers. Only opacity animates (on a
+    // tinted overlay and a ▲/▼ glyph), so the flash stays on the compositor
+    // instead of repainting the cell background every frame.
     useEffect(() => {
         if (!meta || isHierarchy) return;
         if (meta.tickSeq <= lastAnimatedSeqRef.current) return;
         lastAnimatedSeqRef.current = meta.tickSeq;
         if (!status.flashEnabled || !meta.tickDir || prefersReducedMotion()) return;
-        const el = hostRef.current;
-        if (!el || typeof el.animate !== 'function') return;
+        const overlay = flashRef.current;
+        const glyph = tickGlyphRef.current;
+        if (!overlay || typeof overlay.animate !== 'function') return;
 
-        const flashColor = meta.tickDir === 'up'
+        const isUp = meta.tickDir === 'up';
+        const flashColor = isUp
             ? (isDark ? 'rgba(16, 185, 129, 0.34)' : 'rgba(16, 185, 129, 0.24)')
             : (isDark ? 'rgba(244, 63, 94, 0.34)' : 'rgba(239, 68, 68, 0.22)');
+        const duration = Math.max(150, status.flashDurationMs || 550);
 
         try {
-            el.animate(
-                [
-                    { backgroundColor: flashColor },
-                    { backgroundColor: 'transparent' },
-                ],
-                {
-                    duration: Math.max(150, status.flashDurationMs || 550),
-                    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-                },
+            overlay.style.backgroundColor = flashColor;
+            overlay.animate(
+                [{ opacity: 1 }, { opacity: 0 }],
+                { duration, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
             );
+            if (glyph && typeof glyph.animate === 'function') {
+                glyph.textContent = isUp ? '▲' : '▼';
+                glyph.style.color = isUp
+                    ? (isDark ? '#34d399' : '#059669')
+                    : (isDark ? '#fb7185' : '#dc2626');
+                glyph.animate(
+                    [{ opacity: 1 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }],
+                    { duration: duration + 250, easing: 'ease-out' },
+                );
+            }
         } catch {
             // Non-fatal in JSDOM / older webviews
         }
@@ -513,13 +526,26 @@ export const LiveCellDisplay: React.FC<LiveCellDisplayProps> = React.memo(({
                 alignItems: 'center',
                 justifyContent: 'flex-end',
                 width: '100%',
+                position: 'relative',
                 borderRadius: '3px',
                 padding: '1px 2px',
                 textDecoration: rowLifecycle === 'removed' ? 'line-through' : undefined,
                 opacity: rowLifecycle === 'removed' ? 0.62 : 1,
             }}
         >
-            {primaryRendered}
+            <span
+                ref={flashRef}
+                aria-hidden="true"
+                data-live-flash="true"
+                style={{ position: 'absolute', inset: 0, borderRadius: '3px', opacity: 0, pointerEvents: 'none' }}
+            />
+            <span
+                ref={tickGlyphRef}
+                aria-hidden="true"
+                data-live-tick-glyph="true"
+                style={{ position: 'absolute', left: '2px', top: '50%', transform: 'translateY(-50%)', fontSize: '8px', lineHeight: 1, opacity: 0, pointerEvents: 'none' }}
+            />
+            <span style={{ position: 'relative', display: 'inline-flex', justifyContent: 'flex-end', maxWidth: '100%', minWidth: 0 }}>{primaryRendered}</span>
             {popoverNode && typeof document !== 'undefined' && document.body
                 ? ReactDOM.createPortal(popoverNode, document.body)
                 : popoverNode}

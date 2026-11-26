@@ -1019,8 +1019,6 @@ function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLab
                 inset: 0,
                 zIndex: 9999,
                 background: 'rgba(15, 23, 42, 0.38)',
-                backdropFilter: 'blur(6px)',
-                WebkitBackdropFilter: 'blur(6px)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

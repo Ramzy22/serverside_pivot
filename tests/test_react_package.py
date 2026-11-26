@@ -23,7 +23,8 @@ def test_react_package_export_has_esm_and_types():
     assert package["files"] == ["dist/react", "README.md"]
     assert "build:react" in package["scripts"]
     assert "react" in package["peerDependencies"]
-    assert "styled-components" in package["peerDependencies"]
+    assert "styled-components" not in package["peerDependencies"]
+    assert "styled-components" not in package.get("dependencies", {})
 
 
 def test_react_package_exports_themes_and_typescript_interfaces():

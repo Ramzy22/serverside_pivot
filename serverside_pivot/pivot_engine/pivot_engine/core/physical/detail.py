@@ -48,11 +48,11 @@ def lower_detail(query: DetailQuery, relation: Any) -> Tuple[Any, Any]:
     sorted_fields = set()
     for key in query.sort:
         col = table[key.field].abs() if key.absolute else table[key.field]
-        order += [col.isnull().cast("int8"), col.desc() if key.desc else col.asc()]
+        order += [col.isnull().ifelse(1, 0), col.desc() if key.desc else col.asc()]
         sorted_fields.add(key.field)
     for name in table.columns:  # total order: deterministic pages
         if name not in sorted_fields:
-            order += [table[name].isnull().cast("int8"), table[name].asc()]
+            order += [table[name].isnull().ifelse(1, 0), table[name].asc()]
     page = table.order_by(order)
     if query.window.limit is not None or query.window.offset:
         page = page.limit(query.window.limit, offset=query.window.offset)
@@ -67,7 +67,7 @@ def lower_distinct(query: DistinctQuery, relation: Any) -> Tuple[Any, Any]:
         col = table[query.column]
         table = table.filter(col.cast("string").lower().contains(query.search.lower()).fill_null(False))
     values = table.select(query.column).distinct()
-    page = values.order_by([values[query.column].isnull().cast("int8"), values[query.column].asc()])
+    page = values.order_by([values[query.column].isnull().ifelse(1, 0), values[query.column].asc()])
     if query.window.limit is not None or query.window.offset:
         page = page.limit(query.window.limit, offset=query.window.offset)
     return page, values.count()

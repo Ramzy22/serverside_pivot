@@ -244,6 +244,24 @@ export function useRuntimeClipboardExportPresentation({
     groupSeparator === 'thin_space' || groupSeparator === 'space' ? 'plain_space' : groupSeparator
   ), []);
 
+  /**
+   * The effective number format of a leaf column: column overrides first, then
+   * the matching value config, then the workspace defaults. One resolver feeds
+   * the grid-facing displays (status bar) and exports so they never disagree.
+   * @type {(columnId: string) => { format: any, decimalPlaces: any, groupSeparator: any, valueScale: any, unitSuffix: any }}
+   */
+  const resolveColumnValueFormat = useCallback(columnId => {
+    /** @type {any} */
+    const matchingValueConfig = Array.isArray(valConfigs) ? valConfigs.find(config => matchesSelectedColumnToValueConfig(columnId, config)) || null : null;
+    return {
+      format: Object.prototype.hasOwnProperty.call(columnFormatOverrides || {}, columnId) ? columnFormatOverrides[columnId] : matchingValueConfig && matchingValueConfig.format || defaultValueFormat || null,
+      decimalPlaces: columnDecimalOverrides && columnDecimalOverrides[columnId] !== undefined ? columnDecimalOverrides[columnId] : decimalPlaces,
+      groupSeparator: columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[columnId] !== undefined ? columnGroupSeparatorOverrides[columnId] : numberGroupSeparator,
+      valueScale: matchingValueConfig && matchingValueConfig.valueScale !== undefined ? matchingValueConfig.valueScale : valueScale,
+      unitSuffix: matchingValueConfig && matchingValueConfig.unitSuffix !== undefined ? matchingValueConfig.unitSuffix : unitSuffix,
+    };
+  }, [columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, decimalPlaces, defaultValueFormat, matchesSelectedColumnToValueConfig, numberGroupSeparator, unitSuffix, valConfigs, valueScale]);
+
   /** @type {(...args: any[]) => any} */
   const getExportCellDisplayValue = useCallback((rowLike, column, rowIndex, overrideValue = undefined, rawValues = false) => {
     if (!column) return '';
@@ -264,24 +282,14 @@ export function useRuntimeClipboardExportPresentation({
     if (rawValues && typeof displayedValue === 'number') return String(displayedValue);
     if (typeof displayedValue === 'number' && Number.isFinite(displayedValue)) {
       /** @type {any} */
-      const matchingValueConfig = Array.isArray(valConfigs) ? valConfigs.find(config => matchesSelectedColumnToValueConfig(column.id, config)) || null : null;
-      /** @type {any} */
-      const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[column.id] !== undefined ? columnDecimalOverrides[column.id] : decimalPlaces;
-      /** @type {any} */
-      const effectiveFormat = Object.prototype.hasOwnProperty.call(columnFormatOverrides || {}, column.id) ? columnFormatOverrides[column.id] : matchingValueConfig && matchingValueConfig.format || defaultValueFormat || null;
-      /** @type {any} */
-      const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[column.id] !== undefined ? columnGroupSeparatorOverrides[column.id] : numberGroupSeparator;
-      /** @type {any} */
-      const effectiveScale = matchingValueConfig && matchingValueConfig.valueScale !== undefined ? matchingValueConfig.valueScale : valueScale;
-      /** @type {any} */
-      const effectiveSuffix = matchingValueConfig && matchingValueConfig.unitSuffix !== undefined ? matchingValueConfig.unitSuffix : unitSuffix;
-      return formatValue(displayedValue, effectiveFormat, effectiveDecimalPlaces, getExportGroupSeparator(effectiveGroupSeparator), {
-        valueScale: effectiveScale,
-        unitSuffix: effectiveSuffix,
+      const columnFormat = resolveColumnValueFormat(column.id);
+      return formatValue(displayedValue, columnFormat.format, columnFormat.decimalPlaces, getExportGroupSeparator(columnFormat.groupSeparator), {
+        valueScale: columnFormat.valueScale,
+        unitSuffix: columnFormat.unitSuffix,
       });
     }
     return String(displayedValue);
-  }, [columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, decimalPlaces, defaultValueFormat, getExportGroupSeparator, getExportRawCellValue, getExportRowData, getExportRowId, matchesSelectedColumnToValueConfig, numberGroupSeparator, resolveDisplayedCellValue, unitSuffix, valConfigs, valueScale]);
+  }, [getExportGroupSeparator, getExportRawCellValue, getExportRowData, getExportRowId, resolveColumnValueFormat, resolveDisplayedCellValue]);
 
   /** @type {(...args: any[]) => any} */
   const getClipboardCellDisplayValue = useCallback((rowLike, column, rowIndex, overrideValue = undefined, rawValues = false) => {
@@ -608,6 +616,6 @@ export function useRuntimeClipboardExportPresentation({
     getCompleteServerExportColIds, getExportCellDisplayValue, getExportCellStyle,
     getExportColumns, getExportGroupSeparator, getExportHeaderLabel, getExportHeaderStyle,
     getExportRawCellValue, getExportRowData, getExportRowId, getInstantiatedExportColIds,
-    getServerExportColumnTarget, isExportableColumnId, triggerExportDownload,
+    getServerExportColumnTarget, isExportableColumnId, resolveColumnValueFormat, triggerExportDownload,
   };
 }

@@ -67,7 +67,8 @@ class PivotQueryExecutor:
         if cached is not None:
             return cached
         epoch = controller.core_epoch()  # before the read: a write during it voids the store
-        table = await run_core_read(controller, spec.table, lambda resolve: core_pivot_table(resolve, spec))
+        table = await run_core_read(controller, spec.table, lambda resolve: core_pivot_table(resolve, spec),
+                                    refresh=force_refresh)
         controller.store_core_result(spec, table, epoch)
         return table
 

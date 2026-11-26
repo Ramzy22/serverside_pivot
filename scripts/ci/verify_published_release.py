@@ -102,6 +102,33 @@ def verify_clean_python_install(
         cwd=work_dir,
         check=True,
     )
+    base_probe = (
+        "import importlib.metadata as md, json, serverside_pivot, pivot_engine; "
+        "from pivot_engine.runtime import PivotServiceResponse; "
+        "print(json.dumps({"
+        "'dist_version': md.version('serverside-pivot'), "
+        "'dash_version': serverside_pivot.__version__, "
+        "'runtime': PivotServiceResponse.__name__"
+        "}))"
+    )
+    base_result = subprocess.run(
+        [str(py), "-c", base_probe],
+        cwd=work_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    base_info = json.loads(base_result.stdout.strip())
+    if base_info["dist_version"] != version:
+        raise AssertionError(
+            f"Installed PyPI distribution version {base_info['dist_version']!r} != {version!r}"
+        )
+
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--quiet", "--no-cache-dir", f"{pypi_package}[dash]=={version}"],
+        cwd=work_dir,
+        check=True,
+    )
     probe = (
         "import importlib.metadata as md, json, serverside_pivot, pivot_engine; "
         "from serverside_pivot import DashTanstackPivot; "

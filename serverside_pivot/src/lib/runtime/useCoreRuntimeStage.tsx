@@ -156,7 +156,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     defaultTheme: stage.externalDefaultTheme,
     theme: stage.externalTheme,
     themeOverrides: stage.externalThemeOverrides = null,
-    loadWebFonts: stage.loadWebFonts = true,
+    loadWebFonts: stage.loadWebFonts = false,
     immersiveExitPosition: stage.externalImmersiveExitPosition = null,
     groupAllowUnbalanced: stage.groupAllowUnbalanced = false,
     unbalancedValues: stage.unbalancedValues = null,
@@ -488,22 +488,25 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
   }, [stage.themeName, stage.resolvedThemeOverrides]);
   stage.themeCssVars = useMemo(() => buildThemeCssVars(stage.theme), [stage.theme]);
   stage.styles = useMemo(() => getStyles(stage.theme), [stage.theme]);
+  // Loading placeholders are neutral, low-contrast fills: they mark where data
+  // will appear without competing with it. Only the progress hairline carries
+  // the accent colour.
   stage.loadingCssVars = useMemo(() => {
     if (isDarkTheme(stage.theme)) {
       return {
-        '--pivot-loading-header-gradient': 'linear-gradient(90deg, rgba(57,88,132,0.62) 0%, rgba(88,126,178,0.9) 48%, rgba(57,88,132,0.62) 100%)',
-        '--pivot-loading-cell-gradient': 'linear-gradient(90deg, rgba(50,77,116,0.58) 0%, rgba(82,118,170,0.86) 45%, rgba(50,77,116,0.58) 100%)',
-        '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(35,53,82,0.88) 0%, rgba(49,74,112,0.95) 50%, rgba(35,53,82,0.88) 100%)',
-        '--pivot-loading-border': 'rgba(130, 165, 215, 0.45)',
+        '--pivot-loading-header-gradient': 'linear-gradient(90deg, rgba(148,163,184,0.10) 0%, rgba(148,163,184,0.18) 48%, rgba(148,163,184,0.10) 100%)',
+        '--pivot-loading-cell-gradient': 'linear-gradient(90deg, rgba(148,163,184,0.08) 0%, rgba(148,163,184,0.16) 45%, rgba(148,163,184,0.08) 100%)',
+        '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(148,163,184,0.04) 0%, rgba(148,163,184,0.08) 50%, rgba(148,163,184,0.04) 100%)',
+        '--pivot-loading-border': 'rgba(148, 163, 184, 0.22)',
         '--pivot-loading-progress-gradient': 'linear-gradient(90deg, rgba(120,170,240,0) 0%, rgba(140,190,255,0.92) 45%, rgba(120,170,240,0) 100%)',
         '--pivot-loading-shimmer-duration': '1.6s'
       };
     }
     return {
-      '--pivot-loading-header-gradient': 'linear-gradient(90deg, rgba(233,243,255,0.92) 0%, rgba(193,220,255,0.98) 48%, rgba(233,243,255,0.92) 100%)',
-      '--pivot-loading-cell-gradient': 'linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%)',
-      '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%)',
-      '--pivot-loading-border': 'rgba(153, 187, 238, 0.5)',
+      '--pivot-loading-header-gradient': 'linear-gradient(90deg, rgba(15,23,42,0.05) 0%, rgba(15,23,42,0.09) 48%, rgba(15,23,42,0.05) 100%)',
+      '--pivot-loading-cell-gradient': 'linear-gradient(90deg, rgba(15,23,42,0.05) 0%, rgba(15,23,42,0.09) 45%, rgba(15,23,42,0.05) 100%)',
+      '--pivot-loading-row-gradient': 'linear-gradient(90deg, rgba(15,23,42,0.02) 0%, rgba(15,23,42,0.04) 50%, rgba(15,23,42,0.02) 100%)',
+      '--pivot-loading-border': 'rgba(15, 23, 42, 0.12)',
       '--pivot-loading-progress-gradient': 'linear-gradient(90deg, rgba(75,139,245,0) 0%, rgba(75,139,245,0.9) 45%, rgba(75,139,245,0) 100%)',
       '--pivot-loading-shimmer-duration': '1.6s'
     };

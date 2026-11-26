@@ -1,0 +1,61 @@
+name: serverside-pivot-oracle-test
+services:
+  oracle:
+    image: gvenzl/oracle-free:23.26.4-slim-faststart
+    environment:
+      ORACLE_RANDOM_PASSWORD: "yes"
+      APP_USER: PIVOT_TEST
+      APP_USER_PASSWORD: PivotLocalTest42
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 2m
+
+  verify:
+    build:
+      context: ../../serverside_pivot
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        COPY pyproject.toml /tmp/pyproject.toml
+        RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('/tmp/pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt && \
+            pip install --no-cache-dir -r /tmp/requirements.txt 'ibis-framework[oracle]' 'pytest>=8,<9' 'pytest-xdist>=3.6,<4' dash
+    depends_on:
+      oracle:
+        condition: service_healthy
+    working_dir: /repo
+    environment:
+      PIVOT_TEST_ORACLE_URI: oracle://PIVOT_TEST:PivotLocalTest42@oracle:1521/FREEPDB1
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ../../serverside_pivot/pivot_engine:/repo/serverside_pivot/pivot_engine:ro
+      - ../../tests:/repo/tests:ro
+      - ../../pytest.ini:/repo/pytest.ini:ro
+    command: ["python", "-m", "pytest", "-n", "auto", "--maxprocesses=4", "-v", "tests/core/test_oracle_database.py"]
+
+  # The flagship runtime on Oracle, for the React host (see README.md). Not started by `run verify`.
+  runtime:
+    profiles: ["react"]
+    build:
+      context: ../../serverside_pivot
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        COPY pyproject.toml /tmp/pyproject.toml
+        RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('/tmp/pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt && \
+            pip install --no-cache-dir -r /tmp/requirements.txt 'ibis-framework[oracle]' fastapi uvicorn dash
+    depends_on:
+      oracle:
+        condition: service_healthy
+    working_dir: /repo
+    environment:
+      PIVOT_ORACLE_URI: oracle://PIVOT_TEST:PivotLocalTest42@oracle:1521/FREEPDB1
+      PYTHONPATH: /repo:/repo/serverside_pivot/pivot_engine
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ../../serverside_pivot/pivot_engine:/repo/serverside_pivot/pivot_engine:ro
+      - ../../examples:/repo/examples:ro
+      - ./react_runtime.py:/repo/oracle_react_runtime.py:ro
+    ports:
+      - "127.0.0.1:8765:8765"
+    command: ["python", "-m", "uvicorn", "oracle_react_runtime:app", "--host", "0.0.0.0", "--port", "8765"]

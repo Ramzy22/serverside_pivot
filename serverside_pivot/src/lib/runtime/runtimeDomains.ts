@@ -73,6 +73,7 @@ export interface PivotRuntimeProps {
     defaultTheme?: PivotThemeName;
     theme?: PivotThemeName;
     themeOverrides?: PivotThemeOverrides | PivotObject;
+    /** Opt in to loading Inter, JetBrains Mono and Plus Jakarta Sans from Google Fonts. Default false: no third-party requests; system UI fonts are used unless the host loads them. */
     loadWebFonts?: boolean;
     immersiveExitPosition?: 'top-right' | 'bottom-right' | 'hidden';
     groupAllowUnbalanced?: boolean;

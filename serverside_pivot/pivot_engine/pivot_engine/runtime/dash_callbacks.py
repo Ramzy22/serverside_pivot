@@ -23,6 +23,13 @@ except ImportError:
     dash = None
     Input = Output = State = no_update = None
 
+
+def _require_dash() -> None:
+    if dash is None or Input is None or Output is None or State is None:
+        raise ImportError(
+            "Dash support is optional. Install serverside-pivot[dash]."
+        )
+
 from .models import PivotRequestContext, PivotViewState
 from .async_bridge import run_awaitable_sync
 from .contracts import build_resource_exhausted_response, build_runtime_response, normalize_runtime_request
@@ -1104,6 +1111,7 @@ def register_dash_pivot_transport_callback(
     )
 
     include_drill_store = drill_store_id is not None
+    _require_dash()
     _register_runtime_payload_endpoint(app)
     _register_runtime_subscription_endpoint(app)
     export_registration = _DashExportRegistration(
@@ -2094,6 +2102,8 @@ def register_dash_drill_modal_callback(
     )
     if callback_key in registry:
         return False
+
+    _require_dash()
 
     @app.callback(
         Output(drill_modal_id, "style"),

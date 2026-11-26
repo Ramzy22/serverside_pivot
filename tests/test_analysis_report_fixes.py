@@ -263,21 +263,6 @@ def test_integer_proportional_aggregate_edit_uses_one_set_based_update():
 
 
 
-def test_data_changes_clear_the_core_visible_counts():
-    """A stale visible-node count would page a reloaded or edited table with the old total."""
-    import pyarrow as pa
-
-    controller = ScalablePivotController(backend_uri=":memory:")
-    controller.load_data_from_arrow("sales", pa.table({"r": ["A"], "v": [1]}))
-    controller.core_visible_counts["plan"] = 3
-    controller._clear_mutation_caches("sales", structural=False)
-    assert controller.core_visible_counts == {}
-    controller.core_visible_counts["plan"] = 3
-    controller.load_data_from_arrow("sales", pa.table({"r": ["A", "B"], "v": [1, 2]}))
-    assert controller.core_visible_counts == {}
-    controller.close()
-
-
 def _result_tier_controller(**kwargs):
     import pyarrow as pa
 
@@ -368,11 +353,4 @@ def test_a_read_overlapping_a_write_never_stores_its_stale_result(monkeypatch):
     assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 101, "y": 2}  # the in-flight answer
     monkeypatch.setattr(bridge, "core_pivot_table", real)
     assert _sums(controller.run_pivot(spec, return_format="dict")) == {"x": 5}  # not the stale one from the tier
-
-    epoch = controller.core_epoch()
-    controller._clear_mutation_caches("t")
-    controller.store_core_visible_count("k", 7, epoch)
-    assert "k" not in controller.core_visible_counts
-    controller.store_core_visible_count("k", 7, controller.core_epoch())
-    assert controller.core_visible_counts["k"] == 7
     controller.close()

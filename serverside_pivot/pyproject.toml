@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverside-pivot"
-version = "0.0.96"
+version = "0.0.97"
 description = "Enterprise server-side pivot table and 2D virtualized analytics grid for Python, Dash, and Streamlit powered by DuckDB, PyArrow, and Ibis"
 readme = "README_PYPI.md"
 # Keep the table form until the minimum supported setuptools can parse the
@@ -15,17 +15,17 @@ authors = [
 ]
 classifiers = [
     "Framework :: Dash",
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: User Interfaces",
 ]
 keywords = ["pivot", "pivot-table", "analytics", "dash", "streamlit", "duckdb", "ibis", "pyarrow", "tanstack"]
 requires-python = ">=3.10"
 dependencies = [
-    "dash>=2.0.0",
     "jsonschema>=4.0.0",
     # pivot_engine is included in this distribution and imported by the
     # documented quick start, so its execution dependencies must travel with
@@ -49,6 +49,9 @@ Repository = "https://github.com/Ramzy22/serverside_pivot.git"
 Issues = "https://github.com/Ramzy22/serverside_pivot/issues"
 
 [project.optional-dependencies]
+dash = [
+    "dash>=2.0.0",
+]
 redis = [
     "redis>=4.0.0",
 ]
@@ -61,11 +64,11 @@ api = [
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.6",
     "PyJWT[crypto]>=2.15.1,<3",
-    "passlib[bcrypt]>=1.7.4",
     "prometheus-fastapi-instrumentator>=6.0.0",
     "structlog>=23.1.0",
 ]
 dev = [
+    "dash>=2.0.0",
     # Dash component metadata generation imports yaml outside runtime dependencies.
     "PyYAML>=6.0.1",
     "pytest>=7.0.0",

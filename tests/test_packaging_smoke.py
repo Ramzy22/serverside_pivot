@@ -70,11 +70,12 @@ def _write_minimal_wheel(path, members):
             "Metadata-Version: 2.1",
             "Name: serverside-pivot",
             "Version: 0.0.88",
-            "Requires-Dist: dash",
             "Requires-Dist: duckdb",
             "Requires-Dist: ibis-framework",
             "Requires-Dist: pandas",
             "Requires-Dist: pyarrow",
+            "Provides-Extra: dash",
+            "Requires-Dist: dash>=2.0.0; extra == 'dash'",
             "",
         ]
     )
@@ -497,6 +498,27 @@ def test_pyproject_toml_redis_extra():
         "Consumers need 'pip install serverside-pivot[redis]' to be valid."
     )
     assert optional["redis"], "optional-dependencies.redis list is empty."
+
+
+def test_pyproject_toml_dash_extra_is_optional(monkeypatch):
+    """Dash is an optional host extra so FastAPI/Streamlit installs stay slim."""
+    data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    core_reqs = [item.split(">", 1)[0].split("=", 1)[0].strip().lower() for item in data["project"]["dependencies"]]
+    assert "dash" not in core_reqs
+    optional = data["project"]["optional-dependencies"]
+    assert "dash" in optional and any(item.startswith("dash") for item in optional["dash"])
+    assert "Development Status :: 5 - Production/Stable" in data["project"]["classifiers"]
+    assert "Programming Language :: Python :: 3.12" in data["project"]["classifiers"]
+
+    monkeypatch.syspath_prepend(str(PKG_DIR))
+    monkeypatch.setitem(sys.modules, "dash", None)
+    sys.modules.pop("serverside_pivot", None)
+    import importlib
+    mod = importlib.import_module("serverside_pivot")
+    assert mod.__version__ == data["project"]["version"]
+    with pytest.raises(ImportError, match=r"serverside-pivot\[dash\]"):
+        _ = mod.DashTanstackPivot
+    sys.modules.pop("serverside_pivot", None)
 
 
 def test_qualification_extra_includes_starlette_test_client_dependency():

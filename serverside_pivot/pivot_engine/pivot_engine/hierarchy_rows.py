@@ -445,7 +445,6 @@ def build_hierarchy_row_window(
     *,
     start_row: Optional[int] = None,
     end_row: Optional[int] = None,
-    collect_formula_source_rows: bool = False,
     show_subtotal_footers: bool = False,
     tabular_subtotals: bool = False,
 ) -> Dict[str, Any]:
@@ -458,17 +457,11 @@ def build_hierarchy_row_window(
         )
         finalized_rows = finalize_hierarchy_rows(rows, preserve_window_order=False)
         grand_total_row = find_hierarchy_grand_total_row(finalized_rows)
-        grand_total_formula_source_rows = [
-            dict(row)
-            for row in finalized_rows
-            if isinstance(row, dict) and not is_hierarchy_grand_total(row) and row.get("depth") == 0
-        ] if collect_formula_source_rows else []
         return {
             "rows": clone_hierarchy_rows(finalized_rows),
             "total_rows": len(finalized_rows),
             "grand_total_row": dict(grand_total_row) if isinstance(grand_total_row, dict) else grand_total_row,
-            "grand_total_formula_source_rows": clone_hierarchy_rows(grand_total_formula_source_rows),
-            "color_scale_stats": compute_hierarchy_color_scale_stats(
+                "color_scale_stats": compute_hierarchy_color_scale_stats(
                 finalized_rows,
                 _row_fields(spec),
                 getattr(spec, "columns", []),
@@ -481,7 +474,6 @@ def build_hierarchy_row_window(
     window_rows: List[Dict[str, Any]] = []
     grand_total_row = None
     regular_count = 0
-    grand_total_formula_source_rows: List[Dict[str, Any]] = []
     meta_keys = _hierarchy_color_meta_keys(_row_fields(spec), getattr(spec, "columns", []))
     by_col: Dict[str, Dict[str, float]] = {}
     table_min = float("inf")
@@ -496,8 +488,6 @@ def build_hierarchy_row_window(
             if grand_total_row is None:
                 grand_total_row = dict(row)
             continue
-        if collect_formula_source_rows and row.get("depth") == 0:
-            grand_total_formula_source_rows.append(dict(row))
         table_min, table_max = _accumulate_hierarchy_color_stats(row, meta_keys, by_col, table_min, table_max)
         row_index = regular_count
         regular_count += 1
@@ -514,7 +504,6 @@ def build_hierarchy_row_window(
         "rows": clone_hierarchy_rows(window_rows),
         "total_rows": total_rows,
         "grand_total_row": dict(grand_total_row) if isinstance(grand_total_row, dict) else grand_total_row,
-        "grand_total_formula_source_rows": clone_hierarchy_rows(grand_total_formula_source_rows),
         "color_scale_stats": _hierarchy_color_stats_result(by_col, table_min, table_max),
         "full_rows": None,
     }

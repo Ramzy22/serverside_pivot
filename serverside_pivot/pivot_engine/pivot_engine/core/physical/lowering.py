@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict
 import ibis
 
 from ..registry import REGISTRY, Registry
+from .capabilities import backend_name
 
 __all__ = ["LOWERINGS", "check_drift", "lower"]
 
@@ -25,6 +26,16 @@ def _sum(col: Any, _t: Any, _m: Any) -> Any:
 
 def _count(col: Any, t: Any, _m: Any) -> Any:
     return t.count() if col is None else col.count()
+
+
+def _avg(col: Any, t: Any, _m: Any) -> Any:
+    mean = col.mean()
+    dtype = mean.type()
+    if dtype.is_decimal() and dtype.scale is not None and backend_name(t) == "oracle":
+        # Oracle AVG can return more fractional digits than the Arrow decimal
+        # schema accepts. Round in SQL before the driver supplies the Decimal.
+        return mean.round(dtype.scale)
+    return mean
 
 
 def _weighted_avg(col: Any, t: Any, m: Any, weight: Any = None) -> Any:
@@ -55,7 +66,7 @@ def _series(col: Any, t: Any, m: Any) -> Any:
 LOWERINGS: Dict[str, Lowering] = {
     "sum": _sum,
     "count": _count,
-    "avg": lambda col, _t, _m: col.mean(),
+    "avg": _avg,
     "min": lambda col, _t, _m: col.min(),
     "max": lambda col, _t, _m: col.max(),
     # exact, NULL ignored on every backend (REQ-AGG-003)

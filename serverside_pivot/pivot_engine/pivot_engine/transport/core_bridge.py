@@ -21,19 +21,17 @@ import re
 import time
 from dataclasses import is_dataclass, replace
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.authority.verifier import verify_scoped
 from ..core.exec import (
-    column_members, detail, distinct_values, execute, fingerprint, materialize, measure_expr, record_predicate,
+    column_members, detail, distinct_values, execute, materialize, measure_expr, record_predicate,
     records,
 )
 from ..core.identity import GRAND_TOTAL_DISPLAY_PATH, CanonicalPathCodec
 from ..core.ir import (
     FORMULA_AGG, MEMBER_AGG, Category, ColumnOrder, Expr, CategoryRule, DerivedMeasure, DetailQuery, DistinctQuery, MeasureFilter, to_wire, MeasureRef, PivotQuery, Predicate, PredicateGroup, Ragged, SortKey, Unpivot, UnpivotMember, Window,
 )
-from ..core.physical import TREES, choose
-from ..core.logical import plan as logical_plan
 from ..core.registry import type_family
 
 __all__ = ["CoreUnsupported", "core_drill_through", "core_hierarchy_view", "core_unique_values",
@@ -1018,6 +1016,16 @@ def core_column_catalog(resolve: Callable[[str], Any], spec: Any) -> List[Dict[s
     members whose key sorts after it.  The column window the view then shows is
     chosen from this catalog (``pivot_config.materialized_column_values``).
     """
+    return core_column_catalog_members(resolve, spec)[0]
+
+
+def core_column_catalog_members(resolve: Callable[[str], Any],
+                                spec: Any) -> Tuple[List[Dict[str, Any]], Tuple[Tuple[Any, ...], ...]]:
+    """The catalog entries and every typed column member (catalog order, before the cursor) from one read.
+
+    The members are what :func:`core_hierarchy_view` binds the column window
+    to (``column_members=``), so a request reads the members once.
+    """
     import copy
 
     relation = resolve(spec.table)
@@ -1033,7 +1041,7 @@ def core_column_catalog(resolve: Callable[[str], Any], spec: Any) -> List[Dict[s
         plain.pivot_config = cfg
     query = spec_to_query(plain, [["__ALL__"]], relation.schema(), subtotals="none", cell_sorts=[])
     if not query.columns:
-        return []
+        return [], ()
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
     members = column_members(query, resolver, order=_column_orders(spec, query))
     seen: set = set()
@@ -1045,7 +1053,7 @@ def core_column_catalog(resolve: Callable[[str], Any], spec: Any) -> List[Dict[s
         seen.add(key)
         if cursor is None or key > str(cursor):
             out.append({**dict(zip(query.columns, member)), "_col_key": key})
-    return out
+    return out, members
 
 
 def legacy_column_key(member: Sequence[Any]) -> str:
@@ -1054,21 +1062,27 @@ def legacy_column_key(member: Sequence[Any]) -> str:
 
 
 def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any],
-                     cell_sorts: Sequence[Tuple[int, str, str, bool, bool, bool]] = ()) -> Tuple[PivotQuery, List[str]]:
+                     cell_sorts: Sequence[Tuple[int, str, str, bool, bool, bool]] = (),
+                     catalog: Optional[Sequence[Tuple[Any, ...]]] = None) -> Tuple[PivotQuery, List[str]]:
     """Bind the column window: every member, or the legacy-selected keys, in their order.
+
+    ``catalog``: the request's typed members from :func:`core_column_catalog_members`
+    (same E0, so the same member set). A selected window binds to it without
+    reading the members again; with no selection the members are read here,
+    in the default member order.
 
     Deferred cell sorts are typed here; one naming no member is ignored, as legacy does.
     """
     if not query.columns:
         return query, []
-    members = column_members(query, resolver)
+    wanted = getattr(spec.pivot_config, "materialized_column_values", None)
+    members = catalog if catalog is not None and wanted is not None else column_members(query, resolver)
     by_key: Dict[str, Tuple[Any, ...]] = {}
     for member in members:
         key = legacy_column_key(member)
         if key in by_key:
             raise CoreUnsupported([f"ambiguous pivot column key {key!r}"])  # F-PIVOT-DELIM
         by_key[key] = member
-    wanted = getattr(spec.pivot_config, "materialized_column_values", None)
     keys = list(by_key) if wanted is None else [str(k) for k in wanted if str(k) in by_key]
     sort = list(query.sort)
     inserted = 0
@@ -1082,19 +1096,16 @@ def _resolve_members(query: PivotQuery, spec: Any, resolver: Callable[[str], Any
 # --------------------------------------------------------------------- frame -> legacy rows
 
 
-def _legacy_values(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str],
-                   totals_column: bool) -> Dict[str, Any]:
-    values = record["values"]
+def _value_projection(query: PivotQuery, keys: Sequence[str], totals_column: bool) -> List[Tuple[str, str]]:
+    """(legacy column, frame value) pairs of a view, computed once per request."""
     if not query.columns:
-        return {k: v for k, v in values.items() if not k.startswith(HIDDEN)}
-    out: Dict[str, Any] = {}
+        return [(n, n) for n in query.value_columns() if not n.startswith(HIDDEN)]
+    out: List[Tuple[str, str]] = []
     for j, _member, m, name in query.cells():
         if not m.alias.startswith(HIDDEN):  # helper measures (ragged paths, axis bases) stay internal
-            out[f"{keys[j]}_{m.alias}"] = values[name]
+            out.append((f"{keys[j]}_{m.alias}", name))
     if totals_column:
-        for m in query.measures:
-            if not m.alias.startswith(HIDDEN):
-                out[f"__RowTotal__{m.alias}"] = values[m.alias]
+        out += [(f"__RowTotal__{m.alias}", m.alias) for m in query.measures if not m.alias.startswith(HIDDEN)]
     return out
 
 
@@ -1118,17 +1129,15 @@ def _ragged_row(record: Mapping[str, Any], query: PivotQuery, values: Dict[str, 
         "depth": len(path) - 1,
         "_has_children": int(raw[f"{HIDDEN}ragn"] or 0) > len(path),
     })
-    row_key = _canonical_row_key(path)
-    if row_key is not None:
-        out["_rowKey"] = row_key
+    out["_rowKey"] = record["key"]
     return out
 
 
-def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str] = (),
-                totals_column: bool = False) -> Dict[str, Any]:
+def _legacy_row(record: Mapping[str, Any], query: PivotQuery, projection: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
     rows = query.rows
     path = record["path"]
-    values = _legacy_values(record, query, keys, totals_column)
+    raw = record["values"]
+    values = {out: raw[src] for out, src in projection}
     if query.ragged is not None:
         return _ragged_row(record, query, values)
     if not path:
@@ -1145,19 +1154,9 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, keys: Sequence[str
         "_path": CanonicalPathCodec.display_path(list(path)),
         "_pathFields": list(rows[: len(path)]),
         "depth": len(path) - 1,
+        "_rowKey": record["key"],
     })
-    row_key = _canonical_row_key(path)
-    if row_key is not None:
-        out["_rowKey"] = row_key
     return out
-
-
-def _canonical_row_key(path: Sequence[Any]) -> Optional[str]:
-    """The typed identity the frontend keys rows by (REQ-ID-001); None when a member type has no encoding."""
-    try:
-        return CanonicalPathCodec.encode(list(path))
-    except Exception:  # noqa: BLE001 - an unencodable member only loses the canonical key, never the row
-        return None
 
 
 def core_hierarchy_view(
@@ -1168,12 +1167,15 @@ def core_hierarchy_view(
     end_row: Optional[int],
     *,
     include_grand_total_row: bool = False,
-    total_cache: Optional[MutableMapping[str, int]] = None,
     capture: Optional[Dict[str, Any]] = None,
     tabular_subtotals: bool = False,
     flat: bool = False,
+    column_members: Optional[Sequence[Tuple[Any, ...]]] = None,
 ) -> Dict[str, Any]:
     """The ``run_hierarchy_view`` contract, answered by the core.
+
+    ``column_members``: the request's catalog members (:func:`core_column_catalog_members`),
+    so the column window is bound without a second member read.
 
     ``tabular_subtotals``: the tabular subtotal layout (REQ-LAYOUT-001), the
     post-order of the fully expanded tree; group rows carry
@@ -1196,44 +1198,36 @@ def core_hierarchy_view(
                           subtotals="none" if flat else ("after" if tabular_subtotals else "before"),
                           cell_sorts=cell_sorts)
     resolver = lambda _name: relation  # noqa: E731 - one resolution per request (scope checked once)
-    query, keys = _resolve_members(query, spec, resolver, cell_sorts)
+    query, keys = _resolve_members(query, spec, resolver, cell_sorts, column_members)
     if capture is not None:
         _capture(capture, query, relation)
     totals = bool(getattr(spec, "totals", False))
     totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
 
-    def legacy(record: Mapping[str, Any]) -> Dict[str, Any]:
-        return _legacy_row(record, query, keys, totals_column)
+    projection = _value_projection(query, keys, totals_column)
 
-    nodes = _visible_node_count(query, relation, total_cache) - 1
+    def legacy(record: Mapping[str, Any]) -> Dict[str, Any]:
+        return _legacy_row(record, query, projection)
+
+    # One statement: the window, the tree's row count and the grand total.
+    frame = execute(query, resolver, grand_total=totals)
+    nodes = int(frame.total or 0) - 1  # the tree's rows, less its grand total
     if end_row is None:  # the whole flattened list
         end_row = nodes
+    total_record = frame.grand_total_record()
+    grand_total = legacy(total_record) if totals and total_record is not None else None
     if tabular_subtotals or flat:
-        return _post_order_view(query, resolver, legacy, nodes, int(start_row), int(end_row), totals,
+        return _post_order_view(query, frame, legacy, nodes, int(start_row), int(end_row), totals, grand_total,
                                 include_grand_total_row, started, flat=flat)
-    grand_total = None
-    if totals and int(start_row) == 0:  # the core orders the grand total first: one query serves both
-        limit = None if query.window.limit is None else query.window.limit + 1
-        records = execute(replace(query, window=Window(0, limit)), resolver).records()
-        grand_total, records = legacy(records[0]), records[1:]
-    else:
-        records = execute(query, resolver).records()
-    rows = [legacy(r) for r in records]
-    if totals and grand_total is None and (include_grand_total_row or int(start_row) <= nodes <= int(end_row)):
-        grand_total = legacy(execute(replace(query, window=Window(0, 1)), resolver).records()[0])
+    rows = [legacy(r) for r in frame.records()]  # pre-order: the window starts after the grand total
     if grand_total is not None and int(start_row) <= nodes <= int(end_row):
         rows.append(dict(grand_total))
-    formula_sources: List[Dict[str, Any]] = []
-    if totals and include_grand_total_row and query.rows and not _has_formulas(query):
-        top = execute(replace(query, expanded=frozenset(), window=Window(1, None)), resolver).records()
-        formula_sources = [legacy(r) for r in top]
     from ..hierarchy_rows import compute_hierarchy_color_scale_stats
 
     return {
         "rows": rows,
         "total_rows": nodes + (1 if totals else 0),
         "grand_total_row": grand_total if include_grand_total_row else None,
-        "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
         # Same profile layer as the legacy controller, so profile consumers keep working.
         "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
@@ -1241,17 +1235,14 @@ def core_hierarchy_view(
     }
 
 
-def _has_formulas(query: PivotQuery) -> bool:
-    """Formulas are evaluated on the grand total itself (REQ-AGG-010): no rollup source rows are needed."""
-    return any(m.agg == FORMULA_AGG for m in query.measures)
-
-
-async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[str], Any]], Any]) -> Any:
+async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[str], Any]], Any], *,
+                        refresh: bool = False) -> Any:
     """Run one core read for ``controller``: ``read(resolve)`` with its scoped table resolver.
 
     The read queues on the table's execution lock and runs through the
     backend's ``run_statements`` (request-level cancellation and the query
-    deadline on every statement) when the backend offers it.  A controller
+    deadline on every statement) when the backend offers it.  ``refresh`` (a forced
+    refresh) reads the facts instead of cached cubes.  A controller
     without a scoped resolver cannot serve the core: ``CoreUnsupported``.
     """
     import asyncio
@@ -1263,7 +1254,7 @@ async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[s
         raise CoreUnsupported(["controller without resolve_table"])
 
     def work() -> Any:
-        return core_locked_call(controller, table, lambda: read(resolve))
+        return core_locked_call(controller, table, lambda: read(resolve), refresh=refresh)
 
     run_statements = getattr(getattr(controller, "backend", None), "run_statements", None)
     if callable(run_statements):
@@ -1271,7 +1262,7 @@ async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[s
     return await run_in_executor_scoped(asyncio.get_running_loop(), None, work)
 
 
-def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
+def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any], *, refresh: bool = False) -> Any:
     """Run a core read under the controller's execution lock for ``table``.
 
     The core shares the controller's backend connection, which is not safe for
@@ -1282,6 +1273,10 @@ def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
     if lock_for is None:
         return fn()
     with lock_for(table):
+        cube_access = getattr(controller, "cube_access", None)
+        if callable(cube_access):
+            with cube_access(refresh=refresh):
+                return fn()
         return fn()
 
 
@@ -1342,38 +1337,29 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     return table.select(columns).rename_columns(names)
 
 
-def _post_order_view(query: PivotQuery, resolver: Callable[[str], Any], legacy: Callable[[Mapping[str, Any]], Dict[str, Any]],
-                     nodes: int, start_row: int, end_row: int, totals: bool, include_grand_total_row: bool,
-                     started: float, *, flat: bool = False) -> Dict[str, Any]:
+def _post_order_view(query: PivotQuery, frame: Any, legacy: Callable[[Mapping[str, Any]], Dict[str, Any]],
+                     nodes: int, start_row: int, end_row: int, totals: bool, grand_total: Optional[Dict[str, Any]],
+                     include_grand_total_row: bool, started: float, *, flat: bool = False) -> Dict[str, Any]:
     """Grand total last, at index ``nodes``: tabular subtotals (post-order) or the flat layout (leaves)."""
     depth = len(query.rows)
-    grand_total = None
     rows: List[Dict[str, Any]] = []
-    for record in execute(query, resolver).records():
-        row = legacy(record)
+    for record in frame.records():
         if not record["path"]:
-            grand_total = row
-            continue
+            continue  # the grand total: appended last, below, when the window reaches it
+        row = legacy(record)
         if flat:  # leaves of a flat table: nothing to expand
             row.update({"_has_children": False, "_is_expanded": False, "_depth": row["depth"]})
         elif len(record["path"]) < depth:
             row["_isTabularSubtotal"] = True
         rows.append(row)
-    if totals and grand_total is None and include_grand_total_row:
-        grand_total = legacy(execute(replace(query, window=Window(nodes, 1)), resolver).records()[0])
     if totals and grand_total is not None and start_row <= nodes <= end_row:
         rows.append(dict(grand_total))
-    formula_sources: List[Dict[str, Any]] = []
-    if totals and include_grand_total_row and query.rows and not _has_formulas(query):  # the top-level groups
-        top = replace(query, subtotals="before", expanded=frozenset(), window=Window(1, None))
-        formula_sources = [legacy(r) for r in execute(top, resolver).records()]
     from ..hierarchy_rows import compute_hierarchy_color_scale_stats
 
     return {
         "rows": rows,
         "total_rows": nodes + (1 if totals else 0),
         "grand_total_row": grand_total if include_grand_total_row else None,
-        "grand_total_formula_source_rows": formula_sources if include_grand_total_row else None,
         "color_scale_stats": compute_hierarchy_color_scale_stats(rows, list(query.rows), list(query.columns)),
         "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
                                    "layout": "flat" if flat else "tabular_subtotals",
@@ -1400,27 +1386,6 @@ def _capture(capture: Dict[str, Any], query: PivotQuery, relation: Any) -> None:
     with pa.ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
     capture["data"] = base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
-
-
-def _visible_node_count(query: PivotQuery, relation: Any, cache: Optional[MutableMapping[str, int]]) -> int:
-    """Rows of the core tree including its grand total."""
-    unwindowed = replace(query, window=Window(), column_members=(), derived=())  # cells/derived never change it
-    key = fingerprint(unwindowed)
-    if cache is not None and key in cache:
-        return cache[key]
-    plan = logical_plan(unwindowed)
-    from ..core.physical.union_all import prepared
-
-    relation = prepared(relation, query)
-    union, _ = TREES[choose(plan, relation.schema())](plan, relation)
-    counted = union.count()
-    verify_scoped(counted)  # every core expression is proven scoped before it runs
-    total = int(materialize(counted).as_py())
-    if cache is not None:
-        if len(cache) > 4096:
-            cache.clear()
-        cache[key] = total
-    return total
 
 
 # --------------------------------------------------------------------- drill-through

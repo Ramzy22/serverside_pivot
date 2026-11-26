@@ -30,32 +30,42 @@ FORBIDDEN_SEGMENTS = ("/build/", "/node_modules/", "/__pycache__/")
 ALLOWED_BUILD_PREFIXES = ("streamlit_pivot/frontend/build/",)
 REQUIRED_DEPENDENCIES = frozenset(
     {
-        "dash",
         "duckdb",
         "ibis-framework",
         "pandas",
         "pyarrow",
     }
 )
+REQUIRED_EXTRA_DEPENDENCIES = {
+    "dash": frozenset({"dash"}),
+}
 
 
-def _metadata_dependencies(archive: zipfile.ZipFile) -> set[str]:
+def _metadata_dependencies(archive: zipfile.ZipFile) -> tuple[set[str], dict[str, set[str]]]:
     metadata_name = next(
         (name for name in archive.namelist() if name.endswith(".dist-info/METADATA")),
         None,
     )
     if metadata_name is None:
-        return set()
+        return set(), {}
     metadata = archive.read(metadata_name).decode("utf-8")
-    dependencies: set[str] = set()
+    core_dependencies: set[str] = set()
+    extra_dependencies: dict[str, set[str]] = {}
     for line in metadata.splitlines():
         if not line.startswith("Requires-Dist:"):
             continue
         requirement = line.split(":", 1)[1].strip()
-        match = re.match(r"[A-Za-z0-9_.-]+", requirement)
-        if match:
-            dependencies.add(match.group(0).lower())
-    return dependencies
+        req_part, _, marker_part = requirement.partition(";")
+        match = re.match(r"[A-Za-z0-9_.-]+", req_part.strip())
+        if not match:
+            continue
+        dep_name = match.group(0).lower()
+        extra_match = re.search(r"""extra\s*==\s*['"]([A-Za-z0-9_.-]+)['"]""", marker_part)
+        if extra_match:
+            extra_dependencies.setdefault(extra_match.group(1).lower(), set()).add(dep_name)
+        else:
+            core_dependencies.add(dep_name)
+    return core_dependencies, extra_dependencies
 
 
 def _contains_forbidden_generated_path(name: str) -> bool:
@@ -99,11 +109,19 @@ def verify_wheel(wheel_path: Path) -> list[str]:
             for name in sorted(REQUIRED_MEMBERS - names)
         )
         violations.extend(_streamlit_asset_violations(archive, names))
-        dependencies = _metadata_dependencies(archive)
+        core_dependencies, extra_dependencies = _metadata_dependencies(archive)
         violations.extend(
             f"missing runtime dependency metadata: {name}"
-            for name in sorted(REQUIRED_DEPENDENCIES - dependencies)
+            for name in sorted(REQUIRED_DEPENDENCIES - core_dependencies)
         )
+        if "dash" in core_dependencies:
+            violations.append("dash must be an optional extra dependency, not a core runtime dependency")
+        for extra_name, expected_deps in sorted(REQUIRED_EXTRA_DEPENDENCIES.items()):
+            actual_deps = extra_dependencies.get(extra_name, set())
+            violations.extend(
+                f"missing optional extra '{extra_name}' dependency metadata: {name}"
+                for name in sorted(expected_deps - actual_deps)
+            )
         return violations
 
 

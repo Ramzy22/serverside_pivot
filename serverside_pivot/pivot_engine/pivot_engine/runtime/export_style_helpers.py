@@ -355,7 +355,8 @@ def format_export_number(
         "apostrophe": "'",
         "none": "",
     }
-    separator = separator_map.get(str(group_separator or "thin_space"), " ")
+    # Matches the grid default (en-US grouping) when the request names none.
+    separator = separator_map.get(str(group_separator or "comma"), ",")
     suffix_str = str(unit_suffix) if isinstance(unit_suffix, str) else ""
 
     def grouped(number: float, places: int) -> str:

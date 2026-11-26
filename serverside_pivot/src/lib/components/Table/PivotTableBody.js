@@ -12,6 +12,7 @@ import { isGrandTotalRow } from '../../hooks/usePivotNormalization';
 import {
     MAX_FLIP_DISTANCE_PX,
     MAX_SHEET_TRAVEL_PX,
+    ROW_LOADER_BAND_HEIGHT_PX,
     ROW_MOTION_EASING,
     SKELETON_FILL_DURATION_MS,
     buildExpandRevealPlan,
@@ -541,7 +542,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     const transitionLoaderStyle = React.useMemo(() => ({
         ...styles.row,
         pointerEvents: 'none',
-        height: 30,
+        height: ROW_LOADER_BAND_HEIGHT_PX,
         width: `${totalLayoutWidth}px`,
         position: 'absolute',
         top: 0,
@@ -774,15 +775,19 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         [visibleLeafColumns]
     );
     // Unified visual layout adjustments (bounded to virtualRows):
-    // Optimistic collapse: collapsing needs no new server data, so descendants of a
-    // row that just flipped expanded -> collapsed exit immediately and rows below
-    // slide up without waiting for the round-trip.
-    /** @type {{ hiddenKeys: Set<string>, topOffsetDeltaByIndex: Map<number, number>, totalCollapseShift: number }} */
+    // - Optimistic collapse: collapsing needs no new server data, so descendants of a
+    //   row that just flipped expanded -> collapsed exit immediately and rows below
+    //   slide up without waiting for the round-trip.
+    // - Pending expand: a row whose children are still loading opens a band-height
+    //   gap beneath it. Siblings below glide down into the gap (FLIP) and the
+    //   "Loading breakdown" band occupies it, so no loaded row is ever covered.
+    /** @type {{ hiddenKeys: Set<string>, topOffsetDeltaByIndex: Map<number, number>, totalCollapseShift: number, totalGapShift: number, bandGapKeys: Set<string> }} */
     const rowMotionLayoutPlan = (() => {
         const hiddenKeys = new Set();
         const topOffsetDeltaByIndex = new Map();
+        const bandGapKeys = new Set();
         if (rowSpanEnabled || !hasMountedCenterRowsRef.current) {
-            return { hiddenKeys, topOffsetDeltaByIndex, totalCollapseShift: 0 };
+            return { hiddenKeys, topOffsetDeltaByIndex, totalCollapseShift: 0, totalGapShift: 0, bandGapKeys };
         }
         const now = Date.now();
         /** @param {string} ancestorKey @param {any} ancestorRow @returns {boolean} */
@@ -796,16 +801,23 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             const collapsedAt = collapsedAtByPathRef.current.get(ancestorKey) || 0;
             return Boolean(collapsedAt > 0 && now - collapsedAt < (isRequestPending ? 4000 : 1200));
         };
+        const hasPendingTransitions = Boolean(
+            pendingRowTransitions && typeof pendingRowTransitions.get === 'function' && pendingRowTransitions.size > 0
+        );
         let collapseShift = 0;
+        let gapShift = 0;
         for (let i = 0; i < virtualRows.length; i += 1) {
             const virtualRow = virtualRows[i];
             if (!virtualRow) continue;
-            if (collapseShift !== 0) topOffsetDeltaByIndex.set(virtualRow.index, -collapseShift);
+            if (collapseShift !== 0 || gapShift !== 0) {
+                topOffsetDeltaByIndex.set(virtualRow.index, gapShift - collapseShift);
+            }
             if (serverSide && pinnedVirtualIndexSet.has(virtualRow.index)) continue;
             const row = resolveVirtualRow(virtualRow.index);
             if (!row || !row.original) continue;
             const stableRowKey = row.id ? String(row.id) : String(virtualRow.index);
             const path = row.original._path ? String(row.original._path) : stableRowKey;
+            let hidden = false;
             if (serverSide && path.includes('|||')) {
                 const parts = path.split('|||');
                 for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
@@ -814,21 +826,28 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                     if (ancestorRow && isRecentlyCollapsed(ancestorKey, ancestorRow)) {
                         hiddenKeys.add(stableRowKey);
                         collapseShift += Number(virtualRow.size) > 0 ? Number(virtualRow.size) : rowHeight;
+                        hidden = true;
                         break;
                     }
                 }
+            }
+            if (!hidden && hasPendingTransitions && pendingRowTransitions.get(path) === 'band') {
+                bandGapKeys.add(stableRowKey);
+                gapShift += ROW_LOADER_BAND_HEIGHT_PX;
             }
         }
         return {
             hiddenKeys,
             topOffsetDeltaByIndex,
             totalCollapseShift: collapseShift,
+            totalGapShift: gapShift,
+            bandGapKeys,
         };
     })();
 
     const effectiveVisualBodyHeight = Math.max(
         0,
-        virtualBodyHeight - rowMotionLayoutPlan.totalCollapseShift
+        virtualBodyHeight - rowMotionLayoutPlan.totalCollapseShift + rowMotionLayoutPlan.totalGapShift
     );
     const effectiveContainerBodyHeight = collapseHoldHeight > effectiveVisualBodyHeight
         ? collapseHoldHeight
@@ -1862,7 +1881,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                          width: `${columnSkeletonWidth}px`,
                                          height: '100%',
                                          borderRadius: '8px',
-                                         background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
+                                         background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(148,163,184,0.14) 0%, rgba(148,163,184,0.28) 45%, rgba(148,163,184,0.14) 100%))',
                                          backgroundSize: '220% 100%',
                                          border: '1px solid var(--pivot-loading-border, rgba(153, 187, 238, 0.5))',
                                          animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 1.6s) linear infinite'
@@ -2113,7 +2132,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                       )}
                                   </div>
                                   </div>
-                                  {transitionPhase === 'band' && (
+                                  {transitionPhase === 'band' && rowMotionLayoutPlan.bandGapKeys.has(stableRowKey) && (
                                       <div
                                           aria-hidden="true"
                                           data-row-loader="band"

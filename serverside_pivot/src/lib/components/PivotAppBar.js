@@ -205,8 +205,6 @@ function NumberFormatDialog({
                 inset: 0,
                 zIndex: 10020,
                 background: 'rgba(15, 23, 42, 0.36)',
-                backdropFilter: 'blur(6px)',
-                WebkitBackdropFilter: 'blur(6px)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -813,7 +811,7 @@ function DataBarBoundsDialog({ columns, maximums, onApply, onClose, theme, style
     }, [onClose]);
 
     return (
-        <div role="presentation" className="sp-dialog-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10020, background: 'rgba(15,23,42,0.36)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+        <div role="presentation" className="sp-dialog-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10020, background: 'rgba(15,23,42,0.36)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
             <div role="dialog" className="sp-dialog-surface" aria-modal="true" aria-label="Data Bar Bounds" onClick={event => event.stopPropagation()} style={{ width: 'min(380px, 90vw)', padding: '20px', borderRadius: '14px', border: `1px solid ${theme.border}`, background: theme.surfaceBg || theme.background, color: theme.text, boxShadow: theme.shadow || '0 20px 56px rgba(15,23,42,0.24)' }}>
                 <div style={{ fontWeight: 700, fontSize: '15px', letterSpacing: '-0.01em', marginBottom: '10px' }}>Data Bar Bounds</div>
                 <p style={{ fontSize: '12px', lineHeight: 1.5, color: theme.textSec, marginTop: 0 }}>Bars start at zero. Negative values use their magnitude and a red tint. Values above the maximum fill the cell.</p>
@@ -1741,8 +1739,19 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         background: theme.themeSelectorBg || theme.headerSubtleBg || theme.hover,
         color: theme.themeSelectorText || theme.text,
     };
+    // Section toggles open a toolbar row, so their "on" state reads as an open
+    // tab (filled tint + accent underline), never as a primary-colour outline
+    // that is indistinguishable from keyboard focus.
+    /** @type {Record<string, any>} */
+    const sectionToggleOpenStyle = {
+        ...btnBase,
+        background: theme.select,
+        border: `1px solid ${theme.border}`,
+        color: theme.text,
+        boxShadow: `inset 0 -2px 0 ${theme.primary}`,
+    };
     /** @param {any} [active] @returns {any} */
-    const sectionToggleButtonStyle = (active) => (active ? btnActive : btnSubtle);
+    const sectionToggleButtonStyle = (active) => (active ? sectionToggleOpenStyle : btnSubtle);
 
     const segmentedGroupStyle = {
         display: 'inline-flex',
@@ -2279,10 +2288,10 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 </div>
                 </>}
                 <div style={innerDividerStyle} />
-                <button className={`sp-btn ${openToolbarSections.view ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-view" data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
-                <button className={`sp-btn ${openToolbarSections.format ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-format" data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
-                {uiConfig.showCharts !== false && <button className={`sp-btn ${openToolbarSections.charts ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-charts" data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
-                <button className={`sp-btn ${openToolbarSections.theme ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-theme" data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
+                <button className={`sp-btn ${openToolbarSections.view ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-view" data-toolbar-section-toggle="view" aria-expanded={Boolean(openToolbarSections.view)} style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
+                <button className={`sp-btn ${openToolbarSections.format ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-format" data-toolbar-section-toggle="format" aria-expanded={Boolean(openToolbarSections.format)} style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
+                {uiConfig.showCharts !== false && <button className={`sp-btn ${openToolbarSections.charts ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-charts" data-toolbar-section-toggle="charts" aria-expanded={Boolean(openToolbarSections.charts)} style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
+                <button className={`sp-btn ${openToolbarSections.theme ? 'sp-btn-active' : 'sp-btn-subtle'}`} data-testid="pivot-toolbar-theme" data-toolbar-section-toggle="theme" aria-expanded={Boolean(openToolbarSections.theme)} style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
                 <div style={innerDividerStyle} />
                 <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.headerSubtleBg || theme.hover, border:`1px solid ${theme.border}`, borderRadius:'8px', padding:'2px 4px', boxShadow: theme.shadowInset || 'none'}}>
                     <button

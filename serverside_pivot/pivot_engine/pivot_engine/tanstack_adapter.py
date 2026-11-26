@@ -3,7 +3,7 @@ tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot
 This bypasses the REST API and provides direct integration with TanStack components
 """
 
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Tuple, Union
 import asyncio
 import logging
 import math
@@ -12,7 +12,6 @@ import re
 import time
 import json
 from collections import Counter, OrderedDict
-from collections.abc import MutableMapping
 from dataclasses import replace
 import hashlib
 from .adapter_viewport_cache import AdapterViewportCache, AdapterViewportKeyBuilder
@@ -98,28 +97,6 @@ def _has_case_variant_siblings(rows: Any) -> bool:
             return True
         seen[key] = path[-1]
     return False
-
-
-class _EpochBoundCounts(MutableMapping):  # type: ignore[type-arg]
-    """The controller's visible-node counts; writes land only while the captured epoch is current."""
-
-    def __init__(self, controller: Any, epoch: int) -> None:
-        self._controller, self._epoch = controller, epoch
-
-    def __getitem__(self, key: str) -> int:
-        return self._controller.core_visible_counts[key]
-
-    def __setitem__(self, key: str, value: int) -> None:
-        self._controller.store_core_visible_count(key, value, self._epoch)
-
-    def __delitem__(self, key: str) -> None:
-        self._controller.core_visible_counts.pop(key, None)
-
-    def __iter__(self) -> Any:
-        return iter(list(self._controller.core_visible_counts))
-
-    def __len__(self) -> int:
-        return len(self._controller.core_visible_counts)
 
 
 class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
@@ -1262,8 +1239,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         return ordered_values
 
     async def _discover_pivot_column_values(self, spec: PivotSpec) -> list[dict[str, Any]]:
+        return (await self._discover_pivot_columns(spec))[0]
+
+    async def _discover_pivot_columns(
+        self, spec: PivotSpec
+    ) -> Tuple[list[dict[str, Any]], Tuple[Tuple[Any, ...], ...]]:
+        """The column catalog and its typed members (one core read, cached together)."""
         if not spec.columns:
-            return []
+            return [], ()
 
         local_cache_key = self._pivot_column_catalog_cache_key(spec)
         cached_catalog = self._locked_cache_lookup(
@@ -1271,22 +1254,22 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         )
         if isinstance(cached_catalog, dict) and isinstance(
             cached_catalog.get("values"), list
-        ):
-            return list(cached_catalog["values"])
+        ) and isinstance(cached_catalog.get("members"), tuple):
+            return list(cached_catalog["values"]), cached_catalog["members"]
 
-        from .transport.core_bridge import core_column_catalog, run_core_read
+        from .transport.core_bridge import core_column_catalog_members, run_core_read
 
         # REQ-PIV-001/002: the ordered catalog from the core.
-        discovered_values = await run_core_read(
-            self.controller, spec.table, lambda resolve: core_column_catalog(resolve, spec))
+        discovered_values, members = await run_core_read(
+            self.controller, spec.table, lambda resolve: core_column_catalog_members(resolve, spec))
         self._locked_cache_store(
             self._pivot_column_catalog_cache,
             local_cache_key,
-            {"values": list(discovered_values)},
+            {"values": list(discovered_values), "members": tuple(members)},
             max_size=_PIVOT_CATALOG_CACHE_SIZE,
             ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
         )
-        return discovered_values
+        return discovered_values, tuple(members)
 
     def _apply_col_windowing(
         self,
@@ -2120,14 +2103,15 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
     @row_scoped
     async def _core_flat_view(self, pivot_spec: Any, start_row: int, end_row: int,
-                              include_grand_total: bool) -> Optional[Dict[str, Any]]:
+                              include_grand_total: bool, *,
+                              column_members: Optional[Tuple[Tuple[Any, ...], ...]] = None,
+                              ) -> Optional[Dict[str, Any]]:
         """The flat tabular view from the core."""
         from .transport.core_bridge import core_hierarchy_view, run_core_read
 
-        cache = self._core_visible_counts()
         return await run_core_read(self.controller, pivot_spec.table, lambda resolve: core_hierarchy_view(
             resolve, pivot_spec, [["__ALL__"]], start_row, end_row,
-            include_grand_total_row=include_grand_total, total_cache=cache, flat=True))
+            include_grand_total_row=include_grand_total, flat=True, column_members=column_members))
 
     async def hierarchy_view(
         self,
@@ -2143,16 +2127,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         return await self._hierarchy_view_routed(
             pivot_spec, target_paths, start_row, end_row, include_grand_total=include_grand_total)
 
-    def _core_visible_counts(self) -> "MutableMapping[str, int]":
-        """Visible-node counts by plan fingerprint: the controller's (cleared on every data change), else the adapter's.
-
-        The controller's counts come as a view bound to the core epoch at the start of this request, so a
-        count computed across a load or mutation is never stored."""
-        counts = getattr(self.controller, "core_visible_counts", None)
-        if isinstance(counts, dict) and callable(getattr(self.controller, "core_epoch", None)):
-            return _EpochBoundCounts(self.controller, self.controller.core_epoch())
-        return counts if isinstance(counts, dict) else self.__dict__.setdefault("_core_total_rows_cache", {})
-
     async def _hierarchy_view_routed(
         self,
         pivot_spec: Any,
@@ -2162,15 +2136,15 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         *,
         include_grand_total: bool,
         tabular_subtotals: bool = False,
+        column_members: Optional[Tuple[Tuple[Any, ...], ...]] = None,
     ) -> Dict[str, Any]:
         """The hierarchy view from the core (an unsupported request raises ``CoreUnsupported``)."""
         from .transport.core_bridge import core_hierarchy_view, run_core_read
 
-        cache = self._core_visible_counts()
         return await run_core_read(self.controller, pivot_spec.table, lambda resolve: core_hierarchy_view(
             resolve, pivot_spec, target_paths, start_row, end_row,
-            include_grand_total_row=include_grand_total, total_cache=cache,
-            tabular_subtotals=tabular_subtotals,
+            include_grand_total_row=include_grand_total,
+            tabular_subtotals=tabular_subtotals, column_members=column_members,
         ))
 
     async def handle_virtual_scroll_request(
@@ -2568,13 +2542,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         discovered_layout: Optional[dict[str, PivotColumnIdentity]] = None
         pinned_center_ids: list[str] = []
         resolved_layout_revision: Optional[str] = None
+        catalog_members: Optional[Tuple[Tuple[Any, ...], ...]] = None
         if (
             pivot_spec.columns
             and pivot_spec.pivot_config
             and pivot_spec.pivot_config.enabled
         ):
             column_catalog_started_at = time.perf_counter()
-            discovered_values = await self._discover_pivot_column_values(pivot_spec)
+            discovered_values, catalog_members = await self._discover_pivot_columns(pivot_spec)
             column_catalog_finished_at = time.perf_counter()
             if discovered_values:
                 resolved_layout = self._resolve_pivot_column_layout(
@@ -2636,7 +2611,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         )
         # REQ-LAYOUT-002: the flat tabular layout is served by the core when it can
         # express the request; the hierarchy branch below builds the response from its view.
-        _core_flat_view = await self._core_flat_view(pivot_spec, start_row, end_row, include_grand_total)             if _use_flat_path else None
+        _core_flat_view = await self._core_flat_view(
+            pivot_spec, start_row, end_row, include_grand_total, column_members=catalog_members,
+        ) if _use_flat_path else None
         _hier_show_subtotal_footers = (
             _show_subtotal_footers and _request_layout_mode != "tabular"
         )
@@ -2660,6 +2637,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             include_grand_total=include_grand_total,
             # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
             tabular_subtotals=_hier_tabular_subtotals,
+            column_members=catalog_members,
         )
         hierarchy_view_finished_at = time.perf_counter()
         convert_started_at = time.perf_counter()
@@ -2672,29 +2650,12 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         if include_grand_total and request.totals:
             grand_total_row = hierarchy_view.get("grand_total_row")
-            formula_source_rows = (
-                hierarchy_view.get("grand_total_formula_source_rows") or []
-            )
             if isinstance(grand_total_row, dict):
                 normalized_total = self.convert_pivot_result_to_tanstack_format(
                     [grand_total_row], request, version=request.version
                 ).data
                 if normalized_total:
                     grand_total_row = normalized_total[0]
-            formula_ids = self._measure_formula_ids_from_request(request)
-            if (
-                isinstance(grand_total_row, dict)
-                and formula_source_rows
-                and formula_ids
-            ):
-                source_rows = self.convert_pivot_result_to_tanstack_format(
-                    formula_source_rows,
-                    request,
-                    version=request.version,
-                ).data
-                grand_total_row.update(
-                    self._build_formula_rollup_values(source_rows, formula_ids)
-                )
             if isinstance(grand_total_row, dict):
                 existing_rows = tanstack_result.data or []
                 if not any(_is_grand_total_row(row) for row in existing_rows):

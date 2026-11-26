@@ -19,12 +19,16 @@
 ## 📦 Installation
 
 ```bash
+# Core analytical engine (pivot_engine)
 pip install serverside-pivot
 ```
 
-Optional extras:
+Optional host & runtime extras:
 
 ```bash
+# Plotly Dash component support
+pip install "serverside-pivot[dash]"
+
 # Streamlit component support
 pip install "serverside-pivot[streamlit]"
 
@@ -34,6 +38,13 @@ pip install "serverside-pivot[api]"
 # Redis caching / distributed export job coordination
 pip install "serverside-pivot[redis]"
 ```
+
+| Host / Layer | Install Command | Import Namespace |
+| :--- | :--- | :--- |
+| **Core Engine** | `pip install serverside-pivot` | `pivot_engine` |
+| **Plotly Dash** | `pip install "serverside-pivot[dash]"` | `serverside_pivot` (`DashTanstackPivot`) |
+| **Streamlit** | `pip install "serverside-pivot[streamlit]"` | `streamlit_pivot` (`st_serverside_pivot`) |
+| **React (npm)** | `npm install serverside_pivot` | `serverside_pivot` / `serverside_pivot/react` |
 
 ---
 

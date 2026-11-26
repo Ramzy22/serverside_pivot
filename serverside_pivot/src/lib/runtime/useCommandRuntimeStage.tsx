@@ -45,21 +45,6 @@ const PivotChartModal = props => <React.Suspense fallback={<PivotChartFallback /
 const PivotChartPanel = props => <React.Suspense fallback={<PivotChartFallback />}>
         <LazyPivotChartPanel {...props} />
     </React.Suspense>;
-const loadingAnimationStyles = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
-@keyframes pivot-row-loader-enter {
-    from { opacity: 0; transform: translateY(-6px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pivot-skeleton-shimmer {
-    0% { background-position: 220% 0; }
-    100% { background-position: -220% 0; }
-}
-@keyframes pivot-spinner-rotate {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-`;
 const FILTER_OPTION_PAGE_SIZE = 250;
 export function useCommandRuntimeStage(input, transportDomain) {
   // Never write into a predecessor domain. This render-pass assembly is local

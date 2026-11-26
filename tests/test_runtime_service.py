@@ -672,7 +672,11 @@ def test_runtime_service_export_without_col_ids_materializes_full_virtual_column
             os.remove(content_path)
 
 
-@pytest.mark.parametrize("group_separator", [None, "space", "thin_space"])
+def test_formatted_html_export_defaults_to_comma_grouping():
+    assert PivotRuntimeService._format_export_number(1234567.5, "fixed:2", 2, None) == "1,234,567.50"
+
+
+@pytest.mark.parametrize("group_separator", ["space", "thin_space"])
 def test_formatted_html_export_uses_plain_spaces_for_number_grouping(group_separator):
     formatted = PivotRuntimeService._format_export_number(
         1234567.5,
