@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.98] - 2026-11-26
+
+0.0.97 was tagged but never published (its release qualification failed); 0.0.98 supersedes it.
+
 ### Removed
 - The partial-cube cache tier and its pivot-column merges (`core/cube_cache.py`, `core.cube` namespace): measured 1.5–2.0x slower than per-level aggregation at 1M rows, scenario for scenario, against the AG Grid SSRM harness (`docs/architecture/M6_PERFORMANCE_PLAN.md` §3.1).
 

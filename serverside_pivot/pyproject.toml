@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverside-pivot"
-version = "0.0.97"
+version = "0.0.98"
 description = "Enterprise server-side pivot table and 2D virtualized analytics grid for Python, Dash, and Streamlit powered by DuckDB, PyArrow, and Ibis"
 readme = "README_PYPI.md"
 # Keep the table form until the minimum supported setuptools can parse the
