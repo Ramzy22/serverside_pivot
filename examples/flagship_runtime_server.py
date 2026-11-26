@@ -6,6 +6,7 @@ Run this before the React and Streamlit flagship examples:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,8 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:8502",
         "http://localhost:8502",
+        # An installed Streamlit host on another port (parallel qualification shards).
+        *([origin] if (origin := os.environ.get("PIVOT_FLAGSHIP_STREAMLIT_ORIGIN")) else []),
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],

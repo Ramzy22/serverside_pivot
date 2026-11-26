@@ -577,7 +577,9 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path, *, environment
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             else:
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            port = 8502 if name == "streamlit" else 0
+            # Streamlit defaults to the runtime CORS origin :8502; PIVOT_FLAGSHIP_STREAMLIT_PORT=0 takes a
+            # free port (parallel local shards) and the runtime admits that origin through the env below.
+            port = int(os.environ.get("PIVOT_FLAGSHIP_STREAMLIT_PORT", "8502")) if name == "streamlit" else 0
             bind_deadline = time.monotonic() + (2.0 if port else 0.0)
             while True:
                 try:
@@ -593,6 +595,7 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path, *, environment
         # Streamlit keeps its configured demo CORS origin; all reservations are
         # checked before any process is started and listener ownership is verified.
         child_env["PIVOT_RUNTIME_UPSTREAM"] = f"http://127.0.0.1:{ports['runtime']}"
+        child_env["PIVOT_FLAGSHIP_STREAMLIT_ORIGIN"] = f"http://127.0.0.1:{ports['streamlit']}"
         child_env["PIVOT_RUNTIME_ENDPOINT"] = f"http://127.0.0.1:{ports['runtime']}/v1/runtime"
         commands = (
             ("runtime", [str(python), "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", str(ports["runtime"])], app, f"http://127.0.0.1:{ports['runtime']}/health"),
