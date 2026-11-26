@@ -1235,14 +1235,12 @@ def core_hierarchy_view(
     }
 
 
-async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[str], Any]], Any], *,
-                        refresh: bool = False) -> Any:
+async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[str], Any]], Any]) -> Any:
     """Run one core read for ``controller``: ``read(resolve)`` with its scoped table resolver.
 
     The read queues on the table's execution lock and runs through the
     backend's ``run_statements`` (request-level cancellation and the query
-    deadline on every statement) when the backend offers it.  ``refresh`` (a forced
-    refresh) reads the facts instead of cached cubes.  A controller
+    deadline on every statement) when the backend offers it.  A controller
     without a scoped resolver cannot serve the core: ``CoreUnsupported``.
     """
     import asyncio
@@ -1254,7 +1252,7 @@ async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[s
         raise CoreUnsupported(["controller without resolve_table"])
 
     def work() -> Any:
-        return core_locked_call(controller, table, lambda: read(resolve), refresh=refresh)
+        return core_locked_call(controller, table, lambda: read(resolve))
 
     run_statements = getattr(getattr(controller, "backend", None), "run_statements", None)
     if callable(run_statements):
@@ -1262,7 +1260,7 @@ async def run_core_read(controller: Any, table: Any, read: Callable[[Callable[[s
     return await run_in_executor_scoped(asyncio.get_running_loop(), None, work)
 
 
-def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any], *, refresh: bool = False) -> Any:
+def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any]) -> Any:
     """Run a core read under the controller's execution lock for ``table``.
 
     The core shares the controller's backend connection, which is not safe for
@@ -1273,10 +1271,6 @@ def core_locked_call(controller: Any, table: Any, fn: Callable[[], Any], *, refr
     if lock_for is None:
         return fn()
     with lock_for(table):
-        cube_access = getattr(controller, "cube_access", None)
-        if callable(cube_access):
-            with cube_access(refresh=refresh):
-                return fn()
         return fn()
 
 

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+- The partial-cube cache tier and its pivot-column merges (`core/cube_cache.py`, `core.cube` namespace): measured 1.5–2.0x slower than per-level aggregation at 1M rows, scenario for scenario, against the AG Grid SSRM harness (`docs/architecture/M6_PERFORMANCE_PLAN.md` §3.1).
+
+### Changed
+- The physical planner chooses `leaf_partials` only with two or more visible levels and no pivot columns, where it measured faster (10M fully expanded: 304 vs 468 ms); `union_all` serves every other query.
+
 ## [0.0.97] - 2026-11-26
 
 ### Changed

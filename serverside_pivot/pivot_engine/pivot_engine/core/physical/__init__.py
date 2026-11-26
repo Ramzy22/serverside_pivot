@@ -11,10 +11,9 @@ from typing import Any, Callable, Dict, List, Tuple
 from ..logical import LogicalPlan
 from . import leaf_partials, union_all
 from .capabilities import BackendCapabilityError, check_capabilities
-from .leaf_partials import from_partials, partials, scalar_minima
 
 __all__ = ["STRATEGIES", "TREES", "BackendCapabilityError", "check_capabilities", "choose", "leaf_partials",
-           "union_all", "partials", "from_partials", "scalar_minima"]
+           "union_all"]
 
 STRATEGIES: Dict[str, Callable[[LogicalPlan, Any], Any]] = {
     "union_all": union_all.lower,
@@ -28,16 +27,21 @@ TREES: Dict[str, Callable[[LogicalPlan, Any], Tuple[Any, List[Any]]]] = {
 }
 
 
-# Measured with scripts/benchmark_core_strategies.py (DuckDB 1.5, 10M rows):
-# leaf_partials is 1.13-1.27x faster while the partial grain stays well below
-# the row count, and ~4x slower once the grain is near-unique (6 dims fully
-# expanded).  Without cardinality statistics the grain depth is the proxy.
+# Measured 2026-11-26 (DuckDB 1.5, the hierarchy benchmark set, 3 row levels):
+# with two or more levels visible, one scan at the partial grain beats a scan
+# per level (10M fully expanded: 304 vs 468 ms; 1M: even).  With one visible
+# level it is a scan plus a merge (1M collapsed: 69 vs 61 ms), and with pivot
+# columns the per-member merges cost more than per-level cells (1M, 48
+# members: 1.2-1.5x slower in every view), so union_all serves those.  A
+# near-unique grain (6 dims fully expanded) is ~4x slower: the grain depth,
+# capped at MAX_PARTIAL_GRAIN, is the proxy without cardinality statistics.
 MAX_PARTIAL_GRAIN = 4
 
 
 def choose(plan: LogicalPlan, schema: Any) -> str:
-    """Rule-based physical choice (see the benchmark note above); the grain counts the column dimensions."""
+    """Rule-based physical choice (see the measurement note above)."""
     grain = len(leaf_partials.grain(plan))
-    if 1 <= grain <= MAX_PARTIAL_GRAIN and leaf_partials.supports(plan, schema):
+    if (not plan.query.columns and 2 <= grain <= MAX_PARTIAL_GRAIN
+            and leaf_partials.supports(plan, schema)):
         return "leaf_partials"
     return "union_all"

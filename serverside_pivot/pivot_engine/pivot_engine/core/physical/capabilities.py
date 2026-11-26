@@ -31,16 +31,6 @@ _STRUCTURAL = (ops.SortKey, ScalarUDF, AggUDF)
 # equality-only form, which is exact everywhere but ~35% slower on DuckDB.
 _NATIVE_NULL_SAFE_SEMI_JOIN = frozenset({"duckdb"})
 
-# In-process engines that read a cached Arrow cube back as a memtable without an upload
-# (tests/core/test_physical_cube.py). A server database would receive every cube row as an
-# INSERT on each read (Oracle also rejects Decimal binds there), so it computes partials in place.
-_ARROW_CUBE_REUSE = frozenset({"duckdb", "sqlite", "polars"})
-
-
-def arrow_cube_reuse(backend: Any) -> bool:
-    """The backend re-reads cached Arrow cubes in process (the partial-cube cache applies)."""
-    return str(getattr(backend, "name", "")) in _ARROW_CUBE_REUSE
-
 
 def _filtered_ordered_aggregate(node: Any) -> bool:
     return isinstance(node, (ops.First, ops.Last, ops.ArrayCollect)) and bool(node.order_by) and node.where is not None

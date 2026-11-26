@@ -17,7 +17,6 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .cache import CacheKey, CacheManager, key_for
-from .cube_cache import current_cube_access
 from .frame import ResultFrame, split_window
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
@@ -51,8 +50,7 @@ def materialize(expr: Any) -> Any:
         if runner is not None:
             return runner(expr)
         from .physical.fetch import to_pyarrow
-        access = current_cube_access()
-        return to_pyarrow(expr, access.backend if access is not None else None)
+        return to_pyarrow(expr)
 
 
 @contextmanager
@@ -207,19 +205,6 @@ def _tree(query: PivotQuery, resolve: Resolver, strategy: Optional[str]) -> Any:
     relation = resolve(query.dataset)
     query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
     whole = replace(query, window=Window())
-    from .physical import leaf_partials
-
-    plan = logical_plan(whole)
-    selected = strategy or choose(plan, prepared(relation, query).schema())
-    access = current_cube_access()
-    if selected == "leaf_partials" and access is not None:
-        tree = access.program(whole)
-        if tree is not None:
-            return tree
-        tree = leaf_partials.lower(plan, relation, partial_provider=_partial_provider)
-        verify_scoped(tree)
-        access.store_program(whole, tree)
-        return tree
     source = relation.op()
     key = key_for("plan", query.dataset, hashlib.sha256(f"{canonical(whole)}|{strategy}".encode()).hexdigest())
     tree = _cached(key, source)
@@ -230,35 +215,6 @@ def _tree(query: PivotQuery, resolve: Resolver, strategy: Optional[str]) -> Any:
         verify_scoped(tree)
         _remember(key, source, tree)
     return tree
-
-
-def _partial_provider(plan: Any, e0: Any, grain: Sequence[str], restriction: Any) -> Any:
-    """Materialize verified E0 partials, or read matching versioned partials under this request's grant."""
-    import ibis
-
-    from .physical import leaf_partials
-    from .physical.arrow_relation import release
-    from .physical.union_all import restrict
-
-    access = current_cube_access()
-    if access is None:
-        raise RuntimeError("partial provider requires a bound cube access")
-    # The grand total and roots share one complete root cube. Deeper levels are disjoint parent extensions.
-    requested = tuple(dict.fromkeys([*plan.rows[:1], *grain]))
-
-    def build(missing: Any) -> Any:
-        expr = leaf_partials.partials(restrict(e0, missing, e0.schema()), plan, requested)
-        verify_scoped(expr)
-        return materialize(expr)
-
-    table = access.get(plan.query, requested, restriction, build)
-    token = id(table)
-    relation = access.relations.get(token)
-    if relation is None:
-        relation = ibis.memtable(table)
-        access.relations[token] = relation
-        access.on_exit(lambda: release(access.backend, relation))
-    return relation
 
 
 def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
@@ -336,15 +292,6 @@ def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int]
     keyed = axis is not None and axis.label in query.columns  # REQ-DIM-006: the label orders by member order
     extra = [axis.key] if keyed and axis is not None else []
     e0 = filtered(relation, query)
-    access = current_cube_access()
-    if access is not None:
-        from .physical import leaf_partials
-
-        plan = logical_plan(query)
-        keyed_order = any(o.by is not None and o.field in query.columns for o in order)  # needs record minima
-        if (not keyed_order and leaf_partials.supports(plan, e0.schema())
-                and choose(plan, e0.schema()) == "leaf_partials"):
-            e0 = _partial_provider(plan, e0, leaf_partials.grain(plan, query.rows[:1]), None)
     source = e0.select(*query.columns, *extra).distinct()
     by_field: Dict[str, ColumnOrder] = {o.field: o for o in order if o.field in query.columns}
     aliases = {m.alias for m in query.measures} | {d.alias for d in query.derived}

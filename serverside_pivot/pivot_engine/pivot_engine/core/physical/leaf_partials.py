@@ -1,11 +1,10 @@
-"""Leaf-partials strategy: every node and cell merged from reusable sufficient statistics.
+"""Leaf-partials strategy: every node and cell merged from one scan's sufficient statistics.
 
-Cubes aggregate prepared, row-filtered E0 at a requested row grain plus
-column dimensions and any deeper measure-filter keys. Eligibility, totals,
-pivot cells and sort lookups are algebraic merges of their sufficient
-statistics. Materialization belongs to the caller; a shared Ibis expression
-does not guarantee one physical scan. E/E0 semantics match the reference.
-Holistic aggregations (median, exact distinct) and DECIMAL
+One ``GROUP BY`` of the prepared, row-filtered E0 at the partial grain (the
+visible levels, the measure-filter depth, the member-sort ancestors and the
+column dimensions) computes each measure's mergeable statistics.
+Eligibility, level totals, pivot cells and sort lookups are algebraic merges
+of those partials; E/E0 semantics match the reference.  Holistic aggregations (median, exact distinct) and DECIMAL
 averages cannot be merged exactly this way, so :func:`supports` rejects them
 and the planner uses ``union_all``.  Result-equivalence with ``union_all`` is
 enforced by tests/core/test_strategy_equivalence.py.
@@ -25,13 +24,12 @@ from .union_all import (
     _member_condition,
     _semi_join_on_keys,
     build,
-    ordered_tree,
     prepared,
     restrict,
     tree,
 )
 
-__all__ = ["grain", "minima_fields", "scalar_minima", "partials", "from_partials", "lower", "supports", "tree_of"]
+__all__ = ["grain", "lower", "partials", "supports", "tree_of"]
 
 _MERGEABLE = {"sum", "count", "min", "max", "avg"}
 
@@ -49,49 +47,31 @@ def supports(plan: LogicalPlan, schema: Any) -> bool:
     return bool(plan.rows)
 
 
-def grain(plan: LogicalPlan, keys: Optional[Sequence[str]] = None) -> List[str]:
-    """Requested grain plus filter depth, member-sort prefixes and column dimensions.
-
-    Explicit keys allow shallow, restricted per-level cache entries. With no
-    keys, include every visible level and every member-sort ancestor.
-    """
-    if keys is None:
-        depth = max((level.depth for level in plan.levels), default=0)
-        depth = max([depth, *(plan.rows.index(dim) + 1 for dim, _ in plan.member_keys)])
-        keys = plan.rows[:depth]
-    depth = max(plan.filters_by_level, default=0)
-    return list(dict.fromkeys([*keys, *plan.rows[:depth], *plan.query.columns]))
+def grain(plan: LogicalPlan) -> List[str]:
+    """The partial grain: the visible levels, filter depth and member-sort ancestors, then the columns."""
+    depth = max((level.depth for level in plan.levels), default=0)
+    depth = max([depth, *(plan.rows.index(dim) + 1 for dim, _ in plan.member_keys),
+                 max(plan.filters_by_level, default=0)])
+    return list(dict.fromkeys([*plan.rows[:depth], *plan.query.columns]))
 
 
-def minima_fields(plan: LogicalPlan) -> Tuple[str, ...]:
-    """The source columns whose partial MIN the cube carries: the member-key sort columns (REQ-SORT-003)."""
-    return tuple(sorted({by for _dim, by in plan.member_keys}))
+def _minimum(schema: Any, field: str) -> str:
+    """The partial-MIN column of a member-key sort column (REQ-SORT-003), by schema position."""
+    return f"__min_{list(schema.names).index(field)}"
 
 
-def scalar_minima(schema: Any, fields: Optional[Sequence[str]] = None) -> Dict[str, str]:
-    """Stable source-column to partial-MIN aliases (by schema position), for ``fields`` (default: every
-    orderable column)."""
-    wanted = None if fields is None else set(fields)
-    return {name: f"__scalar_min_{i}" for i, (name, dtype) in enumerate(schema.items())
-            if (wanted is None or name in wanted)
-            and (dtype.is_numeric() or dtype.is_string() or dtype.is_boolean() or dtype.is_temporal())}
+def partials(source: Any, plan: LogicalPlan) -> Any:
+    """The partials of an already prepared, row-filtered E0 relation (never E), at :func:`grain`.
 
-
-def partials(source: Any, plan: LogicalPlan, keys: Optional[Sequence[str]] = None) -> Any:
-    """Aggregate an already prepared, row-filtered E0 relation (never E).
-
-    ``keys`` requests a row grain; filter-level keys and all pivot dimensions
-    are added automatically. Restrict E0 before calling for a child cache
-    entry. The cube carries the partial MIN of each member-key sort column
-    (:func:`minima_fields`, part of the cube's identity), no other. This
-    expression does not promise materialization or a physical scan count.
+    Besides the measures' statistics it carries the partial MIN of each
+    member-key sort column, no other.
     """
     if not supports(plan, source.schema()):
         raise ValueError("leaf_partials does not support this query; use union_all")
     metrics = _partials(source, plan)
-    minima = scalar_minima(source.schema(), minima_fields(plan))
-    metrics.update({alias: source[name].min() for name, alias in minima.items()})
-    keys = grain(plan, keys)
+    schema = source.schema()
+    metrics.update({_minimum(schema, by): source[by].min() for by in sorted({by for _dim, by in plan.member_keys})})
+    keys = grain(plan)
     return source.group_by(keys).aggregate(**metrics) if keys else source.aggregate(**metrics)
 
 
@@ -135,8 +115,9 @@ def _merge(leaf: Any, plan: LogicalPlan, schema: Any) -> Dict[str, Any]:
     return out
 
 
-def _provider(raw: Any, plan: LogicalPlan, cube_for: Any) -> AggregateProvider:
+def _provider(raw: Any, plan: LogicalPlan) -> AggregateProvider:
     schema = raw.schema()
+    leaf = partials(raw, plan)  # the one scan; every lookup below merges it
     # Every passing-group lookup is independently evaluated against E0,
     # never against the result of a preceding measure filter.
     passing = []
@@ -144,12 +125,11 @@ def _provider(raw: Any, plan: LogicalPlan, cube_for: Any) -> AggregateProvider:
         for cells in sorted({f.cells for f in filters}):
             selected = [f for f in filters if f.cells == cells]
             keys = list(plan.rows[:depth]) + (list(plan.query.columns) if cells else [])
-            cube = cube_for(keys, None)
-            values = {f.measure: _merged(cube, next(i for i, m in enumerate(plan.query.measures)
+            values = {f.measure: _merged(leaf, next(i for i, m in enumerate(plan.query.measures)
                                                   if m.alias == f.measure),
                                         next(m.agg for m in plan.query.measures if m.alias == f.measure), None)
                       for f in selected}
-            grouped = cube.group_by(keys).aggregate(**values)
+            grouped = leaf.group_by(keys).aggregate(**values)
             terms = [_CMP[f.op](grouped[f.measure], f.value) for f in selected]
             condition = terms[0]
             for term in terms[1:]:
@@ -162,7 +142,7 @@ def _provider(raw: Any, plan: LogicalPlan, cube_for: Any) -> AggregateProvider:
         return cube
 
     def records(keys: Sequence[str], restriction: Restriction) -> Any:
-        cube = restrict(cube_for(keys, restriction), restriction, schema)
+        cube = restrict(leaf, restriction, schema)
         return eligible(cube) if plan.values_from == "E" else cube
 
     def aggregate(keys: Sequence[str], restriction: Restriction) -> Any:
@@ -172,7 +152,7 @@ def _provider(raw: Any, plan: LogicalPlan, cube_for: Any) -> AggregateProvider:
 
     def member_min(keys: Sequence[str], restriction: Restriction, by: str, name: str) -> Any:
         cube = records(keys, restriction)
-        return cube.group_by(list(keys)).aggregate(**{name: cube[scalar_minima(schema)[by]].min()})
+        return cube.group_by(list(keys)).aggregate(**{name: cube[_minimum(schema, by)].min()})
 
     def cell_values(keys: Sequence[str], restriction: Restriction, entries: Sequence[Any]) -> Any:
         cube = records(keys, restriction)
@@ -184,54 +164,18 @@ def _provider(raw: Any, plan: LogicalPlan, cube_for: Any) -> AggregateProvider:
         return cube.group_by(list(keys)).aggregate(**metrics)
 
     def eligible_records(keys: Sequence[str], restriction: Restriction) -> Any:
-        return eligible(restrict(cube_for(keys, restriction), restriction, schema))
+        return eligible(restrict(leaf, restriction, schema))
 
     return AggregateProvider(raw, schema, eligible_records, aggregate, member_min, cell_values)
 
 
-def _prepare(partial_provider: Any = None) -> Any:
-    def prepare(e0: Any, plan: LogicalPlan) -> AggregateProvider:
-        cubes = {}
-        shared = partials(e0, plan) if partial_provider is None else None
-
-        def cube_for(keys: Sequence[str], restriction: Restriction) -> Any:
-            if shared is not None:
-                return shared
-            requested = tuple(grain(plan, keys))
-            token = (requested, restriction)
-            if token not in cubes:
-                cubes[token] = partial_provider(plan, e0, requested, restriction)
-            return cubes[token]
-
-        return _provider(e0, plan, cube_for)
-    return prepare
-
-
-def from_partials(plan: LogicalPlan, raw_relation: Any, cube_relation: Any) -> Any:
-    """Ordered whole tree from materialized E0 partials, without applying the window.
-
-    ``cube_relation`` is either one sufficient cube or
-    ``cube_for(keys, restriction) -> relation``. A callable must return E0
-    partials at a grain containing :func:`grain(plan, keys)`; unrestricted
-    requests must cover all E0, including measure-filter lookups. Raw data
-    supplies schema/backend only; aggregate and sort work uses the cubes.
-    """
-    raw = prepared(raw_relation, plan.query)
-    if not supports(plan, raw.schema()):
-        raise ValueError("leaf_partials does not support this query; use union_all")
-    cube_for = cube_relation if callable(cube_relation) else lambda keys, restriction: cube_relation
-    union, order = tree(plan, raw_relation, None, lambda e0, p: _provider(e0, p, cube_for))
-    return ordered_tree(plan, raw_relation, union, order)
-
-
-def lower(plan: LogicalPlan, relation: Any, partial_provider: Any = None) -> Any:
-    """Lower with optional ``provider(plan, e0, grain, restriction)`` cache hook."""
+def lower(plan: LogicalPlan, relation: Any) -> Any:
     if not supports(plan, prepared(relation, plan.query).schema()):
         raise ValueError("leaf_partials does not support this query; use union_all")
-    return build(plan, relation, None, _prepare(partial_provider))
+    return build(plan, relation, None, _provider)
 
 
-def tree_of(plan: LogicalPlan, relation: Any, partial_provider: Any = None) -> Tuple[Any, List[Any]]:
+def tree_of(plan: LogicalPlan, relation: Any) -> Tuple[Any, List[Any]]:
     if not supports(plan, prepared(relation, plan.query).schema()):
         raise ValueError("leaf_partials does not support this query; use union_all")
-    return tree(plan, relation, None, _prepare(partial_provider))
+    return tree(plan, relation, None, _provider)
