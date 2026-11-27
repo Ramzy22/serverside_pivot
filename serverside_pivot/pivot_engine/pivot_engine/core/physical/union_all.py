@@ -24,6 +24,7 @@ from ..logical import Level, LogicalPlan
 from ..registry import type_family
 from .capabilities import backend_name, native_null_safe_semi_join, window_functions
 from .lowering import lower as lower_measure
+from .parameters import ParentPaths
 
 __all__ = ["AggregateProvider", "DEPTH", "LevelAggregate", "ORD", "Restriction", "TOTAL", "build", "filtered",
            "lower", "output_columns",
@@ -490,6 +491,8 @@ def restrict(relation: Any, restriction: Restriction, schema: Any) -> Any:
     if restriction is None:
         return relation
     keys, paths = restriction
+    if isinstance(paths, ParentPaths):
+        return paths.restrict(relation, keys, schema)
     ordered = sorted(paths, key=repr)
     if len(keys) > 1 and len({p[0] for p in ordered}) > _LITERAL_GROUPS:
         return _semi_join_on_keys(relation, _paths_table(ordered, keys, schema), keys)
@@ -535,7 +538,8 @@ def _direct(source: Any, plan: LogicalPlan) -> LevelAggregate:
     return aggregate
 
 
-def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: LogicalPlan, schema: Any) -> Any:
+def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: LogicalPlan, schema: Any,
+                extras: Sequence[str] = ()) -> Any:
     keys = list(level.keys)
     rel = aggregate(keys, level.parent_restriction())  # only the records under visible parents
     if plan.query.ragged is not None and keys:  # REQ-DIM-005: a path that has ended is no node
@@ -549,6 +553,8 @@ def _level_rows(aggregate: LevelAggregate, eligible: Any, level: Level, plan: Lo
         dtype = schema[k].copy(nullable=True)
         cols[k] = rel[k].cast(dtype) if k in keys else ibis.null().cast(dtype)
     for name in plan.query.aggregate_columns():
+        cols[name] = rel[name]
+    for name in extras:
         cols[name] = rel[name]
     cols[DEPTH] = ibis.literal(level.depth, type="int16")
     return rel.select(**cols)
@@ -590,7 +596,7 @@ def tree(
     union = parts[0]
     for part in parts[1:]:
         union = union.union(part, distinct=False)
-    union, ancestor = _with_ancestor_measures(union, parts, plan)
+    union, ancestor = (union, {}) if q.subtotals == "none" else _with_ancestor_measures(union, parts, plan)
     union, member_key = _with_member_keys(union, source, plan, provider)
     union, cell_sort = _with_cell_sorts(union, source, plan, provider)
     if q.subtotals == "none":
@@ -810,6 +816,8 @@ def _with_cell_sorts(
     levels = {level.depth: level for level in plan.levels}
     deepest = max(levels, default=0)
     for i in range(1, len(plan.rows) + 1):
+        if q.subtotals == "none" and i != len(plan.rows):
+            continue
         keys = list(plan.rows[:i])
         if provider is not None:
             for n, _s, _member in entries:

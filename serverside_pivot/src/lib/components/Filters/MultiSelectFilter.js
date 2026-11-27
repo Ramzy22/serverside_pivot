@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { filterButtonStyle, filterCardStyle, filterHintStyle, filterInputStyle } from './filterStyles';
 
 const LOCAL_RENDER_LIMIT = 250;
 
@@ -8,8 +9,13 @@ const parseFilterListText = (text) => String(text || '')
     .map(value => value.trim())
     .filter(Boolean);
 
-/** @param {any} p0 @returns {any} */
-const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, onFilter, currentFilter, onClose, theme }) => {
+/**
+ * The List tab of a column filter: pick values from the column's members.
+ * The owning ColumnFilter renders the footer; this editor registers how to
+ * build its filter in `applyRef` and calls `onSubmit` on Enter in the search.
+ * @param {any} p0 @returns {any}
+ */
+const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, currentFilter, applyRef, onSubmit, theme }) => {
     /** @type {[any, (...args: any[]) => any]} */
     const [search, setSearch] = useState('');
     /** @type {[any, (...args: any[]) => any]} */
@@ -78,6 +84,14 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
     /** @type {any} */
     const totalCount = optionMeta && Number.isFinite(Number(optionMeta.total)) ? Number(optionMeta.total) : filteredOptions.length;
 
+    if (applyRef) {
+        applyRef.current = () => ({
+            filter: selected.size > 0
+                ? { operator: 'AND', conditions: [{ type: 'in', value: Array.from(selected) }] }
+                : null,
+        });
+    }
+
     /** @param {any} [val] @returns {any} */
     const toggle = (val) => {
         /** @type {any} */
@@ -106,38 +120,31 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
         addManualValues(manualValue);
     };
 
-    /** @returns {any} */
-    const apply = () => {
-        if (selected.size > 0) {
-            onFilter({ operator: 'AND', conditions: [{ type: 'in', value: Array.from(selected) }] });
-        } else {
-            onFilter(null);
-        }
-        if (onClose) onClose();
-    };
-
-    /** @returns {any} */
-    const clear = () => {
-        setSelected(new Set());
-        onFilter(null);
-    };
-
     return (
-        <div style={{display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px'}}>
-            <input 
-                placeholder={remoteOptions ? "Search values..." : "Search loaded values..."} 
-                value={search} 
-                onChange={e => setSearch(e.target.value)} 
-                style={{border:'1px solid #ddd', borderRadius:'4px', padding:'4px', fontSize:'11px'}} 
+        <div style={{display: 'flex', flexDirection: 'column', gap: '8px', minHeight: 0}}>
+            <input
+                placeholder={remoteOptions ? "Search values..." : "Search loaded values..."}
+                aria-label="Search values"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => {
+                    if (e.key === 'Enter' && typeof onSubmit === 'function') {
+                        e.preventDefault();
+                        onSubmit();
+                    }
+                }}
+                style={filterInputStyle(theme)}
             />
-            <div style={{fontSize:'10px', color:'#777'}}>
+            <div style={filterHintStyle(theme)}>
                 {remoteOptions
                     ? `${loading ? 'Loading' : 'Loaded'} ${loadedCount}${Number.isFinite(totalCount) ? ` of ${totalCount}` : ''} values`
                     : `${filteredOptions.length} matching value${filteredOptions.length === 1 ? '' : 's'}`}
+                {selected.size > 0 ? ` · ${selected.size} selected` : ''}
             </div>
             <div style={{display:'flex', gap:'6px'}}>
                 <input
                     placeholder="Add or paste values..."
+                    aria-label="Add or paste values"
                     value={manualValue}
                     onChange={e => setManualValue(e.target.value)}
                     onPaste={e => {
@@ -155,25 +162,33 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
                             addManualValue();
                         }
                     }}
-                    style={{border:'1px solid #ddd', borderRadius:'4px', padding:'4px', fontSize:'11px', flex:1}}
+                    style={{ ...filterInputStyle(theme), flex: 1 }}
                 />
                 <button
+                    type="button"
+                    className="sp-btn sp-btn-subtle"
                     onClick={addManualValue}
-                    style={{padding:'4px 8px', fontSize:'11px', border:'1px solid #ddd', background:'#f5f5f5', borderRadius:'4px', cursor:'pointer'}}
+                    disabled={!manualValue.trim()}
+                    style={{ ...filterButtonStyle(theme, 'subtle'), opacity: manualValue.trim() ? 1 : 0.55, cursor: manualValue.trim() ? 'pointer' : 'default' }}
                 >
                     Add
                 </button>
             </div>
-            <div style={{overflowY: 'auto', flex: 1, border: '1px solid #f0f0f0', borderRadius:'4px'}}>
-                {visibleOptions.length === 0 ? <div style={{padding:'8px', color:'#999', fontSize:'11px'}}>{loading ? 'Loading options...' : 'No options...'}</div> :
+            <div role="listbox" aria-multiselectable="true" aria-label="Values" style={{ ...filterCardStyle(theme), overflowY: 'auto', flex: 1, minHeight: '96px', maxHeight: '220px' }}>
+                {visibleOptions.length === 0 ? <div style={{ ...filterHintStyle(theme), padding:'8px' }}>{loading ? 'Loading options...' : 'No options...'}</div> :
                 visibleOptions.map(/** @param {any} [opt] @param {any} [i] @returns {any} */ (opt, i) => (
-                    <div key={i} onClick={() => toggle(opt)} style={{display:'flex', gap:'6px', padding:'4px 8px', cursor:'pointer', alignItems:'center', background: selected.has(opt) ? '#e3f2fd' : 'transparent'}}>
-                        <input type="checkbox" checked={selected.has(opt)} readOnly style={{margin:0}} />
-                        <span style={{fontSize:'11px'}}>{opt}</span>
-                    </div>
+                    <label
+                        key={i}
+                        role="option"
+                        aria-selected={selected.has(opt)}
+                        style={{display:'flex', gap:'8px', padding:'5px 8px', cursor:'pointer', alignItems:'center', fontSize:'12px', color: theme.text, background: selected.has(opt) ? (theme.select || theme.hover) : 'transparent'}}
+                    >
+                        <input type="checkbox" checked={selected.has(opt)} onChange={() => toggle(opt)} style={{margin:0, accentColor: theme.primary}} />
+                        <span>{opt}</span>
+                    </label>
                 ))}
                 {localHasMore && (
-                    <div style={{padding:'8px', color:'#777', fontSize:'11px', borderTop:'1px solid #f0f0f0'}}>
+                    <div style={{ ...filterHintStyle(theme), padding:'8px', borderTop:`1px solid ${theme.border}` }}>
                         Showing first {LOCAL_RENDER_LIMIT}. Search to narrow the list.
                     </div>
                 )}
@@ -186,35 +201,11 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
                                 onLoadMoreOptions(search, loadedCount);
                             }
                         }}
-                        style={{width:'100%', padding:'7px 8px', border:'none', borderTop:'1px solid #f0f0f0', background:'#fafafa', cursor:loading?'default':'pointer', fontSize:'11px', color:(theme && theme.primary) || '#1976d2'}}
+                        style={{ ...filterButtonStyle(theme, 'ghost'), width:'100%', borderRadius: 0, borderTop:`1px solid ${theme.border}`, color: theme.primary, cursor: loading ? 'default' : 'pointer' }}
                     >
                         {loading ? 'Loading...' : 'Load more'}
                     </button>
                 )}
-            </div>
-            <div style={{display:'flex', justifyContent:'space-between', gap:'8px'}}>
-                <button
-                    onClick={clear}
-                    style={{padding:'4px 8px', border:'none', background:'none', cursor:'pointer', color:'#d32f2f', fontSize:'11px'}}
-                >
-                    Clear
-                </button>
-                <div style={{display:'flex', gap:'8px'}}>
-                    {onClose && (
-                        <button
-                            onClick={onClose}
-                            style={{padding:'4px 8px', border:'none', background:'none', cursor:'pointer', fontSize:'11px'}}
-                        >
-                            Close
-                        </button>
-                    )}
-                    <button
-                        onClick={apply}
-                        style={{padding:'4px 12px', background:(theme && theme.primary) || '#1976d2', color:'#fff', border:'none', borderRadius:'2px', cursor:'pointer', fontSize:'11px'}}
-                    >
-                        Apply
-                    </button>
-                </div>
             </div>
         </div>
     );

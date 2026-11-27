@@ -1387,7 +1387,7 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
         return acc;
     };
 
-    const renderHeaderWith = ({ themeOverrides = {}, headerWidth = 92, wrapHeaders = true }) => {
+    const renderHeaderWith = ({ themeOverrides = {}, headerWidth = 92, wrapHeaders = true, groupOrder = null }) => {
         let helperApi = null;
         const theme = { ...themes.flash, ...themeOverrides };
         function Probe() {
@@ -1420,6 +1420,8 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
                 fontFamily: 'Inter, sans-serif',
                 fontSize: 12,
                 handleHeaderContextMenu: () => {},
+                getPivotColumnSortField: () => 'quarter',
+                getPivotColumnSortState: () => groupOrder,
                 autoSizeColumn: () => {},
                 autoSizeBounds: { minWidth: 40, maxWidth: 400 },
                 hoveredHeaderIdRef: { current: null },
@@ -1465,7 +1467,7 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
         ReactDOMServer.renderToStaticMarkup(React.createElement(Probe));
         const fakeColumn = {
             id: 'pnl_sum',
-            columns: [],
+            columns: groupOrder ? [{ id: 'leaf' }] : [],
             columnDef: {
                 header: 'Consolidated Performance Revenue',
                 meta: { shortLabel: 'x', preserveHeaderLabel: true },
@@ -1493,7 +1495,7 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
         return helperApi.renderHeaderCell(fakeHeader, 0, 'center', headerWidth, false);
     };
 
-    const hoverTree = renderHeaderWith({ themeOverrides: { headerControls: 'hover', headerWrap: true }, headerWidth: 92 });
+    const hoverTree = renderHeaderWith({ themeOverrides: { headerWrap: true }, headerWidth: 92 });
     const headerTextNodes = findElements(hoverTree, (el) => el.props && el.props['data-header-text'] === 'true');
     assert.equal(headerTextNodes.length, 1);
     assert.equal(headerTextNodes[0].props.style.wordBreak, 'normal');
@@ -1516,6 +1518,73 @@ test('headerWrap wraps only at spaces, shortLabel switches cleanly, and |x| badg
     const forcedBadges = findElements(forcedBadgeTree, (el) => el.props && el.props.title === 'Absolute value sort');
     assert.equal(forcedBadges.length, 1);
     assert.ok(!String(forcedBadges[0].props.className || '').includes('sp-header-control'));
+    for (const direction of ['asc', 'desc']) {
+        const tree = renderHeaderWith({ groupOrder: { mode: 'label', direction }, headerWidth: 180 });
+        const glyphs = findElements(tree, el => el.props?.['data-pivot-column-order'] === direction);
+        assert.equal(glyphs.length, 1);
+        assert.equal(glyphs[0].props.children, direction === 'asc' ? '↑' : '↓');
+    }
+});
+
+test('header measurement applies the rendered transform, tracking, wrapping and sort arrow', () => {
+    const { measureHeaderLabel } = loader.load('src/lib/utils/pivotLayoutUtils.js');
+    const measureText = text => [...text].reduce((width, char) => width + (char === char.toUpperCase() ? 10 : 5), 0);
+    assert.equal(measureHeaderLabel('Revenue', { measureText, fontSize: 10 }), 70 + 7 * .4);
+    assert.equal(measureHeaderLabel('Revenue', { measureText, fontSize: 10, canSort: true }), 70 + 7 * .4 + 14);
+    assert.equal(measureHeaderLabel('Net revenue', { measureText, fontSize: 10, wrap: true }), 70 + 7 * .4);
+    assert.equal(measureHeaderLabel('Revenue', { measureText, measureSubHeader: false }), 40);
+    assert.equal(measureHeaderLabel('Revenue', { measureText, theme: { headerTextTransform: 'none', headerLetterSpacing: '2px' } }), 54);
+});
+
+test('report label fallback and light-theme accent share the redesigned defaults', () => {
+    const { getReportHeaderLabel } = loader.load('src/lib/hooks/usePivotNormalization.js');
+    assert.equal(getReportHeaderLabel(null), 'Lines');
+    assert.equal(getReportHeaderLabel({ root: {} }), 'Lines');
+    assert.equal(getReportHeaderLabel({ root: { label: '  Income  ' } }), 'Income');
+    assert.equal(getReportHeaderLabel({ root: { field: 'region' } }), 'Region');
+    const { themes, buildThemeCssVars } = loader.load('src/lib/utils/styles.js');
+    assert.equal(themes.light.primary, '#4F46E5');
+    assert.equal(themes.light.sortedHeaderBorder, '#4F46E5');
+    assert.equal(themes.light.select, '#E0E7FF');
+    assert.match(buildThemeCssVars(themes.light)['--sp-focus-ring'], /79, 70, 229/);
+});
+
+test('390px workspace clamps the pinned hierarchy without overwriting desktop sizing', async () => {
+    const harness = createRuntimeHarness();
+    try {
+        const props = {
+            data: [{ region: 'North', sales: 120 }],
+            rowFields: ['region'],
+            valConfigs: [{ field: 'sales', agg: 'sum' }],
+        };
+        let result = await harness.settle(props);
+        const desktopWidth = result.workspace.canvas.table.getColumn('hierarchy').getSize();
+        const desktopLayoutWidth = result.workspace.canvas.totalLayoutWidth;
+        result.workspace.canvas.onWorkspaceResize(390);
+        result = await harness.settle(props);
+        assert.equal(result.workspace.canvas.table.getColumn('hierarchy').getSize(), 156);
+        assert.equal(result.workspace.canvas.totalLayoutWidth, desktopLayoutWidth - desktopWidth + 156);
+        result.workspace.canvas.onWorkspaceResize(1200);
+        result = await harness.settle(props);
+        assert.equal(result.workspace.canvas.table.getColumn('hierarchy').getSize(), desktopWidth);
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('compact toolbar renders one main row with Fields, modes, search, export and overflow', () => {
+    const React = localRequire('react');
+    const { renderToStaticMarkup } = localRequire('react-dom/server');
+    const { PivotAppBar } = loader.load('src/lib/components/PivotAppBar.js');
+    const { PivotThemeProvider } = loader.load('src/lib/contexts/PivotThemeContext.js');
+    const { PivotConfigProvider } = loader.load('src/lib/contexts/PivotConfigContext.js');
+    const { themes, getStyles } = loader.load('src/lib/utils/styles.js');
+    const html = renderToStaticMarkup(React.createElement(PivotThemeProvider, { theme: themes.flash, styles: getStyles(themes.flash) },
+        React.createElement(PivotConfigProvider, { pivotMode: 'pivot', filters: {}, savedReports: [] },
+            React.createElement(PivotAppBar, { compact: true, themeName: 'flash', zoomLevel: 100, dataBarsColumns: new Set(), spacingLabels: [] }))));
+    for (const text of ['data-pivot-toolbar-row="compact"', 'flex-wrap:nowrap', 'aria-label="Fields"', 'pivot-mode-pivot', 'pivot-mode-report', 'pivot-global-search', 'aria-label="Export XLSX"', 'More workspace actions']) assert.ok(html.includes(text), text);
+    assert.ok(!html.includes('data-toolbar-section-toggle='), 'ribbon entries stay inside the closed overflow');
+    assert.ok(!html.includes('title="Zoom out"'));
 });
 
 test('Pivot mode header-click re-sorting preserves absoluteSort and showGrandTotal={false} hides Grand Total', async () => {

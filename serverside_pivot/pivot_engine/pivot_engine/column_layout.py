@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections import OrderedDict
+from functools import cached_property, lru_cache
 import hashlib
 import json
 import math
@@ -50,6 +51,22 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+@lru_cache(maxsize=16384)
+def _cached_group_id(pivot_path: tuple[tuple[str, Any], ...]) -> str:
+    digest = hashlib.sha256(_canonical_json(pivot_path)).hexdigest()
+    return f"g:{digest}"
+
+
+@lru_cache(maxsize=16384)
+def _cached_layout_id(pivot_path: tuple[tuple[str, Any], ...], measure: str, is_row_total: bool) -> str:
+    digest = hashlib.sha256(_canonical_json({
+        "path": pivot_path,
+        "measure": measure,
+        "rowTotal": is_row_total,
+    })).hexdigest()
+    return f"{'t' if is_row_total else 'p'}:{digest}"
+
+
 @dataclass(frozen=True)
 class PivotColumnIdentity:
     """A value column identified by its source path and measure, not its label."""
@@ -61,21 +78,28 @@ class PivotColumnIdentity:
     is_row_total: bool = False
     layout_measure_key: str | None = field(default=None, compare=False)
 
-    @property
+    @cached_property
     def group_id(self) -> str:
         if self.is_row_total:
             return "total"
-        digest = hashlib.sha256(_canonical_json(self.pivot_path)).hexdigest()
-        return f"g:{digest}"
+        try:
+            return _cached_group_id(self.pivot_path)
+        except TypeError:
+            digest = hashlib.sha256(_canonical_json(self.pivot_path)).hexdigest()
+            return f"g:{digest}"
 
-    @property
+    @cached_property
     def layout_id(self) -> str:
-        digest = hashlib.sha256(_canonical_json({
-            "path": self.pivot_path,
-            "measure": self.layout_measure_key or self.measure_key,
-            "rowTotal": self.is_row_total,
-        })).hexdigest()
-        return f"{'t' if self.is_row_total else 'p'}:{digest}"
+        measure = self.layout_measure_key or self.measure_key
+        try:
+            return _cached_layout_id(self.pivot_path, measure, self.is_row_total)
+        except TypeError:
+            digest = hashlib.sha256(_canonical_json({
+                "path": self.pivot_path,
+                "measure": measure,
+                "rowTotal": self.is_row_total,
+            })).hexdigest()
+            return f"{'t' if self.is_row_total else 'p'}:{digest}"
 
 
 def catalog_from_pivot_values(

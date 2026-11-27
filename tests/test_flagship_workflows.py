@@ -1144,7 +1144,7 @@ def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path, ini
 
     html = """<button data-testid="pivot-toolbar-format" onclick="const options=document.querySelector('[title]'); options.hidden=!options.hidden">Format</button>
       <button title="Open number format options" INITIAL_HIDDEN onclick="document.querySelector('[role=dialog]').hidden=false">Number Format</button>
-      <div role="dialog" aria-label="Format Cells" hidden><input type="number" value="0">
+      <div role="dialog" aria-label="Number Format" hidden><input type="number" value="0">
       <button onclick="document.querySelector('output').textContent=document.querySelector('input').value; this.parentElement.remove()">OK</button></div>
       <output></output>""".replace("INITIAL_HIDDEN", "" if initial_format_open else "hidden")
     driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))

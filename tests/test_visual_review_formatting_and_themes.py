@@ -159,13 +159,13 @@ def test_vr404_number_format_dialog_modal(vr_session: VisualReviewSession) -> No
         s.open_toolbar_section("format")
         s.click_button(title_contains="Open number format options")
         s.wait_until(
-            lambda: len(s.find_visible('[aria-label="Format Cells"]')) > 0,
+            lambda: len(s.find_visible('[aria-label="Number Format"]')) > 0,
             timeout=6.0,
             message="NumberFormatDialog modal did not open",
         )
 
     def choose_accounting_and_apply(s: VisualReviewSession) -> None:
-        dialog = s.find_visible('[aria-label="Format Cells"]')[0]
+        dialog = s.find_visible('[aria-label="Number Format"]')[0]
         cat_btn = next(
             b for b in dialog.find_elements(By.TAG_NAME, "button") if "Accounting" in (b.text or "") or "Scientific" in (b.text or "")
         )
@@ -176,7 +176,7 @@ def test_vr404_number_format_dialog_modal(vr_session: VisualReviewSession) -> No
         )
         ok_btn.click()
         s.wait_until(
-            lambda: len(s.find_visible('[aria-label="Format Cells"]')) == 0,
+            lambda: len(s.find_visible('[aria-label="Number Format"]')) == 0,
             timeout=6.0,
             message="NumberFormatDialog did not close after OK",
         )
@@ -199,7 +199,7 @@ def test_vr405_cell_format_popover_apply_and_styles(vr_session: VisualReviewSess
     def open_cell_format_popover(s: VisualReviewSession) -> None:
         _select_numeric_cell_range(s, count=2)
         s.open_toolbar_section("format")
-        s.click_button(title_contains="Format selected cells")
+        s.click_button(title_contains="Style selected cells")
         s.wait_until(
             lambda: len(s.find_visible('[data-cell-format-popover="true"]')) > 0,
             timeout=6.0,
@@ -234,17 +234,19 @@ def test_vr405_cell_format_popover_apply_and_styles(vr_session: VisualReviewSess
 def test_vr406_color_scales_and_typography(vr_session: VisualReviewSession) -> None:
     def enable_color_scale_by_col(s: VisualReviewSession) -> None:
         s.open_toolbar_section("format")
-        scale_trigger = s.wait_until(
-            lambda: (s.find_visible('[title="Color scale"]') or [None])[0],
-            message="Color scale selector not found",
+        scale_menu = s.wait_until(
+            lambda: (s.find_visible('summary[aria-label="Color scale"]') or [None])[0],
+            message="Color scale menu not found",
         )
-        s.select_themed_option(scale_trigger, "By Col")
+        scale_menu.click()
+        s.wait_until(lambda: s.find_visible('[role="menuitemradio"][data-value="col"]'), message="Color scale menu did not open")
+        s.find_visible('[role="menuitemradio"][data-value="col"]')[0].click()
         s.settle(0.25)
 
     def switch_palette_and_font_size(s: VisualReviewSession) -> None:
-        pal_triggers = s.find_visible('[aria-label="Color palette"]')
-        if pal_triggers:
-            s.select_themed_option(pal_triggers[0], "Blue to White")
+        s.find_visible('summary[aria-label="Color scale"]')[0].click()
+        s.wait_until(lambda: s.find_visible('[role="menuitemradio"][data-palette="blueWhite"]'), message="Palette options missing")
+        s.find_visible('[role="menuitemradio"][data-palette="blueWhite"]')[0].click()
         font_size_triggers = s.find_visible('[title="Font size"]')
         if font_size_triggers:
             s.select_themed_option(font_size_triggers[0], "14px")
@@ -252,7 +254,7 @@ def test_vr406_color_scales_and_typography(vr_session: VisualReviewSession) -> N
 
     vr_session.record_transition(
         "VR_406_color_scales_and_typography",
-        "Enable Color Scale 'By Col' heatmap -> switch palette to 'Blue to White' & Font Size 14px",
+        "Color Scale menu > By Column heatmap -> Palette 'Blue to White' & Font Size 14px",
         route="/pivot",
         action_to_transition_fn=enable_color_scale_by_col,
         complete_to_after_fn=switch_palette_and_font_size,
@@ -266,6 +268,7 @@ def test_vr407_data_bars_underbar_and_bounds_dialog(vr_session: VisualReviewSess
         s.open_toolbar_section("format")
         s.click_button(title_contains="Toggle data bars")
         s.settle(0.2)
+        s.find_visible('summary[aria-label="Data bar options"]')[0].click()
         s.click_button(title_contains="Set data bar bounds")
         s.wait_until(
             lambda: len(s.find_visible('[aria-label="Data Bar Bounds"]')) > 0,
@@ -283,12 +286,14 @@ def test_vr407_data_bars_underbar_and_bounds_dialog(vr_session: VisualReviewSess
             timeout=6.0,
             message="DataBarBoundsDialog did not close",
         )
-        s.click_button(title_contains="Switch Data Bars between slim under-bar")
+        s.find_visible('summary[aria-label="Data bar options"]')[0].click()
+        s.wait_until(lambda: s.find_visible('[role="menuitemradio"][data-bar-variant="underbar"]'), message="Data bar style options missing")
+        s.find_visible('[role="menuitemradio"][data-bar-variant="underbar"]')[0].click()
         s.settle(0.25)
 
     vr_session.record_transition(
         "VR_407_data_bars_and_bounds_dialog",
-        "Enable Data Bars -> open DataBarBoundsDialog modal -> set 250k max & switch to Bar: Underbar",
+        "Enable Data Bars -> Data bar options > Bounds… -> set 250k max -> Data bar options > Underbar",
         route="/pivot",
         action_to_transition_fn=enable_data_bars_and_open_bounds_dialog,
         complete_to_after_fn=apply_bounds_and_switch_underbar,

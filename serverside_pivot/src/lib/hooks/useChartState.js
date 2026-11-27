@@ -54,6 +54,8 @@ export function useChartState({
     /** @type {[any, (...args: any[]) => any]} */
     const [chartPanelSortMode, setChartPanelSortMode] = useState(initialChartDefinition.sortMode);
     /** @type {[any, (...args: any[]) => any]} */
+    const [chartPanelMeasureIds, setChartPanelMeasureIds] = useState(initialChartDefinition.measureIds);
+    /** @type {[any, (...args: any[]) => any]} */
     const [chartPanelInteractionMode, setChartPanelInteractionMode] = useState(initialChartDefinition.interactionMode);
     /** @type {[any, (...args: any[]) => any]} */
     const [chartPanelServerScope, setChartPanelServerScope] = useState(initialChartDefinition.serverScope);
@@ -110,6 +112,7 @@ export function useChartState({
         chartPanelFloating, setChartPanelFloating,
         chartPanelFloatingRect, setChartPanelFloatingRect,
         chartPanelSortMode, setChartPanelSortMode,
+        chartPanelMeasureIds, setChartPanelMeasureIds,
         chartPanelInteractionMode, setChartPanelInteractionMode,
         chartPanelServerScope, setChartPanelServerScope,
         chartPanelLocked, setChartPanelLocked,

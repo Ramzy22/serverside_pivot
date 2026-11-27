@@ -364,6 +364,54 @@ export const getRowLabel = (row, fallbackIndex = 0) => {
     return formatDisplayLabel(row.id || `Row ${fallbackIndex + 1}`);
 };
 
+/**
+ * Row labels made unique by prefixing the parent path when a leaf label repeats
+ * (e.g. "Atlas" under two segments becomes "Commercial › Atlas").
+ * @param {any[]} [rows] @returns {string[]}
+ */
+export const buildUniqueRowLabels = (rows = []) => {
+    const labels = (rows || []).map((row, index) => getRowLabel(row, index));
+    /** @type {Record<string, number>} */
+    const counts = {};
+    labels.forEach((label) => { counts[label] = (counts[label] || 0) + 1; });
+    if (!Object.values(counts).some((count) => count > 1)) return labels;
+    return (rows || []).map((row, index) => {
+        if (counts[labels[index]] <= 1) return labels[index];
+        const path = String(getRowPath(row) || '');
+        const parts = path.split('|||').filter((part) => part && part !== '__grand_total__');
+        return parts.length > 1 ? parts.map((part) => formatDisplayLabel(part)).join(' › ') : labels[index];
+    });
+};
+
+/** The measure a value column belongs to: its leaf header label. @param {any} [column] @returns {string} */
+export const getColumnMeasureKey = (column) => {
+    const segments = getColumnHeaderSegments(column);
+    return segments.length > 0 ? segments[segments.length - 1] : getColumnLabel(column);
+};
+
+/**
+ * Chart measure selection. `measureIds` is 'all', 'auto' (the first measure),
+ * or a list of measure keys; anything else keeps every measure.
+ * @param {any[]} [numericColumns] @param {any} [measureIds] @returns {{columns: any[], availableMeasures: string[], activeMeasures: string[]}}
+ */
+export const selectChartMeasureColumns = (numericColumns = [], measureIds) => {
+    const columns = numericColumns || [];
+    const availableMeasures = Array.from(new Set(columns.map(getColumnMeasureKey)));
+    let activeMeasures = availableMeasures;
+    if (measureIds === 'auto') {
+        activeMeasures = availableMeasures.slice(0, 1);
+    } else if (Array.isArray(measureIds) && measureIds.length > 0) {
+        const requested = measureIds.filter((key) => availableMeasures.includes(key));
+        activeMeasures = requested.length > 0 ? requested : availableMeasures.slice(0, 1);
+    }
+    const active = new Set(activeMeasures);
+    return {
+        columns: columns.filter((column) => active.has(getColumnMeasureKey(column))),
+        availableMeasures,
+        activeMeasures,
+    };
+};
+
 /** @param {any} [row] @returns {any} */
 export const getRowDepth = (row) => {
     if (!row) return 0;
@@ -1518,7 +1566,9 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
         chartRows.some(/** @param {any} [row] @returns {any} */ (row) => parseNumeric(getCellValue(row, column.id)) !== null)
     ));
     /** @type {any} */
-    const seriesColumns = numericColumns.slice(0, maxColumns);
+    const measureSelection = selectChartMeasureColumns(numericColumns, options.measureIds);
+    /** @type {any} */
+    const seriesColumns = measureSelection.columns.slice(0, maxColumns);
     /** @type {any} */
     const resolveColumnLabel = buildColumnLabelResolver(seriesColumns);
     /** @type {any} */
@@ -1555,9 +1605,14 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
     if (filteredVisibleRows.length > chartRows.length) {
         notes.push(`showing first ${chartRows.length} visible rows`);
     }
-    if (numericColumns.length > seriesColumns.length) {
+    if (measureSelection.columns.length > seriesColumns.length) {
         notes.push(`showing first ${seriesColumns.length} numeric columns`);
     }
+    /** @type {any} */
+    const measureInfo = {
+        availableMeasures: measureSelection.availableMeasures,
+        activeMeasures: measureSelection.activeMeasures,
+    };
 
     if (orientation === 'columns') {
         /** @type {any} */
@@ -1568,10 +1623,17 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
             notes.push(`showing first ${rowSeriesRows.length} visible rows as series`);
         }
         /** @type {any} */
-        const rowSeries = rowSeriesRows.map(/** @param {any} [row] @param {any} [index] @returns {any} */ (row, index) => ({
-            name: getRowLabel(row, index),
+        const rowSeriesNames = buildUniqueRowLabels(rowSeriesRows);
+        /** @type {any} */
+        const allRowSeries = rowSeriesRows.map(/** @param {any} [row] @param {any} [index] @returns {any} */ (row, index) => ({
+            name: rowSeriesNames[index],
             values: seriesColumns.map(/** @param {any} [column] @returns {any} */ (column) => parseNumeric(getCellValue(row, column.id))),
         })).filter(/** @param {any} [entry] @returns {any} */ (entry) => entry.values.some(/** @param {any} [value] @returns {any} */ (value) => value !== null));
+        /** @type {any} */
+        const rowSeries = allRowSeries.slice(0, MAX_PANEL_SERIES);
+        if (allRowSeries.length > rowSeries.length) {
+            notes.push(`showing ${rowSeries.length} of ${allRowSeries.length} series`);
+        }
 
         /** @type {Record<string, any>} */
         const rawModel = {
@@ -1591,6 +1653,7 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
             icicleDepth: icicleModel.maxDepth,
             series: rowSeries,
             note: notes.length > 0 ? notes.join(', ') : null,
+            ...measureInfo,
             availableLevels,
             maxHierarchyLevel,
             activeHierarchyLevel: hierarchyLevel,
@@ -1599,7 +1662,7 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
     }
 
     /** @type {any} */
-    const categories = chartRows.map(/** @param {any} [row] @param {any} [index] @returns {any} */ (row, index) => getRowLabel(row, index));
+    const categories = buildUniqueRowLabels(chartRows);
     /** @type {any} */
     const series = seriesColumns.map(/** @param {any} [column] @returns {any} */ (column) => ({
         name: resolveColumnLabel(column),
@@ -1658,6 +1721,7 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
         icicleDepth: icicleModel.maxDepth,
         series,
         note: notes.length > 0 ? notes.join(', ') : null,
+        ...measureInfo,
         availableLevels,
         maxHierarchyLevel,
         activeHierarchyLevel: hierarchyLevel,

@@ -126,8 +126,8 @@ class ProductServer:
         state = PivotViewState(
             row_fields=list(GROUP_FIELDS), col_fields=["period"],
             val_configs=[{"field": m, "agg": "sum", "alias": f"{m}_sum"} for m in MEASURES],
-            filters=({"region": {"operator": "AND", "conditions": [{"type": "eq", "value": region,
-                                                                     "caseSensitive": True}]}} if region else {}),
+            filters=({"region": {"operator": "AND", "conditions": [{"type": "eq", "value": region}]}}
+                     if region else {}),
             sorting=[{"id": sort, "desc": True}] if sort else [],
             expanded=dict(expanded or {}), show_row_totals=True, show_col_totals=True, show_subtotals=True,
             sort_options={"columnOptions": {"period": {"pivotSortMode": "label", "pivotDirection": "asc"}}},
@@ -145,9 +145,18 @@ class ProductServer:
             raise RuntimeError(f"product request failed: {response.status} {getattr(response, 'message', '')}")
         return response
 
+    def clear_views(self) -> None:
+        """Discard response caches while preserving reusable physical data and statements."""
+        controller = self.adapter.controller
+        controller.core_cache.invalidate(tiers=("result",))
+        if controller.cache is not None and hasattr(controller.cache, "clear"):
+            controller.cache.clear()
+        self.adapter._viewport_cache.invalidate_all()
+
     def all_cells(self, **kwargs: Any) -> Dict[str, Dict[str, Any]]:
         """Every row of the view by path, with every column, read window by window as the client scrolls."""
-        first = self.get_rows(**kwargs)
+        columns = kwargs.pop("columns", None)
+        first = self.get_rows(columns=columns, **kwargs)
         total = int((first.col_schema or {}).get("total_center_cols") or 0)
         rows = {str(r.get("_path")): dict(r) for r in first.data or []}
         for start in range(0, total, COLUMN_WINDOW):
@@ -157,6 +166,7 @@ class ProductServer:
         return rows
 
     def close(self) -> None:
+        self.adapter.controller.close()
         self._loop.close()
 
 
@@ -171,11 +181,18 @@ def scenarios(shape: str) -> List[Scenario]:
     out: List[Scenario] = [
         ("initial (collapsed)", {}, {}),
         ("expand first region", {"keys": (first,)}, {"expanded": {first: True}}),
+        ("expand a new node", {"keys": (second,)}, {"expanded": {second: True}}),
+        ("expand repeated", {"keys": (first,)}, {"expanded": {first: True}}),
+        ("collapse/re-expand", {"keys": (first,)}, {"expanded": {first: True}}),
+        ("horizontal scroll", {}, {"columns": (48, 71) if shape == "wide" else (2, 3)}),
         ("filter region", {"region": second}, {"region": second}),
         ("sort P000|units desc", {"sort": f"P000{PIVOT_SEPARATOR}units"}, {"sort": "P000_units_sum"}),
     ]
     if shape == "hierarchy":
         out.insert(1, ("vertical scroll rows 2000-2199", {"start": 2000, "end": 2200}, {"start": 2000, "end": 2199}))
+    else:
+        out.insert(1, ("vertical scroll rows 2-3", {"start": 2, "end": 4}, {"start": 2, "end": 3}))
+        out.append(("256-period full width", {}, {"columns": (0, 10000)}))
     return out
 
 
@@ -237,11 +254,23 @@ def run_case(rows: int, shape: str, runs: int, log: Callable[[str], None]) -> Di
                               "scenarios": []}
     try:
         for name, ag_kwargs, product_kwargs in scenarios(shape):
+            def prepare_interaction() -> None:
+                # Setup is outside the timer. A new expansion has never been compiled or
+                # populated in this cache lifetime; repeats retain both plan and level tiers.
+                product.clear(compile_cache=True)
+                if name != "initial (collapsed)":
+                    product.get_rows()
+                if name in {"expand repeated", "collapse/re-expand"}:
+                    product.get_rows(**product_kwargs)
+                if name == "collapse/re-expand":
+                    product.get_rows()
+                product.clear_views()
+
             first, _ = _median_ms(lambda: product.get_rows(**product_kwargs), 2,
                                   before=lambda: product.clear(compile_cache=True))
             ag.get_rows(ag_request(**ag_kwargs))  # warm the AG connection the same way
             ag_ms, ag_page = _median_ms(lambda: ag.get_rows(ag_request(**ag_kwargs)), runs)
-            product_ms, _ = _median_ms(lambda: product.get_rows(**product_kwargs), runs, before=product.clear)
+            product_ms, _ = _median_ms(lambda: product.get_rows(**product_kwargs), runs, before=prepare_interaction)
             # Timed requests use the client's column window; the check reads every column, untimed.
             cells = verify_cells(ag_page, ag_kwargs, product.all_cells(**product_kwargs))
             product.get_rows(same_epoch=True, **product_kwargs)

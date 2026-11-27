@@ -9,7 +9,7 @@ import {
     getDashArray, DASH_STYLES, GRADIENT_DIRECTIONS, buildGradientStops,
     LEGEND_POSITIONS, ChartLegendPositionButtons,
     SERIES_SORT_MODES, applySeriesSort,
-    ChartDataLimitWarning, ChartLineDashEditor,
+    ChartLineDashEditor,
     ChartCustomPaletteEditor, ChartReflineRow,
     ChartTypeGallery,
 } from './chartEnhancements';
@@ -185,6 +185,44 @@ const ChartHierarchyButtons = ({ level, onChange, maxLevel, theme }) => {
             {Array.from({ length: maxLevel }, (_, index) => index + 1).map((numericLevel) => (
                 <button key={numericLevel} onClick={() => onChange(numericLevel)} style={buttonStyle(numericLevel)}>
                     {numericLevel}
+                </button>
+            ))}
+        </div>
+    );
+};
+
+/**
+ * Measure toggles: "All" or any non-empty subset of the view's measures.
+ * @param {any} p0 @returns {any}
+ */
+const ChartMeasureButtons = ({ available, active, onChange, theme }) => {
+    const activeSet = new Set(active || []);
+    const allActive = (available || []).every(/** @param {any} key */ (key) => activeSet.has(key));
+    /** @param {boolean} on @returns {any} */
+    const buttonStyle = (on) => ({
+        border: `1px solid ${on ? theme.primary : theme.border}`,
+        background: on ? theme.select : (theme.headerSubtleBg || theme.hover),
+        color: on ? theme.primary : theme.text,
+        borderRadius: theme.radiusSm || '8px',
+        padding: '5px 8px',
+        fontSize: '11px',
+        fontWeight: 700,
+        cursor: 'pointer',
+    });
+    /** @param {string} key */
+    const toggle = (key) => {
+        const next = activeSet.has(key)
+            ? (active || []).filter(/** @param {any} entry */ (entry) => entry !== key)
+            : (available || []).filter(/** @param {any} entry */ (entry) => entry === key || activeSet.has(entry));
+        if (next.length === 0) return;
+        onChange(next.length === (available || []).length ? 'all' : next);
+    };
+    return (
+        <div role="group" aria-label="Chart measures" style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+            <button type="button" aria-pressed={allActive} onClick={() => onChange('all')} style={buttonStyle(allActive)}>All</button>
+            {(available || []).map(/** @param {any} key */ (key) => (
+                <button key={key} type="button" aria-pressed={activeSet.has(key)} onClick={() => toggle(key)} style={buttonStyle(activeSet.has(key) && !allActive)}>
+                    {key}
                 </button>
             ))}
         </div>
@@ -1125,6 +1163,7 @@ const ChartSurface = ({
     onColumnLimitChange,
     sortMode,
     onSortModeChange,
+    onMeasureIdsChange,
     interactionMode,
     onInteractionModeChange,
     serverScope,
@@ -1750,22 +1789,20 @@ const ChartSurface = ({
                             startHeight: chartHeight,
                         };
                     }}
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label="Resize chart height"
+                    title="Drag to resize the chart height"
                     style={{
-                        height: '22px',
+                        height: '12px',
                         cursor: 'ns-resize',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: '8px',
-                        marginTop: '6px',
-                        color: theme.textSec,
-                        fontSize: '11px',
-                        fontWeight: 700,
+                        marginTop: '2px',
                     }}
-                    title="Drag to resize the graph height"
                 >
-                    <span>Graph Height</span>
-                    <div style={{ width: '72px', height: '5px', borderRadius: '999px', background: theme.border, opacity: 0.95 }} />
+                    <div style={{ width: '40px', height: '4px', borderRadius: '999px', background: theme.border, opacity: 0.95 }} />
                 </div>
             ) : null}
         </div>
@@ -1939,6 +1976,16 @@ const ChartSurface = ({
                         </ChartConfigField>
                     ) : null}
                     <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Data & Actions</div>
+                    {typeof onMeasureIdsChange === 'function' && model && Array.isArray(model.availableMeasures) && model.availableMeasures.length > 1 ? (
+                        <ChartConfigField label="Measures" theme={theme} controlMinWidth="100%">
+                            <ChartMeasureButtons
+                                available={model.availableMeasures}
+                                active={Array.isArray(model.activeMeasures) ? model.activeMeasures : model.availableMeasures}
+                                onChange={onMeasureIdsChange}
+                                theme={theme}
+                            />
+                        </ChartConfigField>
+                    ) : null}
                     <ChartConfigField label="Limits" theme={theme} controlMinWidth="100%">
                         <ChartLimitInputs rowLimit={rowLimit} onRowLimitChange={onRowLimitChange} columnLimit={columnLimit} onColumnLimitChange={onColumnLimitChange} theme={theme} />
                     </ChartConfigField>
@@ -2231,7 +2278,6 @@ const ChartSurface = ({
         {showChrome ? (
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <ChartStats model={model} theme={theme} />
-                <ChartDataLimitWarning model={model} maxCategories={MAX_PANEL_CATEGORIES} maxSeries={MAX_PANEL_SERIES} theme={theme} />
             </div>
         ) : null}
     </div>
@@ -2241,6 +2287,7 @@ const ChartSurface = ({
 /** @param {any} p0 @returns {any} */
 const PivotChartPanelContent = ({
     onClose,
+    variant = 'pane',
     source,
     onSourceChange,
     chartType,
@@ -2275,6 +2322,7 @@ const PivotChartPanelContent = ({
     onColumnLimitChange,
     sortMode,
     onSortModeChange,
+    onMeasureIdsChange,
     interactionMode,
     onInteractionModeChange,
     serverScope,
@@ -2544,7 +2592,7 @@ const PivotChartPanelContent = ({
                 gap: immersiveMode ? '8px' : '0',
                 position: 'relative',
             }}>
-                <div
+                {variant === 'preview' ? null : <div
                     onMouseDown={(event) => {
                         if (floating && !fullscreenMode && !floatingInteractionLocked && typeof onFloatingDragStart === 'function') {
                             onFloatingDragStart(event);
@@ -2596,7 +2644,7 @@ const PivotChartPanelContent = ({
                             {fullscreenMode ? <Icons.Close /> : 'Close'}
                         </button>
                     </div>
-                </div>
+                </div>}
                 {!immersiveMode && showDefinitionManager ? (
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {Array.isArray(chartDefinitions) && chartDefinitions.length > 0 ? (
@@ -2696,6 +2744,7 @@ const PivotChartPanelContent = ({
                     onChartHeightChange={onChartHeightChange}
                     sortMode={sortMode}
                     onSortModeChange={onSortModeChange}
+                    onMeasureIdsChange={onMeasureIdsChange}
                     interactionMode={interactionMode}
                     onInteractionModeChange={onInteractionModeChange}
                     serverScope={serverScope}

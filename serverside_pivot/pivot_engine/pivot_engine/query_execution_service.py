@@ -93,7 +93,7 @@ class PivotQueryExecutor:
         result = result_table
         if return_format == "dict":
             conversion_started_at = time.perf_counter()
-            result = controller._convert_table_to_dict(result_table, spec)
+            result = controller.core_result_dict(spec, result_table)
             conversion_finished_at = time.perf_counter()
         if isinstance(profile_sink, dict):
             planner_profile: Dict[str, Any] = {

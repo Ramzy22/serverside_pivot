@@ -22,5 +22,9 @@ def test_harness_runs_every_scenario_with_cell_parity():
     for report in reports:
         names = [s["name"] for s in report["scenarios"]]
         assert "initial (collapsed)" in names and "sort P000|units desc" in names
+        assert {"expand a new node", "collapse/re-expand", "expand repeated"} <= set(names)
+        assert "horizontal scroll" in names
+        if report['shape'] == 'wide':
+            assert "256-period full width" in names
         assert all(s["cellsChecked"] > 0 for s in report["scenarios"])
         assert report["expandAfterView"]["productMs"] > 0

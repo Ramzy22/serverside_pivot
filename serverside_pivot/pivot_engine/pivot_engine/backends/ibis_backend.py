@@ -591,9 +591,14 @@ class IbisBackend:
         """A core statement runner: each statement on its own cancellable lease."""
 
         def run(expr: Any) -> Any:
+            from ..core.physical.level_tables import BoundStatement
+
             execution = DatabaseExecution(f"ibis-query-{next(self._query_id_counter)}")
             request.begin(execution)
             try:
+                if isinstance(expr, BoundStatement):
+                    return self._execute_duckdb_ibis_with_lease(
+                        {"sql": expr.sql}, expr.params or None, True, execution)
                 return self._execute_duckdb_ibis_with_lease({"ibis_expr": expr}, None, True, execution)
             finally:
                 request.end(execution)

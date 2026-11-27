@@ -24,6 +24,7 @@ global.window = {localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,
   sessionStorage:{getItem:key=>storage.get('session:'+key)??null,setItem:(key,value)=>storage.set('session:'+key,value)}};
 const {usePersistence,resolvePersistedViewState} = load('hooks/usePersistence.js');
 const {useRuntimeViewSnapshot} = load('runtime/useRuntimeViewSnapshot.js');
+const {isValidChartMeasureIds} = load('hooks/usePivotNormalization.js');
 const persistence = usePersistence('first',true,'local');
 const state={rowFields:['period'],colFields:['region','account'],columnSizing:{sales:173},spacingMode:0,colorScaleMode:'col',colorScaleColumns:['sales'],dataBarMaximums:{sales:200}};
 const saved={version:1,table:'revenue',state};
@@ -77,8 +78,8 @@ const applied = {current:null}, restoredRows=[], restoredScopes=[], restoredMaxi
 const viewStage = new Proxy({viewState:saved,initialChartDefinition:{},chartPanelOrientationAutoRef:{current:false},setRowFields:value=>restoredRows.push(value),setColorScaleColumns:value=>restoredScopes.push(value),setDataBarMaximums:value=>restoredMaximums.push(value)},
  {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
 const applyRestore = new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
- 'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID','getPreferredChartOrientation',restoreCode);
-const apply = ()=>applyRestore(viewStage,applied,fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical");
+ 'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID','getPreferredChartOrientation','isValidChartMeasureIds',restoreCode);
+const apply = ()=>applyRestore(viewStage,applied,fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"rows",isValidChartMeasureIds);
 apply();
 assert.deepEqual(restoredScopes,[['sales']],'restore applies saved selection scope');
 assert.deepEqual(restoredMaximums,[{sales:200}],'restore applies saved data bar bounds');
@@ -105,7 +106,7 @@ const mountEffects=[{offset:restoreStart,code:restoreCode},{offset:decimalStart,
 for(const effect of mountEffects) {
  new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
  'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID',
- 'getPreferredChartOrientation','clampDecimalPlaces',effect.code)(viewStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical",value=>value);
+ 'getPreferredChartOrientation','clampDecimalPlaces','isValidChartMeasureIds',effect.code)(viewStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"rows",value=>value,isValidChartMeasureIds);
 }
 assert.equal(displayedDecimals,2,'initial prop sync must not overwrite restored snapshot formatting');
 
@@ -123,9 +124,9 @@ const layoutStage=new Proxy({viewState:{state:{pivotLayoutOrder:['p:A','p:B'],
  {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
 const restoreLayout=new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
  'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID',
- 'getPreferredChartOrientation','normalizeColumnOrderValue','areStringArraysEqual',restoreCode);
+ 'getPreferredChartOrientation','normalizeColumnOrderValue','areStringArraysEqual','isValidChartMeasureIds',restoreCode);
 const restore=()=>restoreLayout(layoutStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),
- ()=>null,'Grand Total',()=>"vertical",normalizeColumnOrderValue,areStringArraysEqual);
+ ()=>null,'Grand Total',()=>"rows",normalizeColumnOrderValue,areStringArraysEqual,isValidChartMeasureIds);
 const {runtimePayloadCommitIsCurrent}=useRuntimeDataCommit({
  clientInstanceRef:{current:'restored-client'},stateEpochRef:{current:5},requestVersionRef:{current:9},
  latestDataVersionRef:{current:11},layoutRevisionRef:layoutStage.layoutRevisionRef,

@@ -96,52 +96,7 @@ export const applySeriesSort = (series, mode) => {
     return clone;
 };
 
-// ─── Data limit warning ────────────────────────────────────────────────────
-
-/** @param {any} p0 @returns {any} */
-export const ChartDataLimitWarning = ({ model, maxCategories, maxSeries, theme }) => {
-    /** @type {any} */
-    const catCount = Array.isArray(model && model.categories) ? model.categories.length : 0;
-    /** @type {any} */
-    const serCount = Array.isArray(model && model.series) ? model.series.length : 0;
-    /** @type {any} */
-    const catWarn = catCount >= maxCategories * 0.9;
-    /** @type {any} */
-    const serWarn = serCount >= maxSeries * 0.9;
-    /** @type {any} */
-    const catAt   = catCount >= maxCategories;
-    /** @type {any} */
-    const serAt   = serCount >= maxSeries;
-    if (!catWarn && !serWarn) return null;
-
-    /** @param {any} [atLimit] @returns {any} */
-    const chipStyle = (atLimit) => ({
-        display: 'inline-flex', alignItems: 'center', gap: '4px',
-        padding: '3px 8px',
-        borderRadius: theme.radiusSm || '8px',
-        fontSize: '10px', fontWeight: 700,
-        background: atLimit ? (theme.danger || '#ef4444') + '22' : (theme.warning || '#f59e0b') + '22',
-        color: atLimit ? (theme.danger || '#ef4444') : (theme.warning || '#ca8a04'),
-        border: `1px solid ${atLimit ? (theme.danger || '#ef4444') : (theme.warning || '#f59e0b')}44`,
-    });
-
-    return (
-        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-            {catWarn && (
-                <span style={chipStyle(catAt)}>
-                    {catAt ? '⚠ ' : '○ '}{catCount}/{maxCategories} categories
-                </span>
-            )}
-            {serWarn && (
-                <span style={chipStyle(serAt)}>
-                    {serAt ? '⚠ ' : '○ '}{serCount}/{maxSeries} series
-                </span>
-            )}
-        </div>
-    );
-};
-
-// ─── Line dash editor (per-series) ────────────────────────────────────────
+// ─── Line dash editor ──────────────────────────────────────────────────────
 
 /** @param {any} p0 @returns {any} */
 export const ChartLineDashEditor = ({ series, lineDashStyles, onChange, seriesColors, paletteColors, getColorForIndex, theme, compactInputStyle }) => {

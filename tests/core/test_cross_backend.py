@@ -164,10 +164,13 @@ def test_a_window_reads_the_whole_trees_total_and_grand_total(backend, window):
         _disconnect(con)
 
 
-def test_a_percentile_cell_on_polars_is_a_typed_refusal():
-    """Polars evaluates a percentile cell's condition at the measure axis's length: refused, never wrong."""
+def test_a_percentile_cell_on_polars_is_exact_long_form_and_a_typed_refusal_in_the_reference():
+    """Polars evaluates a conditional percentile cell at the measure axis's length, so the ``union_all``
+    reference refuses it (never wrong); the long-form lowering has no conditional cell and equals the oracle."""
     from pivot_engine.core.ir import Unpivot, UnpivotMember
 
+    records = [{"r": "A", "k": "x", "v": 1, "w": 2}, {"r": "A", "k": "y", "v": None, "w": 3},
+               {"r": "B", "k": "x", "v": 5, "w": None}]
     table = pa.table({"r": ["A", "A", "B"], "k": ["x", "y", "x"], "v": pa.array([1, None, 5], pa.int64()),
                       "w": pa.array([2, 3, None], pa.int64())})
     axis = Unpivot("mn", "mv", "mk", (UnpivotMember("V", "v", 0), UnpivotMember("W", "w", 1)), False)
@@ -176,7 +179,8 @@ def test_a_percentile_cell_on_polars_is_a_typed_refusal():
     con = _connect("polars", table)
     try:
         with pytest.raises(BackendCapabilityError) as info:
-            execute(query, con.table)
+            execute(query, con.table, strategy="union_all")
         assert "percentile pivot cell over the measure axis" in info.value.operations
     finally:
         _disconnect(con)
+    _assert_equal(_run("polars", table, query), _oracle(records, query))

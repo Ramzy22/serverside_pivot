@@ -32,6 +32,7 @@ export function useRuntimeViewSnapshot({
   chartPanelRowLimit,
   chartPanelServerScope,
   chartPanelSortMode,
+  chartPanelMeasureIds,
   chartPanelSource,
   chartPanelTitle,
   chartPanelType,
@@ -191,6 +192,7 @@ export function useRuntimeViewSnapshot({
         chartPanelFloating,
         chartPanelFloatingRect,
         chartPanelSortMode,
+        chartPanelMeasureIds,
         chartPanelInteractionMode,
         chartPanelServerScope,
         chartPanelLocked,
@@ -215,7 +217,7 @@ export function useRuntimeViewSnapshot({
         } : null,
       },
     };
-  }, [activeChartDefinitionId, activeReportId, cellFormatRules, chartCanvasPanes, chartPanelAxisMode, chartPanelBarLayout, chartPanelColumnLimit, chartPanelFloating, chartPanelFloatingRect, chartPanelGraphHeight, chartPanelHierarchyLevel, chartPanelInteractionMode, chartPanelLayers, chartPanelLocked, chartPanelLockedModel, chartPanelLockedRequest, chartPanelOpen, chartPanelOrientation, chartPanelRowLimit, chartPanelServerScope, chartPanelSortMode, chartPanelSource, chartPanelTitle, chartPanelType, chartPanelWidth, colExpanded, colFields, colSearch, colTypeFilter, colorPalette, colorScaleMode, colorScaleColumns, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, columnOrder, pivotLayoutOrder, pivotPinnedLayoutIds, columnPinning, columnSizing, columnVisibility, customDimensions, dataBarsColumns, dataBarMaximums, dataBarVariant, decimalPlaces, defaultValueFormat, detailConfig, detailMode, editValueDisplayMode, expanded, fieldPanelSizes, filters, frozenPivotConfig, grandTotalPinOverride, latestViewportRef, layoutMode, managedChartDefinitions, normalizedChartServerWindow, normalizedInitialValConfigs, numberGroupSeparator, parentRef, pivotColumnSorting, reportDef, rowFields, rowPinning, runtimeMeasureAxis, savedReports, serializedEditComparisonState, showColTotals, showFloatingFilters, showReportConfigColumn, showRowNumbers, showRowTotals, showSubtotals, sidebarOpen, sidebarTab, sidebarWidth, sorting, spacingMode, stickyHeaders, tableCanvasSize, tableName, themeName, themeOverrides, treeConfig, valConfigs, viewMode, zoomLevel]);
+  }, [activeChartDefinitionId, activeReportId, cellFormatRules, chartCanvasPanes, chartPanelAxisMode, chartPanelBarLayout, chartPanelColumnLimit, chartPanelFloating, chartPanelFloatingRect, chartPanelGraphHeight, chartPanelHierarchyLevel, chartPanelInteractionMode, chartPanelLayers, chartPanelLocked, chartPanelLockedModel, chartPanelLockedRequest, chartPanelOpen, chartPanelOrientation, chartPanelRowLimit, chartPanelServerScope, chartPanelSortMode, chartPanelMeasureIds, chartPanelSource, chartPanelTitle, chartPanelType, chartPanelWidth, colExpanded, colFields, colSearch, colTypeFilter, colorPalette, colorScaleMode, colorScaleColumns, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, columnOrder, pivotLayoutOrder, pivotPinnedLayoutIds, columnPinning, columnSizing, columnVisibility, customDimensions, dataBarsColumns, dataBarMaximums, dataBarVariant, decimalPlaces, defaultValueFormat, detailConfig, detailMode, editValueDisplayMode, expanded, fieldPanelSizes, filters, frozenPivotConfig, grandTotalPinOverride, latestViewportRef, layoutMode, managedChartDefinitions, normalizedChartServerWindow, normalizedInitialValConfigs, numberGroupSeparator, parentRef, pivotColumnSorting, reportDef, rowFields, rowPinning, runtimeMeasureAxis, savedReports, serializedEditComparisonState, showColTotals, showFloatingFilters, showReportConfigColumn, showRowNumbers, showRowTotals, showSubtotals, sidebarOpen, sidebarTab, sidebarWidth, sorting, spacingMode, stickyHeaders, tableCanvasSize, tableName, themeName, themeOverrides, treeConfig, valConfigs, viewMode, zoomLevel]);
 
   /** @type {(...args: any[]) => any} */
   const handleSaveView = useCallback(() => {

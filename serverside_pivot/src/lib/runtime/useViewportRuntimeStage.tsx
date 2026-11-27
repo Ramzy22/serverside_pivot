@@ -7,7 +7,7 @@ import { buildTsvFromRawRows } from '../utils/rawTableTsv';
 import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds, reconcilePivotLayoutOrder, pivotLayoutRequestFields } from '../utils/columnOrder';
 import { compareFilterOptionValues } from '../utils/filterOptions';
 import { buildThemeCssVars, getStyles, resolveDepthToken, toCssPx, toFiniteNumber } from '../utils/styles';
-import { computeCompactFitThemeOverrides, computeFitToWidthLayout, createTextWidthMeasurer, measureColumnFitMetric, measureLongestHeaderWord } from '../utils/pivotLayoutUtils';
+import { computeCompactFitThemeOverrides, computeFitToWidthLayout, createTextWidthMeasurer, measureColumnFitMetric, measureHeaderLabel, measureLongestHeaderWord } from '../utils/pivotLayoutUtils';
 import Icons from '../utils/Icons';
 import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, isGrandTotalRow, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
@@ -335,20 +335,21 @@ export function useViewportRuntimeStage(input, transport) {
     const pivotSortField = stage.getPivotColumnSortField(header, level);
     const pivotSortState = stage.getPivotColumnSortState(pivotSortField);
     if (pivotSortField) {
+      const activePivotSortState = pivotSortState || { mode: 'label', direction: 'asc' };
       const pivotSortChildren = [{
-        label: 'Labels A → Z',
+        label: (activePivotSortState.mode === 'label' && activePivotSortState.direction === 'asc' ? '✓ ' : '') + 'Labels A → Z',
         icon: <Icons.SortAsc />,
         onClick: () => stage.applyPivotColumnSort(pivotSortField, 'label', 'asc')
       }, {
-        label: 'Labels Z → A',
+        label: (activePivotSortState.mode === 'label' && activePivotSortState.direction === 'desc' ? '✓ ' : '') + 'Labels Z → A',
         icon: <Icons.SortDesc />,
         onClick: () => stage.applyPivotColumnSort(pivotSortField, 'label', 'desc')
       }, 'separator', {
-        label: 'Totals Largest First',
+        label: (activePivotSortState.mode === 'total' && activePivotSortState.direction === 'desc' ? '✓ ' : '') + 'Totals Largest First',
         icon: <Icons.SortDesc />,
         onClick: () => stage.applyPivotColumnSort(pivotSortField, 'total', 'desc')
       }, {
-        label: 'Totals Smallest First',
+        label: (activePivotSortState.mode === 'total' && activePivotSortState.direction === 'asc' ? '✓ ' : '') + 'Totals Smallest First',
         icon: <Icons.SortAsc />,
         onClick: () => stage.applyPivotColumnSort(pivotSortField, 'total', 'asc')
       }];
@@ -494,17 +495,7 @@ export function useViewportRuntimeStage(input, transport) {
       }
     });
 
-    // --- Expand/Collapse ---
-    actions.push('separator');
-    actions.push({
-      label: 'Expand All Rows',
-      onClick: () => stage.handleExpandAllRows(true)
-    });
-    actions.push({
-      label: 'Collapse All Rows',
-      onClick: () => stage.handleExpandAllRows(false)
-    });
-
+    // Row expansion lives with the Rows zone and the row context menu, not the column menu.
     // --- Column size submenu + export ---
     actions.push('separator');
     actions.push({
@@ -911,6 +902,7 @@ export function useViewportRuntimeStage(input, transport) {
     chartPanelRowLimit: stage.chartPanelRowLimit,
     chartPanelServerScope: stage.chartPanelServerScope,
     chartPanelSortMode: stage.chartPanelSortMode,
+    chartPanelMeasureIds: stage.chartPanelMeasureIds,
     chartPanelSource: stage.chartPanelSource,
     chartPanelTitle: stage.chartPanelTitle,
     chartPanelType: stage.chartPanelType,
@@ -1348,8 +1340,8 @@ export function useViewportRuntimeStage(input, transport) {
   const autoSizedMeasureSignatureRef = useRef<string>('');
   const autoSizedColIdsRef = useRef<Set<string>>(new Set());
 
-  // Auto-size new columns to fit their header text on spawn
-  useEffect(() => {
+  // Fit new header labels before paint, including their rendered typography.
+  useLayoutEffect(() => {
     if (fitToWidthEnabled) return;
     if (!stage.table || !stage.table.getVisibleLeafColumns) return;
     const visLeafCols = stage.table.getVisibleLeafColumns();
@@ -1365,6 +1357,7 @@ export function useViewportRuntimeStage(input, transport) {
       fontFamily: stage.fontFamily || null,
       fontSize: stage.fontSize || null,
       headerWrapActive,
+      headerTheme: stage.theme,
       maxWidth: stage.autoSizeBounds.maxWidth,
     });
     const sameMeasureSignature = autoSizedMeasureSignatureRef.current === measureSignature;
@@ -1372,8 +1365,10 @@ export function useViewportRuntimeStage(input, transport) {
       autoSizedMeasureSignatureRef.current = measureSignature;
       autoSizedColIdsRef.current.clear();
     }
+    const headerSize = stage.theme?.headerFontSize || stage.fontSize || '14px';
+    const headerCssSize = typeof headerSize === 'number' ? `${headerSize}px` : headerSize;
     const measureHeaderText = createTextWidthMeasurer(
-      `600 ${stage.fontSize || '14px'} ${stage.fontFamily || "'Inter', system-ui, sans-serif"}`,
+      `${stage.theme?.headerFontWeight ?? 600} ${headerCssSize} ${stage.fontFamily || "'Inter', system-ui, sans-serif"}`,
       7.5
     );
     const newSizes = {};
@@ -1389,12 +1384,20 @@ export function useViewportRuntimeStage(input, transport) {
       autoSizedColIdsRef.current.add(col.id);
       const headerStack = stage.getDisplayHeaderTextStackForColumn(col);
       const shortLabel = col.columnDef && col.columnDef.meta ? col.columnDef.meta.shortLabel : null;
-      const measuredFromText = headerStack.reduce((maxWidth, headerText) => {
-        const textWidth = headerWrapActive
-          ? measureLongestHeaderWord(headerText, measureHeaderText)
-          : measureHeaderText(headerText);
-        const effectiveTextWidth = shortLabel ? Math.min(textWidth, measureHeaderText(shortLabel)) : textWidth;
-        return Math.max(maxWidth, effectiveTextWidth + stage.autoSizeBounds.headerPadding + stage.autoSizeBounds.headerOverscan);
+      const measuredFromText = headerStack.reduce((maxWidth, headerText, index) => {
+        const isLeaf = index === headerStack.length - 1;
+        const options = {
+          measureText: measureHeaderText,
+          fontSize: headerSize,
+          theme: stage.theme || {},
+          measureSubHeader: isLeaf && !['hierarchy', '__row_number__', '__report_config__'].includes(col.id),
+          wrap: headerWrapActive,
+          canSort: isLeaf && col.getCanSort(),
+        };
+        const textWidth = measureHeaderLabel(headerText, options);
+        const effectiveTextWidth = isLeaf && shortLabel ? Math.min(textWidth, measureHeaderLabel(shortLabel, options)) : textWidth;
+        const controls = isLeaf && stage.theme?.headerControls === 'always' ? 28 : 0;
+        return Math.max(maxWidth, effectiveTextWidth + controls + stage.autoSizeBounds.headerPadding + stage.autoSizeBounds.headerOverscan);
       }, stage.autoSizeBounds.minWidth);
       const measuredFromDom = stage.getRenderedHeaderWidthForColumn(col.id);
       const measuredFromCells = col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__' ? stage.getRenderedCellWidthForColumn(col.id) : null;
@@ -1415,7 +1418,7 @@ export function useViewportRuntimeStage(input, transport) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitToWidthEnabled, stage.autoSizeBounds.maxWidth, stage.colFields, stage.fontFamily, stage.fontSize, stage.getDisplayHeaderTextStackForColumn, stage.getRenderedCellWidthForColumn, stage.getRenderedHeaderWidthForColumn, stage.queueHeaderFitValidation, stage.rowFields, stage.theme?.headerWrap, stage.uiConfig?.wrapHeaders, stage.valConfigs]);
+  }, [fitToWidthEnabled, stage.autoSizeBounds.maxWidth, stage.colFields, stage.fontFamily, stage.fontSize, stage.getDisplayHeaderTextStackForColumn, stage.getRenderedCellWidthForColumn, stage.getRenderedHeaderWidthForColumn, stage.queueHeaderFitValidation, stage.rowFields, stage.theme, stage.uiConfig?.wrapHeaders, stage.valConfigs]);
   stage.pendingRowTransitionTimersRef = useRef(new Map());
   const clearTimersForRowPath = useCallback((rowPath) => {
     const entry = stage.pendingRowTransitionTimersRef.current.get(rowPath);
@@ -1595,6 +1598,10 @@ export function useViewportRuntimeStage(input, transport) {
       pageSize: stage.paginationConfig.pageSize
     });
   }, [stage.paginationConfig.pageSize]);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  stage.onWorkspaceResize = useCallback(width => setWorkspaceWidth(width), []);
+  const compactHierarchyWidth = workspaceWidth > 0 && workspaceWidth < 720
+    ? Math.min(320, Math.max(140, workspaceWidth * .4)) : null;
   stage.tableState = useMemo(() => {
     const availableRowIds = new Set((stage.tableData || []).map(stage.getStableDataRowId).filter(Boolean));
     let finalRowPinning = {
@@ -1618,13 +1625,13 @@ export function useViewportRuntimeStage(input, transport) {
       grouping: stage.viewMode === 'pivot' ? stage.rowFields : [],
       columnVisibility: stage.columnVisibility,
       columnOrder: stage.effectiveColumnOrder,
-      columnSizing: stage.columnSizing
+      columnSizing: compactHierarchyWidth === null ? stage.columnSizing : { ...stage.columnSizing, hierarchy: compactHierarchyWidth }
     };
     if (stage.paginationConfig.enabled) {
       state.pagination = stage.paginationState;
     }
     return state;
-  }, [stage.sorting, stage.expanded, stage.columnPinning, stage.rowPinning, stage.rowFields, stage.viewMode, stage.columnVisibility, stage.effectiveColumnOrder, stage.columnSizing, stage.tableData, stage.effectiveGrandTotalPinState, stage.getStableDataRowId, stage.paginationConfig.enabled, stage.paginationState]);
+  }, [stage.sorting, stage.expanded, stage.columnPinning, stage.rowPinning, stage.rowFields, stage.viewMode, stage.columnVisibility, stage.effectiveColumnOrder, stage.columnSizing, stage.tableData, stage.effectiveGrandTotalPinState, stage.getStableDataRowId, compactHierarchyWidth, stage.paginationConfig.enabled, stage.paginationState]);
   const lastExpandAllActionRef = useRef<{ shouldExpand: boolean; at: number } | null>(null);
   stage.handleExpandAllRows = shouldExpand => {
     // Guard against rapid repeat clicks of the same action: a duplicate click
@@ -1957,7 +1964,7 @@ export function useViewportRuntimeStage(input, transport) {
     if (stage.columnVirtualizerRef.current && typeof stage.columnVirtualizerRef.current.measure === 'function') {
       stage.columnVirtualizerRef.current.measure();
     }
-  }, [stage.columnOrderKey, stage.columnPinning, stage.columnSizing, stage.totalLayoutWidth]);
+  }, [stage.columnOrderKey, stage.columnPinning, stage.columnSizing, compactHierarchyWidth, stage.totalLayoutWidth]);
 
   stage.centerColIndexMap = useMemo(() => new Map(stage.centerCols.map((column, index) => [column.id, index])), [stage.centerCols]);
   const [fitContainerWidth, setFitContainerWidth] = useState(0);
@@ -1986,9 +1993,9 @@ export function useViewportRuntimeStage(input, transport) {
     }
     return undefined;
   }, [fitToWidthEnabled, stage.parentRef, stage.parentRef ? stage.parentRef.current : null]);
-  stage.leftHeaderGroups = useMemo(() => stage.table.getLeftHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
-  stage.rightHeaderGroups = useMemo(() => stage.table.getRightHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
-  stage.centerHeaderGroups = useMemo(() => stage.table.getCenterHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing]);
+  stage.leftHeaderGroups = useMemo(() => stage.table.getLeftHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing, compactHierarchyWidth]);
+  stage.rightHeaderGroups = useMemo(() => stage.table.getRightHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing, compactHierarchyWidth]);
+  stage.centerHeaderGroups = useMemo(() => stage.table.getCenterHeaderGroups(), [stage.columns, stage.columnVisibility, stage.columnPinning, stage.columnOrderKey, stage.columnSizing, compactHierarchyWidth]);
   useEffect(() => {
     if (!stage.serverSide || stage.virtualCenterCols.length === 0) return;
     debugLog('horizontal-scroll-state', {
@@ -2107,7 +2114,7 @@ export function useViewportRuntimeStage(input, transport) {
     const headerPaddingX = toFiniteNumber(fitBaseTheme?.headerPaddingX, cellPaddingX) ?? cellPaddingX;
     const numericPaddingRight = toFiniteNumber(fitBaseTheme?.numericPaddingRight, 8) ?? 8;
     const headerWrapActive = Boolean(fitBaseTheme?.headerWrap !== undefined ? fitBaseTheme.headerWrap : stage.uiConfig?.wrapHeaders);
-    const headerControlsMode = fitBaseTheme?.headerControls || 'always';
+    const headerControlsMode = fitBaseTheme?.headerControls || 'hover';
     const sortIndicatorMode = fitBaseTheme?.sortIndicator || 'arrow';
 
     return leaves.map(col => {
@@ -2250,6 +2257,8 @@ export function useViewportRuntimeStage(input, transport) {
   }
   const columnAutoSizing = useRuntimeColumnAutoSizing({
     autoSizeBounds: stage.autoSizeBounds,
+    theme: stage.theme,
+    wrapHeaders: stage.uiConfig?.wrapHeaders,
     columnDecimalOverrides: stage.columnDecimalOverrides,
     columnFormatOverrides: stage.columnFormatOverrides,
     columnGroupSeparatorOverrides: stage.columnGroupSeparatorOverrides,
@@ -2747,6 +2756,7 @@ export function useViewportRuntimeStage(input, transport) {
     chartPanelServerScope: stage.chartPanelServerScope,
     chartPanelSource: stage.chartPanelSource,
     chartPanelSortMode: stage.chartPanelSortMode,
+    chartPanelMeasureIds: stage.chartPanelMeasureIds,
     chartPanelType: stage.chartPanelType,
     chartModal: stage.chartModal,
     colFields: stage.colFields,

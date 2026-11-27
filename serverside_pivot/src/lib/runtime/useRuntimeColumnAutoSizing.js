@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { formatDisplayLabel, formatValue } from '../utils/helpers';
-import { createTextWidthMeasurer, measureColumnFitMetric } from '../utils/pivotLayoutUtils';
+import { createTextWidthMeasurer, measureColumnFitMetric, measureHeaderLabel } from '../utils/pivotLayoutUtils';
 
 const HIERARCHY_INDENT_PX = 24;
 const HIERARCHY_EXPAND_PX = 22;
@@ -8,6 +8,8 @@ const HIERARCHY_EXPAND_PX = 22;
 /** Owns measured column sizing and its toolbar command.  @param {any} p0 @returns {any} */
 export function useRuntimeColumnAutoSizing({
   autoSizeBounds,
+  theme = {},
+  wrapHeaders = false,
   columnDecimalOverrides,
   columnFormatOverrides,
   columnGroupSeparatorOverrides,
@@ -48,9 +50,11 @@ export function useRuntimeColumnAutoSizing({
     if (!column || (column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder)) return;
 
     const resolvedFont = fontFamily || "'Inter', system-ui, sans-serif";
-    const resolvedSize = fontSize || '14px';
+    const resolvedSize = typeof fontSize === 'number' ? `${fontSize}px` : (fontSize || '14px');
     const measureBodyText = createTextWidthMeasurer(`${resolvedSize} ${resolvedFont}`, 7.5);
-    const measureHeaderText = createTextWidthMeasurer(`600 ${resolvedSize} ${resolvedFont}`, 7.5);
+    const headerSize = theme.headerFontSize || resolvedSize;
+    const headerCssSize = typeof headerSize === 'number' ? `${headerSize}px` : headerSize;
+    const measureHeaderText = createTextWidthMeasurer(`${theme.headerFontWeight ?? 600} ${headerCssSize} ${resolvedFont}`, 7.5);
 
     /** @type {any} */
     const matchingValueConfig = Array.isArray(valConfigs)
@@ -86,13 +90,14 @@ export function useRuntimeColumnAutoSizing({
       formatCellText: (val) => formatValue(val, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator, displayOptions),
       formatHierarchyLabel: formatDisplayLabel,
       headerLines,
-      shortLabel: null,
-      headerWrap: false,
-      headerControlsMode: 'always',
-      canSort: false,
-      sortIndicator: 'none',
+      shortLabel: column.columnDef?.meta?.shortLabel || null,
+      headerWrap: theme.headerWrap ?? wrapHeaders,
+      headerControlsMode: theme.headerControls || 'hover',
+      canSort: column.getCanSort(),
+      sortIndicator: theme.sortIndicator || 'arrow',
       measureBodyText,
-      measureHeaderText,
+      measureHeaderText: /** @param {any} text */ text => measureHeaderLabel(text, { measureText: measureHeaderText, fontSize: headerSize, theme, measureSubHeader: !['hierarchy', '__row_number__', '__report_config__'].includes(columnId) }),
+      measureGroupHeaderText: measureHeaderText,
       cellPaddingX: Math.max(0, Math.round((autoSizeBounds.cellPadding || 0) / 2)),
       headerPaddingX: Math.max(0, Math.round((autoSizeBounds.headerPadding || 0) / 2)),
       numericPaddingRight: 0,
@@ -120,6 +125,8 @@ export function useRuntimeColumnAutoSizing({
     queueHeaderFitValidation(columnId, maxWidth);
   }, [
     autoSizeBounds,
+    theme,
+    wrapHeaders,
     columnDecimalOverrides,
     columnFormatOverrides,
     columnGroupSeparatorOverrides,

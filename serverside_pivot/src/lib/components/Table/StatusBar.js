@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import Icons from '../../utils/Icons';
+import { ToolbarMenu, ToolbarMenuItem } from '../ToolbarMenu';
 import { formatValue } from '../../utils/helpers';
 import { withAlpha } from '../../utils/styles';
 
@@ -156,7 +157,7 @@ const StatusPanel = ({ id, theme, icon, label, tone = 'default', children, title
 };
 
 /** @param {any} p0 @returns {any} */
-const StatusActionButton = ({ id, label, onClick, disabled = false, theme, icon = null, tone = 'default' }) => {
+const StatusActionButton = ({ id, label, onClick, disabled = false, theme, icon = null, tone = 'default', iconOnly = false, ariaExpanded = undefined }) => {
     /** @type {any} */
     const colors = getPanelToneColors(theme, tone);
     return (
@@ -165,6 +166,9 @@ const StatusActionButton = ({ id, label, onClick, disabled = false, theme, icon 
             data-pivot-status-action={id}
             onClick={onClick}
             disabled={disabled}
+            aria-label={iconOnly ? label : undefined}
+            aria-expanded={ariaExpanded}
+            title={iconOnly ? label : undefined}
             style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -183,7 +187,7 @@ const StatusActionButton = ({ id, label, onClick, disabled = false, theme, icon 
             }}
         >
             {icon ? <span style={{ display: 'inline-flex', alignItems: 'center' }}>{icon}</span> : null}
-            <span>{label}</span>
+            {iconOnly ? null : <span>{label}</span>}
         </button>
     );
 };
@@ -194,6 +198,7 @@ const StatusBar = ({
     statusActions,
     theme,
     numberGroupSeparator,
+    compact = false,
 }) => {
     /** @type {[any, (...args: any[]) => any]} */
     const [showDetails, setShowDetails] = React.useState(false);
@@ -241,6 +246,8 @@ const StatusBar = ({
             data-pivot-status-bar="true"
             data-pivot-status-details-open={showDetails ? 'true' : 'false'}
             style={{
+                position: 'relative',
+                zIndex: 110,
                 borderTop: `1px solid ${theme.border}`,
                 background: theme.headerSubtleBg || theme.headerBg,
                 display: 'flex',
@@ -307,18 +314,38 @@ const StatusBar = ({
                 </div>
             ) : null}
 
-            {!showDetails ? (
+            <div
+                data-pivot-status-actions="true"
+                style={{
+                    display: 'flex',
+                    flexWrap: compact ? 'nowrap' : 'wrap',
+                    gap: '8px 12px',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    minWidth: 0,
+                }}
+            >
                 <div
                     data-pivot-status-summary="true"
                     style={{
                         display: 'flex',
-                        flexWrap: 'wrap',
+                        flexWrap: compact ? 'nowrap' : 'wrap',
                         alignItems: 'center',
                         gap: '12px',
                         minWidth: 0,
-                        padding: '2px 4px',
+                        overflow: compact ? 'hidden' : 'visible',
                     }}
                 >
+                    <StatusActionButton
+                        id="toggle-details"
+                        label="Details"
+                        icon={showDetails ? <Icons.VisibilityOff /> : <Icons.Visibility />}
+                        onClick={handleToggleDetails}
+                        theme={theme}
+                        tone={showDetails ? 'info' : 'default'}
+                        iconOnly
+                        ariaExpanded={showDetails}
+                    />
                     {runtimeSummary.loading ? (
                         <span
                             data-pivot-loading-indicator="status"
@@ -337,42 +364,29 @@ const StatusBar = ({
                         </span>
                     ) : null}
                     <StatusMetric label="Rows" value={fmt(dataSummary.rowCount, 0, numberGroupSeparator)} />
-                    <StatusMetric label="Visible" value={fmt(dataSummary.visibleRowsCount, 0, numberGroupSeparator)} />
-                    <StatusMetric label="Cols" value={fmt(dataSummary.totalCenterColumns, 0, numberGroupSeparator)} />
+                    {compact ? null : <StatusMetric label="Visible" value={fmt(dataSummary.visibleRowsCount, 0, numberGroupSeparator)} />}
+                    {compact ? null : <StatusMetric label="Cols" value={fmt(dataSummary.totalCenterColumns, 0, numberGroupSeparator)} />}
                     <StatusMetric label="Filters" value={fmt(dataSummary.activeFilterCount, 0, numberGroupSeparator)} />
-                    <StatusMetric label="Cells" value={fmt(selectionSummary.totalSelected, 0, numberGroupSeparator)} />
-                    <StatusMetric label="Mean" value={selectionSummary.numericCount > 0 ? fmtStat(selectionSummary.avg, 2) : '--'} />
-                    <StatusMetric label="Std Dev" value={selectionSummary.numericCount > 0 ? fmtStat(selectionSummary.stdDev, 2) : '--'} />
-                </div>
-            ) : null}
-
-            <div
-                data-pivot-status-actions="true"
-                style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '8px',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                }}
-            >
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    <StatusActionButton
-                        id="toggle-details"
-                        label={showDetails ? 'Hide Status' : 'Show Status'}
-                        icon={showDetails ? <Icons.VisibilityOff /> : <Icons.Visibility />}
-                        onClick={handleToggleDetails}
-                        theme={theme}
-                        tone={showDetails ? 'info' : 'default'}
-                    />
-                    {!showDetails ? (
-                        <span style={{ fontSize: '11px', color: theme.textSec, whiteSpace: 'nowrap', lineHeight: '1.4' }}>
-                            Detailed panels are off by default.
-                        </span>
+                    {selectionSummary.totalSelected > 0 ? (
+                        <StatusMetric label="Cells" value={fmt(selectionSummary.totalSelected, 0, numberGroupSeparator)} />
+                    ) : null}
+                    {!compact && selectionSummary.numericCount > 0 ? (
+                        <>
+                            <StatusMetric label="Sum" value={fmtStat(selectionSummary.sum, 2)} />
+                            <StatusMetric label="Mean" value={fmtStat(selectionSummary.avg, 2)} />
+                            <StatusMetric label="Std Dev" value={fmtStat(selectionSummary.stdDev, 2)} />
+                        </>
                     ) : null}
                 </div>
 
-                <div style={{ display: 'flex', flex: '0 1 auto', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-start', justifyContent: 'flex-end' }}>
+                {compact ? <ToolbarMenu label="⋯" ariaLabel="Status actions" theme={theme} align="right" chevron={false} placement="above" buttonStyle={{ padding: '2px 8px', color: theme.text }}>
+                    {close => <>
+                        <ToolbarMenuItem theme={theme} disabled={!actionSummary.canClearSelection} onSelect={() => { actionSummary.onClearSelection?.(); close(); }}>Clear Selection</ToolbarMenuItem>
+                        <ToolbarMenuItem theme={theme} disabled={!actionSummary.canClearFilters} onSelect={() => { actionSummary.onClearFilters?.(); close(); }}>Clear Filters</ToolbarMenuItem>
+                        <ToolbarMenuItem theme={theme} disabled={!actionSummary.canRefreshViewport} onSelect={() => { actionSummary.onRefreshViewport?.(); close(); }}>Refresh View</ToolbarMenuItem>
+                    </>}
+                </ToolbarMenu> : (
+                <div style={{ display: 'flex', flex: '0 0 auto', flexWrap: 'nowrap', gap: compact ? '4px' : '8px', alignItems: 'center', justifyContent: 'flex-end' }}>
                     <StatusActionButton
                         id="clear-selection"
                         label="Clear Selection"
@@ -380,6 +394,7 @@ const StatusBar = ({
                         onClick={actionSummary.onClearSelection}
                         disabled={!actionSummary.canClearSelection}
                         theme={theme}
+                        iconOnly={compact}
                     />
                     <StatusActionButton
                         id="clear-filters"
@@ -388,6 +403,7 @@ const StatusBar = ({
                         onClick={actionSummary.onClearFilters}
                         disabled={!actionSummary.canClearFilters}
                         theme={theme}
+                        iconOnly={compact}
                     />
                     <StatusActionButton
                         id="refresh"
@@ -396,17 +412,10 @@ const StatusBar = ({
                         onClick={actionSummary.onRefreshViewport}
                         disabled={!actionSummary.canRefreshViewport}
                         theme={theme}
-                    />
-                    <StatusActionButton
-                        id="range-chart"
-                        label="Range Chart"
-                        icon={<Icons.Chart />}
-                        onClick={actionSummary.onCreateSelectionChart}
-                        disabled={!actionSummary.canCreateSelectionChart}
-                        theme={theme}
-                        tone="info"
+                        iconOnly={compact}
                     />
                 </div>
+                )}
             </div>
         </div>
     );

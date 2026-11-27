@@ -242,7 +242,11 @@ def test_vr305_custom_categories_draft_and_apply(vr_session: VisualReviewSession
         _ensure_sidebar_open(s)
 
     def open_custom_category_draft(s: VisualReviewSession) -> None:
-        # Scroll sidebar to Custom Categories / '+ Category' or 'Number Group'
+        # The Modeling section starts collapsed below the zones.
+        for toggle in s.find_visible('[data-sidebar-modeling="true"] > button[aria-expanded="false"]'):
+            s.driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", toggle)
+            toggle.click()
+            s.settle(0.2)
         s.driver.execute_script(
             """
             const all = [...document.querySelectorAll('button, [role="button"], div')];

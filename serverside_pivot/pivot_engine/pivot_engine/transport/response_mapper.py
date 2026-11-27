@@ -57,6 +57,13 @@ class TanStackResponseMapper(FormulaEngineMixin):
     ) -> List[Dict[str, Any]]:
         if not columns:
             return []
+        implicit_ids = self._implicit_formula_ref_request_ids(request)
+        if not implicit_ids:
+            return [
+                col
+                for col in columns
+                if not (isinstance(col, dict) and col.get("_isImplicitFormulaRef"))
+            ]
         return [
             col
             for col in columns
@@ -64,7 +71,10 @@ class TanStackResponseMapper(FormulaEngineMixin):
                 isinstance(col, dict)
                 and (
                     col.get("_isImplicitFormulaRef")
-                    or self._is_implicit_formula_ref_center_id(col.get("id"), request)
+                    or any(
+                        self._matches_materialized_request_id(col.get("id"), request_id)
+                        for request_id in implicit_ids
+                    )
                 )
             )
         ]
@@ -221,22 +231,22 @@ class TanStackResponseMapper(FormulaEngineMixin):
         # Hidden sort-key fields are transport-only helpers.
         # Keep them available for backend ORDER BY, but never expose them to the frontend.
         # Also sanitize NaN floats ??? None so JSON serialization produces valid null.
-        import math as _math
-
         if rows:
             for row in rows:
-                if not isinstance(row, dict):
+                if type(row) is not dict and not isinstance(row, dict):
                     continue
-                hidden_keys = [
-                    key
-                    for key in row.keys()
-                    if isinstance(key, str) and key.startswith(hidden_sort_prefix)
-                ]
-                for key in hidden_keys:
-                    row.pop(key, None)
+                hidden_keys = None
                 for key, val in row.items():
-                    if isinstance(val, float) and _math.isnan(val):
+                    if type(val) is float and val != val:
                         row[key] = None
+                    if type(key) is str and key.startswith(hidden_sort_prefix):
+                        if hidden_keys is None:
+                            hidden_keys = [key]
+                        else:
+                            hidden_keys.append(key)
+                if hidden_keys is not None:
+                    for key in hidden_keys:
+                        row.pop(key, None)
 
         # Enrich rows for TanStack Hierarchy display
         hierarchy_cols = tanstack_request.grouping or []
@@ -312,22 +322,30 @@ class TanStackResponseMapper(FormulaEngineMixin):
 
         # Apply pivot window functions (% row/% col/% grand total) after hierarchy
         # metadata is normalized, so grand-total detection is stable.
-        self._apply_pivot_window_functions(rows, tanstack_request)
+        has_window_funcs = any(
+            isinstance(c, dict) and (c.get("windowFn") or c.get("window_fn") or c.get("pivotWindowFn"))
+            for c in (tanstack_request.columns or [])
+        )
+        if has_window_funcs:
+            self._apply_pivot_window_functions(rows, tanstack_request)
 
         # Apply formula columns (post-aggregation calculated fields) after window functions.
-        measure_axis_for_response = MeasureAxisConfig.from_dict(
-            getattr(tanstack_request, "measure_axis", None)
+        formula_ids = {c["id"] for c in tanstack_request.columns if c.get("isFormula")}
+        has_formulas = bool(formula_ids) or any(
+            isinstance(c, dict) and FormulaEngineMixin._is_measure_formula_column(c)
+            for c in (tanstack_request.columns or [])
+        )
+        measure_axis_for_response = (
+            MeasureAxisConfig.from_dict(getattr(tanstack_request, "measure_axis", None))
+            if has_formulas else None
         )
         formulas_materialized_by_measure_axis = bool(
             measure_axis_for_response
             and measure_axis_for_response.placement in {"rows", "columns"}
-            and any(
-                isinstance(column, dict) and column.get("isFormula")
-                for column in (tanstack_request.columns or [])
-            )
+            and formula_ids
         )
         _formula_errors_main = {}
-        if not formulas_materialized_by_measure_axis:
+        if has_formulas and not formulas_materialized_by_measure_axis:
             engine_sorted = bool(self._engine_formula_ids(rows, tanstack_request))
             _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
             rows = self._sort_rows_for_formula_sort(rows, tanstack_request, engine_sorted=engine_sorted)
@@ -354,12 +372,11 @@ class TanStackResponseMapper(FormulaEngineMixin):
         measure_ids = {
             c["id"] for c in tanstack_request.columns if c.get("aggregationFn")
         }
-        formula_ids = {c["id"] for c in tanstack_request.columns if c.get("isFormula")}
         formula_labels = {
             c["id"]: self._formula_label(c)
             for c in tanstack_request.columns
             if c.get("isFormula") and c.get("id")
-        }
+        } if formula_ids else {}
         grouping_ids = set(tanstack_request.grouping or [])
         has_column_dimensions = any(
             c.get("id") not in grouping_ids
@@ -387,7 +404,9 @@ class TanStackResponseMapper(FormulaEngineMixin):
                         ordered_result_keys.append(key)
                         seen_result_keys.add(key)
             for row in rows:
-                if not isinstance(row, dict):
+                if type(row) is not dict and not isinstance(row, dict):
+                    continue
+                if row.keys() <= seen_result_keys:
                     continue
                 for key in row.keys():
                     if key not in seen_result_keys:
@@ -483,8 +502,8 @@ class TanStackResponseMapper(FormulaEngineMixin):
         # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
         # formula columns. handle_request also calls _apply_formula_columns after
         # window functions, but that second pass is idempotent so it is safe.
-        _formula_errors = {}
-        if not formulas_materialized_by_measure_axis:
+        _formula_errors = _formula_errors_main
+        if has_formulas and not formulas_materialized_by_measure_axis:
             engine_sorted = bool(self._engine_formula_ids(rows, tanstack_request))
             _formula_errors = self._apply_formula_columns(rows, tanstack_request)
             rows = self._sort_rows_for_formula_sort(rows, tanstack_request, engine_sorted=engine_sorted)

@@ -22,7 +22,7 @@ import {
     resolveSparklineDeltaValue,
     resolveSparklineMetricValue,
 } from '../utils/sparklines';
-import { formatCustomAwareFieldLabel, isGrandTotalRow } from './usePivotNormalization';
+import { formatCustomAwareFieldLabel, getReportHeaderLabel, isGrandTotalRow } from './usePivotNormalization';
 import {
     isBlankHierarchyValue,
     resolveTabularPathFieldValue,
@@ -691,15 +691,6 @@ export function useColumnDefs({
             );
         };
         /** @returns {any} */
-        const getReportHeaderLabel = () => {
-            /** @type {any} */
-            const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
-            if (!root || typeof root !== 'object') return 'Report';
-            if (root.label) return root.label;
-            if (root.field) return formatDisplayLabel(root.field);
-            return 'Report';
-        };
-        /** @returns {any} */
         const getTreeHeaderLabel = () => {
             /** @type {any} */
             const labelField = treeConfig && typeof treeConfig === 'object' && typeof treeConfig.labelField === 'string'
@@ -1162,7 +1153,7 @@ export function useColumnDefs({
         if (canConfigureReportLine) {
             hierarchyCols.push({
                 id: '__report_config__',
-                header: '',
+                header: () => <span title="Line settings" aria-label="Line settings"><Icons.Settings /></span>,
                 size: 42,
                 minSize: 42,
                 maxSize: 42,
@@ -1199,7 +1190,8 @@ export function useColumnDefs({
                             {isConfigurable ? (
                                 <button
                                     type="button"
-                                    className="sp-btn sp-btn-ghost"
+                                    className="sp-btn sp-btn-ghost sp-report-row-settings"
+                                    data-row-selected={Boolean(row.getIsSelected?.()) || undefined}
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onConfigureReportLine(rowData);
@@ -1343,7 +1335,7 @@ export function useColumnDefs({
                     header: resolvedRowHeaderLabel !== null
                         ? resolvedRowHeaderLabel
                         : (pivotMode === 'report'
-                            ? getReportHeaderLabel()
+                            ? getReportHeaderLabel(reportDef)
                             : (viewMode === 'tree'
                                 ? getTreeHeaderLabel()
                                 : rowFields.map(getFieldLabel).join(' > '))),

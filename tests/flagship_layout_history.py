@@ -83,7 +83,7 @@ def qualify_layout_history(host):
         wait = WebDriverWait(driver, 30)
         wait.until(support._totals)
         for _ in range(2):
-            _wait_for_visible_workspace_element(driver, '[title="Increase decimal places"]').click()
+            support._toolbar_control(driver, "format", '[title="Increase decimal places"]').click()
 
         def chip(label, kind="zone"):
             return next((item for item in _workspace_elements(driver, f'[data-sidebar-field-chip="{kind}"]')

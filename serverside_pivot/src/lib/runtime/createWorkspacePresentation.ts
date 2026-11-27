@@ -253,6 +253,7 @@ export function createWorkspacePresentation(
         srOnly: source.srOnly,
         statusAccessoryActions: source.statusAccessoryActions,
         statusAccessoryModel: source.statusAccessoryModel,
+        onWorkspaceResize: source.onWorkspaceResize,
         statusRowCount: source.statusRowCount,
         stickyHeaderHeight: source.stickyHeaderHeight,
         stickyHeaders: source.stickyHeaders,

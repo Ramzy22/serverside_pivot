@@ -38,7 +38,6 @@ export function useWorkspaceStatusPresentation({
   isRequestPending,
   loadedRows,
   managedChartDefinitions,
-  openSelectionChart,
   propagationLogRef,
   propagationLogEpoch,
   requestVisibleViewportRefresh,
@@ -140,7 +139,6 @@ export function useWorkspaceStatusPresentation({
     canClearSelection: Object.keys(selectedCells || {}).length > 0,
     canClearFilters: countActiveFilters(filters) > 0,
     canRefreshViewport: Boolean(serverSide && !isRequestPending && typeof requestVisibleViewportRefresh === 'function'),
-    canCreateSelectionChart: Object.keys(selectedCells || {}).length > 0,
     canUndo: transactionHistoryState.undoCount > 0 && !transactionHistoryState.pending,
     canRedo: transactionHistoryState.redoCount > 0 && !transactionHistoryState.pending,
     canToggleOriginal: comparisonValueState.activeCount > 0,
@@ -149,7 +147,6 @@ export function useWorkspaceStatusPresentation({
     onClearSelection: handleClearStatusSelection,
     onClearFilters: handleClearStatusFilters,
     onRefreshViewport: handleRefreshStatusViewport,
-    onCreateSelectionChart: () => openSelectionChart(),
     onToggleOriginal: () => setEditValueDisplayMode(/** @param {any} [prev] @returns {any} */ prev => prev === 'original' ? 'edited' : 'original'),
     onRevertAll: () => {
       /** @type {any[]} */
@@ -178,7 +175,7 @@ export function useWorkspaceStatusPresentation({
     },
     onUndo: handleUndo,
     onRedo: handleRedo
-  }), [filters, handleClearStatusFilters, handleClearStatusSelection, handleRedo, handleRefreshStatusViewport, handleUndo, isRequestPending, openSelectionChart, requestVisibleViewportRefresh, clearAllComparisonValueState, clearAllEditedCellMarkers, clearAllOptimisticCellValues, comparisonValueState.activeCount, editValueDisplayMode, selectedCells, serverSide, showNotification, syncTransactionHistoryState, dispatchTransactionRequest, supportsPatchTransactionRefresh, transactionHistoryState.pending, transactionHistoryState.redoCount, transactionHistoryState.undoCount, editedCellMarkersRef]);
+  }), [filters, handleClearStatusFilters, handleClearStatusSelection, handleRedo, handleRefreshStatusViewport, handleUndo, isRequestPending, requestVisibleViewportRefresh, clearAllComparisonValueState, clearAllEditedCellMarkers, clearAllOptimisticCellValues, comparisonValueState.activeCount, editValueDisplayMode, selectedCells, serverSide, showNotification, syncTransactionHistoryState, dispatchTransactionRequest, supportsPatchTransactionRefresh, transactionHistoryState.pending, transactionHistoryState.redoCount, transactionHistoryState.undoCount, editedCellMarkersRef]);
 
   return { statusAccessoryActions, statusAccessoryModel };
 }

@@ -36,11 +36,14 @@ st.markdown(
     """
     <style>
       .stApp { background: #07111F; color: #E5EEF9; }
-      .block-container { max-width: 1540px; padding-top: 2.2rem; padding-bottom: 3rem; }
+      .block-container { max-width: 1540px; padding-top: .7rem; padding-bottom: 3rem; }
       [data-testid="stHeader"] { background: rgba(7,17,31,.72); }
       .flagship-eyebrow { color:#5EEAD4; letter-spacing:.1em; font-size:.72rem; font-weight:800; text-transform:uppercase; }
-      .flagship-title { color:#F8FAFC; font-size:clamp(2.1rem,4vw,4rem); font-weight:800; letter-spacing:-.055em; line-height:1.03; max-width:820px; margin:.55rem 0 .85rem; }
-      .flagship-copy { color:#AABBD0; max-width:780px; line-height:1.7; font-size:1rem; }
+      .flagship-title { color:#F8FAFC; font-size:clamp(1.15rem,2vw,1.65rem); font-weight:800; letter-spacing:-.055em; line-height:1.03; max-width:820px; margin:.4rem 0; }
+      .flagship-copy { color:#AABBD0; max-width:780px; line-height:1.4; font-size:.78rem; margin:0; }
+      .flagship-header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:4px 0 12px; }
+      .flagship-stats { display:flex; gap:12px; font-size:12px; color:#90A6BF; }
+      .flagship-stats strong { color:#5EEAD4; margin-right:5px; }
       .flagship-card { border:1px solid #1E3852; border-radius:16px; padding:18px; min-height:145px; background:linear-gradient(145deg,#0D1C2F,#091523); }
       .flagship-card-kicker { color:#5EEAD4; font-family:ui-monospace,monospace; font-size:.7rem; font-weight:800; letter-spacing:.08em; }
       .flagship-card h3 { color:#F8FAFC; font-size:1rem; margin:.7rem 0 .4rem; }
@@ -51,15 +54,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="flagship-eyebrow">serverside-pivot / Streamlit</div>', unsafe_allow_html=True)
-st.markdown('<div class="flagship-title">A real-time analytical workspace without a rerun per scroll.</div>', unsafe_allow_html=True)
-st.markdown('<div class="flagship-copy">This Streamlit host mounts the same React workspace used by a standalone web app. Viewport traffic travels directly to Pivot Runtime Protocol V1, while Streamlit receives only durable view-state changes.</div>', unsafe_allow_html=True)
+st.markdown(f"""<header class="flagship-header">
+<div><span class="flagship-eyebrow">serverside-pivot / Streamlit</span>
+<h1 class="flagship-title">A real-time analytical workspace in Streamlit.</h1>
+<p class="flagship-copy">Explore revenue, shape the model, analyze trends, and export a saved view.</p></div>
+<div class="flagship-stats"><span><strong>{DEMO_ROW_COUNT // 1000}k</strong> source rows</span><span><strong>V1</strong> direct transport</span></div>
+</header>""", unsafe_allow_html=True)
 
-metric_a, metric_b, metric_c, metric_d = st.columns(4)
-metric_a.metric("Source rows", f"{DEMO_ROW_COUNT:,}")
-metric_b.metric("Transport", "HTTP / V1")
-metric_c.metric("Viewport state", "direct")
-metric_d.metric("Host reruns", "not on scroll")
+st.markdown('<div class="flagship-note"><strong style="color:#E5EEF9">Live workspace</strong> &nbsp; Open the fields panel, rearrange the model, switch themes, add a chart, or export the result. The service below is an explicit local V1 endpoint; in production, put it behind your own authentication and row-level-security policy.</div>', unsafe_allow_html=True)
+
+endpoint = os.environ.get("PIVOT_RUNTIME_ENDPOINT", "http://127.0.0.1:8765/v1/runtime")
+pivot_workspace(
+    runtime_endpoint=endpoint,
+    key="flagship-streamlit-pivot",
+    **workspace_config("streamlit"),
+)
 
 st.markdown("<br/>", unsafe_allow_html=True)
 cards = st.columns(4)
@@ -73,14 +82,7 @@ for column, (kicker, title, copy) in zip(cards, card_content):
     column.markdown(f'<div class="flagship-card"><div class="flagship-card-kicker">{kicker}</div><h3>{title}</h3><p>{copy}</p></div>', unsafe_allow_html=True)
 
 st.markdown("<br/>", unsafe_allow_html=True)
-st.markdown('<div class="flagship-note"><strong style="color:#E5EEF9">Live workspace</strong> &nbsp; Open the fields panel, rearrange the model, switch themes, add a chart, or export the result. The service below is an explicit local V1 endpoint; in production, put it behind your own authentication and row-level-security policy.</div>', unsafe_allow_html=True)
-
-endpoint = os.environ.get("PIVOT_RUNTIME_ENDPOINT", "http://127.0.0.1:8765/v1/runtime")
-pivot_workspace(
-    runtime_endpoint=endpoint,
-    key="flagship-streamlit-pivot",
-    **workspace_config("streamlit"),
-)
+st.markdown('<div class="flagship-note"><strong>Why this host</strong> · Streamlit keeps Python application state while viewport requests travel directly to the runtime.<br/><strong>Publishing checklist</strong> · Saved views · Virtual scrolling · Charts · XLSX exports</div>', unsafe_allow_html=True)
 
 with st.expander("How this integration is wired"):
     st.code(

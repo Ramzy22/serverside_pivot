@@ -291,8 +291,9 @@ def test_workspace_canvas_receives_its_bounded_presentation_model():
     model_source = _source("runtime/workspaceViewModel.ts")
 
     assert "canvas={workspace.canvas}" in shell_source
-    assert "<PivotWorkspaceCanvas canvas={canvas} />" in shell_source
-    assert "export function PivotWorkspaceCanvas({ canvas })" in canvas_source
+    assert "<PivotWorkspaceCanvas canvas={canvas} compact={compactLayout} />" in shell_source
+    assert "export function PivotWorkspaceCanvas({ canvas, compact = false })" in canvas_source
+    assert "compact={compact}" in canvas_source
     assert "workspace.presentation" not in canvas_source
     assert "domains.workspace.canvas" in model_source
     assert "CANVAS_KEYS" not in model_source

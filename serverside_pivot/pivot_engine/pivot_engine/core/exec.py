@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 from .authority.scope import current_scope, run_in_executor_scoped
 from .authority.verifier import verify_scoped
 from .cache import CacheKey, CacheManager, key_for
-from .frame import ResultFrame, split_window
+from .frame import ResultFrame, split_window_with_data
 from .identity import CanonicalPathCodec, CanonicalScalarCodec
 from .ir import ColumnOrder, DetailQuery, DistinctQuery, MeasureRef, PivotQuery, PredicateGroup, Window, expr_to_wire
 from .logical import plan as logical_plan
@@ -44,6 +44,22 @@ def materialize(expr: Any) -> Any:
     (an Arrow table, or a scalar for a scalar expression).  A statement the
     backend cannot compile is a typed ``BackendCapabilityError`` before it runs.
     """
+    from .physical.level_tables import BoundStatement
+
+    if isinstance(expr, BoundStatement):
+        if expr.kind != "drop":
+            verify_scoped(expr.expr)
+        if not expr.verified_capabilities and expr.kind not in {"create", "drop"}:
+            check_capabilities(expr.expr)
+        runner = _RUNNER.get()
+        result = runner(expr) if runner is not None else expr.to_pyarrow()
+        # A native cursor reports SQL literal widths (e.g. INTEGER depth),
+        # whereas Ibis applies the expression's public Arrow schema.
+        if expr.kind == "read":
+            target_schema = expr.schema if expr.schema is not None else expr.expr.schema().to_pyarrow()
+            if result.schema != target_schema:
+                return result.cast(target_schema)
+        return result
     check_capabilities(expr)
     runner = _RUNNER.get()
     with refusing_untranslatable(expr):
@@ -218,10 +234,25 @@ def _tree(query: PivotQuery, resolve: Resolver, strategy: Optional[str]) -> Any:
 
 
 def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
-            grand_total: bool = False) -> ResultFrame:
+            grand_total: bool = False, prune_total: bool = False) -> ResultFrame:
     """The window's rows, with ``total`` and (``grand_total``) the grand total: one statement on a backend
     with window functions, else the window, the count and the grand total read from the same tree."""
     from .physical.union_all import windowed
+
+    if strategy is None:
+        from .physical.capabilities import level_tables
+        from .physical.level_tables import store_for
+
+        relation = resolve(query.dataset)
+        query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
+        backend = relation._find_backend()
+        if level_tables(backend):
+            table, col_data = store_for(backend).read(query, relation, grand_total, prune_total=prune_total)
+            return _frame([table], query, grand_total, col_data=col_data)
+        if query.columns:
+            from .physical.long_form import read
+
+            return _frame([read(query, relation, grand_total, prune_total=prune_total)], query, grand_total)
 
     tree = _tree(query, resolve, strategy)
     statements = _statements(tree, windowed(tree, query.window, grand_total=grand_total), query, grand_total)
@@ -229,8 +260,16 @@ def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = N
 
 
 async def execute_async(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
-                        grand_total: bool = False) -> ResultFrame:
+                        grand_total: bool = False, prune_total: bool = False) -> ResultFrame:
     from .physical.union_all import windowed
+
+    if strategy is None:
+        # The tier owns its lock, missing-block writes and read as one unit.
+        # Scope and the bound cancellable runner propagate to the worker.
+        loop = asyncio.get_running_loop()
+        result: ResultFrame = await run_in_executor_scoped(loop, None, lambda: execute(
+            query, resolve, strategy=strategy, grand_total=grand_total, prune_total=prune_total))
+        return result
 
     tree = _tree(query, resolve, strategy)  # resolve + verify on the caller's context
     statements = _statements(tree, windowed(tree, query.window, grand_total=grand_total), query, grand_total)
@@ -255,12 +294,19 @@ def _statements(tree: Any, page: Any, query: PivotQuery, grand_total: bool) -> L
     return statements
 
 
-def _frame(results: List[Any], query: PivotQuery, grand_total: bool) -> ResultFrame:
+def _frame(
+    results: List[Any],
+    query: PivotQuery,
+    grand_total: bool,
+    *,
+    col_data: Optional[Dict[str, List[Any]]] = None,
+) -> ResultFrame:
     window = (query.window.offset, query.window.limit)
-    body, total, grand = split_window(results[0], window)
+    body, total, grand, body_data, gt_data = split_window_with_data(results[0], col_data, window)
     if len(results) > 1:  # the count and grand total statements of a backend without window functions
         body, total = results[0], int(results[1].as_py())
         grand = results[2] if len(results) > 2 else grand
+        body_data, gt_data = None, None
     return ResultFrame(
         table=body,
         rows=tuple(query.rows),
@@ -269,10 +315,37 @@ def _frame(results: List[Any], query: PivotQuery, grand_total: bool) -> ResultFr
         window=window,
         total=total,
         grand_total=grand if grand_total else None,
+        _data=body_data,
+        _gt_data=gt_data if grand_total else None,
     )
 
 
 def column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int] = None,
+                   offset: int = 0, order: Sequence[ColumnOrder] = ()) -> Tuple[Tuple[Any, ...], ...]:
+    """Slice the catalog shared by all viewports of this filtered, scoped revision."""
+    from .catalog import catalog_meaning, store_for
+    from .physical.capabilities import level_tables
+    from .physical.level_tables import store_for as level_store_for
+
+    relation = resolve(query.dataset)
+    query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
+    if not query.columns:
+        return ()
+    backend = relation._find_backend()
+    identity = f"members:{canonical(catalog_meaning(query))}|{tuple(order)}"
+
+    def compute() -> Tuple[Tuple[Any, ...], ...]:
+        if level_tables(backend):
+            from_levels = level_store_for(backend).column_members_from_levels(query, relation, order)
+            if from_levels is not None:
+                return from_levels
+        return _column_members(query, lambda _name: relation, order=order)
+
+    members = store_for(backend).get(query, relation, identity, compute)
+    return tuple(members[offset:None if limit is None else offset + limit])
+
+
+def _column_members(query: PivotQuery, resolve: Resolver, *, limit: Optional[int] = None,
                    offset: int = 0, order: Sequence[ColumnOrder] = ()) -> Tuple[Tuple[Any, ...], ...]:
     """The ordered column catalog (REQ-PIV-001, REQ-PIV-002): distinct members over E0.
 

@@ -287,7 +287,7 @@ def _number_dialog(driver, places):
     from selenium.webdriver.common.keys import Keys
     from tests.test_flagship_certification import _workspace_elements
     _section(driver, "format", '[title="Open number format options"]').click()
-    dialog = _element(driver, '[role="dialog"][aria-label="Format Cells"]')
+    dialog = _element(driver, '[role="dialog"][aria-label="Number Format"]')
     next(button for button in dialog.find_elements("css selector", "button") if button.text == "Number").click()
     field = dialog.find_element("css selector", 'input[type="number"]')
     field.send_keys(Keys.CONTROL, "a")
@@ -296,7 +296,7 @@ def _number_dialog(driver, places):
     if checkbox.is_selected():
         checkbox.click()
     next(button for button in dialog.find_elements("css selector", "button") if button.text == "OK").click()
-    assert not any(el.is_displayed() for el in _workspace_elements(driver, '[role="dialog"][aria-label="Format Cells"]'))
+    assert not any(el.is_displayed() for el in _workspace_elements(driver, '[role="dialog"][aria-label="Number Format"]'))
 
 
 def _run(driver, host, requirement, state, wait, observation):
@@ -358,7 +358,7 @@ def _run(driver, host, requirement, state, wait, observation):
         keys = [target, (ECLAIR, f"Q1_{UNITS}_sum")]
         _select(driver, keys)
         before = cells(driver)
-        _section(driver, "format", '[title="Format selected cells"]').click()
+        _section(driver, "format", '[title="Style selected cells"]').click()
         for label, value in (("Background", "#123456"), ("Text color", "#ffffff")):
             field = _element(driver, f'[data-cell-format-popover] input[aria-label="{label}"]')
             field.send_keys(Keys.CONTROL, "a")
@@ -388,9 +388,10 @@ def _run(driver, host, requirement, state, wait, observation):
         _select(driver, [(row, "scale_value_sum") for row in ids])
         before = cells(driver)
         if requirement == "color-scales.scale":
-            support._select_option(driver, _section(driver, "format", 'select[title="Color scale"], [role="combobox"][title="Color scale"]'), "col")
-            palette = _element(driver, '[role="combobox"][aria-label="Color palette"], select[aria-label="Color palette"]')
-            support._select_option(driver, palette, "redGreen")
+            _section(driver, "format", 'summary[aria-label="Color scale"]').click()
+            _element(driver, '[role="menuitemradio"][data-value="col"]').click()
+            _element(driver, 'summary[aria-label="Color scale"]').click()
+            _element(driver, '[role="menuitemradio"][data-palette="redGreen"]').click()
             clear = _element(driver, '[data-pivot-status-action="clear-selection"]')
             driver.execute_script("arguments[0].scrollIntoView({block:'center'})", clear)
             clear.click()
@@ -400,7 +401,8 @@ def _run(driver, host, requirement, state, wait, observation):
             observation["after"] = after  # Preserve evidence even when control-column isolation fails.
             assert_scale(before, after)
         else:
-            _section(driver, "format", '[title="Set data bar bounds for selected columns"]').click()
+            _section(driver, "format", 'summary[aria-label="Data bar options"]').click()
+            _element(driver, '[title="Set data bar bounds for selected columns"]').click()
             dialog = _element(driver, '[role="dialog"][aria-label="Data Bar Bounds"]')
             field = dialog.find_element("css selector", 'input[aria-label="Maximum bar magnitude"]')
             field.send_keys(Keys.CONTROL, "a")
@@ -419,7 +421,7 @@ def _run(driver, host, requirement, state, wait, observation):
             after = wait.until(bars_ready)
             observation["after"] = after
             assert_data_bars(before, after)
-            observation.update(bounds=[0, 200], boundsControl="Bar Bounds / Maximum bar magnitude / Apply bounds",
+            observation.update(bounds=[0, 200], boundsControl="Data bar options / Bounds… / Maximum bar magnitude / Apply bounds",
                                negativePolicy="Absolute value uses red tint: -100 fills 50%", clampingPolicy="Magnitude / explicit maximum 200, clamped to 100%; 300 fills 100%")
     elif requirement == "themes.select-override":
         _section(driver, "theme", '[title="Edit theme colors"]')

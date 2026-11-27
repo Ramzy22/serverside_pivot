@@ -156,7 +156,7 @@ export interface ValConfig {
  * - Grid & chrome: `pageBg` / `background` (outer frame), `surfaceBg` (default cells), `headerBg` (top bar & regular column headers), `headerGroupBg` / `headerGroupText` (multi-level group headers, falling back to `headerSubtleBg` / `headerBg`).
  * - Row-header / hierarchy column: `hierarchyBg` drives the `hierarchy` column header and body fallback; derives from overridden `headerSubtleBg` / `headerBg` / `surfaceInset` or `primary` when not explicitly set.
  * - Body rows: `groupBg` / `groupText` / `groupFontWeight` (depth arrays or single values for parent/group rows) and `leafBg` / `leafFontWeight` (leaf rows).
- * - Totals & pinned Grand Total: `totalBg` / `totalText` style subtotals & total columns; `totalBgStrong` / `totalTextStrong` style the pinned/summary Grand Total row (deriving from overridden `totalBg` / `totalText` when not explicitly set).
+ * - Totals & pinned Grand Total: `totalBg` styles subtotal and Grand Total rows & total columns; `totalBgStrong` styles total headers; `totalTextStrong` styles Grand Total text (deriving from overridden `totalBg` / `totalText` when not explicitly set).
  * - Headers & fitting: `headerWrap` (wraps on spaces), `headerControls` (`'always' | 'hover' | 'never'`), `showAbsoluteSortBadge`, `fontSize`, `minFontSize`.
  */
 export interface PivotThemeOverrides {
@@ -722,6 +722,7 @@ export interface WorkspacePresentation {
     readonly srOnly: React.CSSProperties;
     readonly statusAccessoryActions: WorkspaceCollection;
     readonly statusAccessoryModel: WorkspaceRecord | null;
+    readonly onWorkspaceResize: RuntimeCommand;
     readonly statusRowCount: number;
     readonly stickyHeaderHeight: number;
     readonly stickyHeaders: boolean;

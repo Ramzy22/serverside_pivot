@@ -187,6 +187,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     // Filter interaction
     handleHeaderFilter,
     // Status bar
+    compact = false,
     selectedCells,
     rowCount,
     isRequestPending,
@@ -568,7 +569,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
     /** @type {(...args: any[]) => any} */
     const getRowLevelBackground = React.useCallback((row) => {
         if (!row || !row.original) return defaultRowBg;
-        if (row.original._isTotal) return theme.totalBgStrong || totalRowBg;
+        if (row.original._isTotal) return totalRowBg;
         /** @type {any} */
         const isGroup = Boolean(row.original._has_children) || (typeof row.getIsGrouped === 'function' && row.getIsGrouped()) || Boolean(row.subRows && row.subRows.length > 0);
         if (isGroup) {
@@ -577,7 +578,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             return resolveDepthToken(theme.groupBg, depth, null) || defaultRowBg;
         }
         return theme.leafBg || defaultRowBg;
-    }, [defaultRowBg, theme.groupBg, theme.leafBg, theme.totalBgStrong, totalRowBg]);
+    }, [defaultRowBg, theme.groupBg, theme.leafBg, totalRowBg]);
     /** @type {(...args: any[]) => any} */
     const getRowDataAttributes = React.useCallback((row) => {
         if (!row || !row.original) return {};
@@ -1578,8 +1579,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                     /** @type {any} */
                     const isTotalPinned = Boolean(row.original && row.original._isTotal);
                     /** @type {any} */
-                    const rowBorderBottom = isTotalPinned && theme.totalBorder
-                        ? (String(theme.totalBorder).includes(' ') ? theme.totalBorder : `1px solid ${theme.totalBorder}`)
+                    const rowBorderBottom = isTotalPinned
+                        ? 'none'
                         : `1px solid ${gridBorders.rowBorderColor}`;
                     /** @type {any} */
                     const extraShadow = isEdgeRow
@@ -2095,8 +2096,8 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                                       height: '100%',
                                       '--sp-row-current-bg': rowBg,
                                       background: 'var(--sp-row-current-bg)',
-                                      ...(isTotalVirtualRow && theme.totalBorder ? {
-                                          borderBottom: String(theme.totalBorder).includes(' ') ? theme.totalBorder : `1px solid ${theme.totalBorder}`,
+                                      ...(isTotalVirtualRow ? {
+                                          borderBottom: 'none',
                                       } : {}),
                                       transition: disableRowMotion ? 'none' : 'background-color var(--sp-dur-fast, 140ms) ease',
                                    }}>
@@ -2203,6 +2204,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
             </div>
             {!immersiveMode && (
                 <StatusBar
+                    compact={compact}
                     statusModel={statusModel || {
                         selection: { selectedCells },
                         data: {

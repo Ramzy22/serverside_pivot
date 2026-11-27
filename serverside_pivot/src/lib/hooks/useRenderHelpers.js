@@ -92,6 +92,8 @@ export function useRenderHelpers({
     fontFamily,
     fontSize,
     handleHeaderContextMenu,
+    getPivotColumnSortField,
+    getPivotColumnSortState,
     autoSizeColumn,
     autoSizeBounds,
     hoveredHeaderIdRef,
@@ -217,13 +219,13 @@ export function useRenderHelpers({
             const borderVal = String(theme.totalBorder).includes(' ') ? theme.totalBorder : `2px solid ${theme.totalBorder}`;
             return {
                 borderTop: borderVal,
-                borderBottom: borderVal,
+                borderBottom: 'none',
                 borderRight: `1px solid ${rightBorderColor}`,
             };
         }
         return {
             borderTop: `2px solid ${theme.primary}`,
-            borderBottom: `2px solid ${theme.primary}`,
+            borderBottom: 'none',
             borderRight: `1px solid ${rightBorderColor}`,
         };
     }, [theme.primary, theme.totalBorder, gridBorders.columnBorderColor]);
@@ -232,7 +234,7 @@ export function useRenderHelpers({
     /** @type {any} */
     const themeBgs = useMemo(() => ({
         total: theme.totalBg || theme.select || theme.background,
-        grandTotal: theme.totalBgStrong || theme.totalBg || theme.select || theme.background,
+        grandTotal: theme.totalBg || theme.select || theme.background,
         hierarchy: theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || theme.background || '#fff',
         normal: theme.leafBg || theme.surfaceBg || theme.background || '#fff',
         totalText: theme.totalText || theme.text || theme.primary,
@@ -662,6 +664,7 @@ export function useRenderHelpers({
                 data-databar-variant={dataBarEl ? resolvedDataBarVariant : undefined}
                 data-grid-cell-tint={shouldUseHoverTint ? 'true' : undefined}
                 data-rowspan={rowSpanHeight ? rowSpanState.rowSpan : undefined}
+                data-report-row-selected={isReportConfigGutter && selectedRowKeys?.has(rowPath) ? 'true' : undefined}
                 data-report-config-gutter={isReportConfigGutter ? 'true' : undefined}
                 onMouseDown={isReportConfigGutter ? undefined : (e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
                 onMouseEnter={isReportConfigGutter ? undefined : () => handleCellMouseEnter(virtualRowIndex, colIndex)}
@@ -1238,8 +1241,9 @@ export function useRenderHelpers({
                     data-header-column-id={String(header.column.id)}
                     data-report-config-gutter="true"
                     role="columnheader"
-                    aria-label="Report row settings"
-                />
+                    aria-label="Line settings"
+                    title="Line settings"
+                ><Icons.Settings /></div>
             );
         }
         /** @type {any} */
@@ -1247,7 +1251,9 @@ export function useRenderHelpers({
         /** @type {any} */
         const showSortPriorityBadge = theme.showSortPriority !== false;
         /** @type {any} */
-        const headerControlsMode = theme.headerControls || 'always';
+        const pivotOrder = isGroupHeader && getPivotColumnSortField && getPivotColumnSortState
+            ? getPivotColumnSortState(getPivotColumnSortField(header, level)) : null;
+        const headerControlsMode = theme.headerControls || 'hover';
         /** @type {any} */
         const showAbsoluteSortBadgeOpt = theme.showAbsoluteSortBadge;
         /** @type {any} */
@@ -1644,6 +1650,7 @@ export function useRenderHelpers({
                     );
                 })()}
 
+                {pivotOrder && <span data-pivot-column-order={pivotOrder.direction} title={`Column order: ${pivotOrder.mode} ${pivotOrder.direction}`} style={{ color: theme.primary, fontSize: '12px' }}>{pivotOrder.direction === 'asc' ? '↑' : '↓'}</span>}
                 {inlineFilterControl}
 
                 {!isGroupHeader && isSorted && sortIndicatorMode === 'arrow' && (
@@ -1798,6 +1805,8 @@ export function useRenderHelpers({
         activeFilterOptionMeta,
         autoSizeColumn,
         handleHeaderContextMenu,
+        getPivotColumnSortField,
+        getPivotColumnSortState,
         handleFilterClick,
         handleHeaderFilter,
         requestFilterOptions,

@@ -6,7 +6,7 @@ import {
     getDashArray, DASH_STYLES, GRADIENT_DIRECTIONS, buildGradientStops,
     LEGEND_POSITIONS, ChartLegendPositionButtons,
     SERIES_SORT_MODES, applySeriesSort,
-    ChartDataLimitWarning, ChartLineDashEditor,
+    ChartLineDashEditor,
     ChartCustomPaletteEditor, ChartReflineRow,
     ChartTypeGallery,
 } from './chartEnhancements';
@@ -524,9 +524,16 @@ export const SvgChart = ({
     const effectiveLabelAngle = Number.isFinite(Number(labelAngle)) ? Number(labelAngle) : 0;
     const effectiveChartHeight = chartHeight;
 
+    /** One colour per series name: a name keeps the palette slot of its first appearance. */
+    /** @type {Map<string, number>} */
+    const seriesColorSlots = new Map();
     /** @param {any} [name] @param {any} [idx] @returns {any} */
-    const resolveSeriesColor = (name, idx) =>
-        (seriesColors && seriesColors[name]) || getColorForIndex(idx, theme, paletteColors);
+    const resolveSeriesColor = (name, idx) => {
+        if (seriesColors && seriesColors[name]) return seriesColors[name];
+        const key = String(name);
+        if (!seriesColorSlots.has(key)) seriesColorSlots.set(key, Number.isFinite(idx) ? idx : seriesColorSlots.size);
+        return getColorForIndex(/** @type {number} */ (seriesColorSlots.get(key)), theme, paletteColors);
+    };
 
     /** @param {any} [cx] @param {any} [cy] @param {any} [fill] @param {any} [tipAttrs] @param {any} [clickProps] @returns {any} */
     const renderMarker = (cx, cy, fill, tipAttrs, clickProps = {}) => {

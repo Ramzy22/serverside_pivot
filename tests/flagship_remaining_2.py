@@ -381,8 +381,17 @@ def _formula(driver, wait, observation):
     observation["aggregationStage"] = "Value formula evaluates 2 * [sales] after sum aggregation; Q1=300,Q2=100,total=400"
 
 
+def _open_modeling(driver):
+    """The Modeling section (custom categories, date groups, bins) starts collapsed."""
+    toggle = _elements(driver, '[data-sidebar-modeling="true"] > button[aria-expanded="false"]')
+    if toggle:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", toggle[0])
+        toggle[0].click()
+
+
 def _custom(driver, wait, observation):
     from tests import flagship_browser_support as support
+    _open_modeling(driver)
     _click_button(driver, "+ Category")
     dialog = _element(driver, '[role="dialog"][aria-label="Add custom category"]')
     _type(dialog.find_element("css selector", 'input[placeholder="Example: Priority Segment"]'), "IncludedGroup")

@@ -374,14 +374,51 @@ def find_hierarchy_grand_total_row(rows: Any) -> Optional[Dict[str, Any]]:
 
 
 def compute_hierarchy_color_scale_stats(rows: Any, row_fields: Any, col_fields: Any) -> Dict[str, Any]:
+    if not rows:
+        return {"byCol": {}, "table": None}
     meta_keys = _hierarchy_color_meta_keys(row_fields, col_fields)
-    by_col: Dict[str, Dict[str, float]] = {}
+    mins: Dict[str, float] = {}
+    maxs: Dict[str, float] = {}
     table_min = float("inf")
     table_max = float("-inf")
+    gt_path = GRAND_TOTAL_PATH
+    gt_id = GRAND_TOTAL_ID
 
-    for row in rows or []:
-        table_min, table_max = _accumulate_hierarchy_color_stats(row, meta_keys, by_col, table_min, table_max)
+    for row in rows:
+        if type(row) is not dict:
+            if not isinstance(row, dict):
+                continue
+        if row.get("_isTotal") or row.get("_path") == gt_path or row.get("_id") == gt_id:
+            continue
+        for key, value in row.items():
+            if key in meta_keys:
+                continue
+            vt = type(value)
+            if vt is int:
+                pass
+            elif vt is float:
+                if value != value:
+                    continue
+            elif isinstance(value, (int, float)):
+                if isinstance(value, float) and math.isnan(value):
+                    continue
+            else:
+                continue
+            cur_min = mins.get(key)
+            if cur_min is None:
+                mins[key] = value
+                maxs[key] = value
+            else:
+                if value < cur_min:
+                    mins[key] = value
+                if value > maxs[key]:
+                    maxs[key] = value
+            if value < table_min:
+                table_min = value
+            if value > table_max:
+                table_max = value
 
+    by_col = {k: {"min": mins[k], "max": maxs[k]} for k in mins}
     return _hierarchy_color_stats_result(by_col, table_min, table_max)
 
 

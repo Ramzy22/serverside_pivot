@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { filterInputStyle } from './filterStyles';
 
 /** @param {any} [filter] @returns {any} */
 const getRangeDraft = (filter) => {
@@ -43,10 +44,13 @@ const parseNumericDraft = (value) => {
     return { empty: false, value: numericValue };
 };
 
-/** @param {any} p0 @returns {any} */
-const NumericRangeFilter = ({ onFilter, currentFilter, theme, onClose }) => {
-    /** @type {any} */
-    const resolvedTheme = theme || { primary: '#1976d2', danger: '#d32f2f', textSec: '#666' };
+/**
+ * The Range tab of a column filter. The owning ColumnFilter renders the footer;
+ * this editor registers how to build its filter in `applyRef` (returning an
+ * `error` when the draft is invalid) and calls `onSubmit` on Enter.
+ * @param {any} p0 @returns {any}
+ */
+const NumericRangeFilter = ({ currentFilter, theme, applyRef, onSubmit }) => {
     /** @type {any} */
     const initialDraft = getRangeDraft(currentFilter);
     /** @type {[any, (...args: any[]) => any]} */
@@ -64,45 +68,46 @@ const NumericRangeFilter = ({ onFilter, currentFilter, theme, onClose }) => {
         setError(null);
     }, [currentFilter]);
 
-    /** @returns {any} */
-    const apply = () => {
-        /** @type {any} */
-        const parsedMin = parseNumericDraft(min);
-        /** @type {any} */
-        const parsedMax = parseNumericDraft(max);
-        if (!parsedMin || !parsedMax) {
-            setError('Enter valid numeric values.');
-            return;
-        }
-        if (!parsedMin.empty && !parsedMax.empty && parsedMin.value > parsedMax.value) {
-            setError('Min must be less than or equal to max.');
-            return;
-        }
+    if (applyRef) {
+        applyRef.current = () => {
+            /** @type {any} */
+            const parsedMin = parseNumericDraft(min);
+            /** @type {any} */
+            const parsedMax = parseNumericDraft(max);
+            if (!parsedMin || !parsedMax) {
+                setError('Enter valid numeric values.');
+                return { error: true };
+            }
+            if (!parsedMin.empty && !parsedMax.empty && parsedMin.value > parsedMax.value) {
+                setError('Min must be less than or equal to max.');
+                return { error: true };
+            }
+            setError(null);
+            if (!parsedMin.empty && !parsedMax.empty) {
+                return { filter: { operator: 'AND', conditions: [{ type: 'between', value: parsedMin.value, value2: parsedMax.value }] } };
+            }
+            if (!parsedMin.empty) return { filter: { operator: 'AND', conditions: [{ type: 'gte', value: parsedMin.value }] } };
+            if (!parsedMax.empty) return { filter: { operator: 'AND', conditions: [{ type: 'lte', value: parsedMax.value }] } };
+            return { filter: null };
+        };
+    }
 
-        setError(null);
-        if (!parsedMin.empty && !parsedMax.empty) {
-            onFilter({ operator: 'AND', conditions: [{ type: 'between', value: parsedMin.value, value2: parsedMax.value }] });
-        } else if (!parsedMin.empty) {
-            onFilter({ operator: 'AND', conditions: [{ type: 'gte', value: parsedMin.value }] });
-        } else if (!parsedMax.empty) {
-            onFilter({ operator: 'AND', conditions: [{ type: 'lte', value: parsedMax.value }] });
-        } else {
-            onFilter(null);
+    /** @param {any} [event] */
+    const submitOnEnter = (event) => {
+        if (event.key === 'Enter' && typeof onSubmit === 'function') {
+            event.preventDefault();
+            onSubmit();
         }
-        if (onClose) onClose();
     };
 
     return (
         <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
-             <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
-                <input type="number" placeholder="Min" value={min} onChange={e => { setMin(e.target.value); setError(null); }} onKeyDown={e => { if (e.key === 'Enter') apply(); }} style={{border:'1px solid #ddd', borderRadius:'4px', padding:'4px', width: '80px'}} />
-                <div style={{flex:1, height:'2px', background:'#eee', position:'relative'}}>
-                     <div style={{position:'absolute', left:'0', right:'0', top:'-1px', height:'4px', background: resolvedTheme.primary, opacity: 0.3}} />
-                </div>
-                <input type="number" placeholder="Max" value={max} onChange={e => { setMax(e.target.value); setError(null); }} onKeyDown={e => { if (e.key === 'Enter') apply(); }} style={{border:'1px solid #ddd', borderRadius:'4px', padding:'4px', width: '80px'}} />
+            <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+                <input type="number" placeholder="Min" aria-label="Minimum" value={min} onChange={e => { setMin(e.target.value); setError(null); }} onKeyDown={submitOnEnter} style={{ ...filterInputStyle(theme), flex: 1 }} />
+                <span style={{color: theme.textSec}}>–</span>
+                <input type="number" placeholder="Max" aria-label="Maximum" value={max} onChange={e => { setMax(e.target.value); setError(null); }} onKeyDown={submitOnEnter} style={{ ...filterInputStyle(theme), flex: 1 }} />
             </div>
-            {error && <div style={{fontSize: '11px', color: resolvedTheme.danger || '#d32f2f'}}>{error}</div>}
-            <button type="button" onClick={apply} style={{border:'none', borderRadius:'4px', background: resolvedTheme.primary, color:'#fff', cursor:'pointer', padding:'5px 10px', fontSize:'11px', alignSelf:'flex-end'}}>Apply</button>
+            {error && <div role="alert" style={{fontSize: '11px', color: theme.danger || '#dc2626'}}>{error}</div>}
         </div>
     );
 };

@@ -88,6 +88,88 @@ The remaining cost is not the scan: it is per-request expression building and co
 around the read (§3.4). The plan tier already caches the tree per meaning; the next step is measuring the
 compile and frame-assembly share per scenario at 200k/1M/10M and removing it where it dominates.
 
+### 3.3 Level tier: reuse level results across interactions (designed 2026-11-26)
+
+Measured (1M hierarchy, clean machine): DuckDB execution is ~75–80% of a request; Python around the read is
+~20–30 ms; build and compile are cached for a *repeated* meaning. The real interaction cost is higher than the
+harness's repeated runs show: expanding a node never expanded before is **243 ms vs AG Grid 55 ms (4.4×)**;
+repeating that same expansion is 162 ms (2.9×). Two causes:
+
+1. The plan key contains the expanded set, so every new expansion builds and compiles a new expression.
+2. Every request recomputes every level from the facts, including the grand total and level 1, which no
+   expand, collapse or scroll changes.
+
+A second profile (2026-11-26, 1M rows, 256-period wide pivot) adds three more causes:
+
+3. **Conditional aggregation**: every pivot cell is `SUM(CASE WHEN col IS NOT DISTINCT FROM member …)` over
+   every record, for every level. At 512 cells the SQL is 166 KB, the build and compile take seconds and DuckDB
+   evaluates ~10^9 predicates. Even a 24-column window costs 2–6× a long-form `GROUP BY row keys, column keys`.
+4. **Literals in SQL text**: offsets, filter values, parent paths and the column window are baked into the
+   expression, so each scroll, filter value or column window misses the SQL tier and recompiles (40–330 ms).
+5. **Redundant scans**: the column catalog is re-read on every request; the grand total is a separate scan
+   (and is computed then dropped when totals are off); ancestor-measure joins run in flat mode where the order
+   never reads them; a cell sort re-aggregates a cell that the row already carries.
+
+Design (end state; `union_all` stays the reference and the oracle stays the referee):
+
+- **Long-form level block**: the aggregate of one level, under one parent path (depth ≥ 2) or for the whole
+  level (depth ≤ 1), as rows of *(level keys, column keys, plain measures)*. One statement, one scan of the
+  block's records, with `GROUPING SETS ((level, columns), (level))`, plus `(columns), ()` at depth 1 for the
+  grand-total row and its cells. Every row of a block is a direct aggregate of exactly its own records, so
+  holistic measures (median, distinct count, …) stay exact: nothing is merged or rolled up. No `CASE` per member.
+- **Level meaning**: the canonical query without `expanded`, `window`, sort order and column window, plus the
+  dataset, the data revision and the scope fingerprint. Blocks hold every column member, so a column window
+  or a horizontal scroll is a slice, never a rescan.
+- **Storage** (capability `level_tables`, in-process engines: DuckDB): one native table per (meaning, depth)
+  in a private schema; the executor keeps, per table, the set of parent paths present. Missing blocks are
+  added with one `INSERT … SELECT` restricted to the missing parents (one scan of only their records).
+  Server databases are never written to: the tier is off for them and the step-2 path serves them.
+- **View statement**: over the level tables, keep the visible parents (semi join), order the nodes by the
+  per-node sort keys, window the row page, and return the page's long-form rows. Its SQL depends on the
+  level meaning only; visible parents, offset, limit and the column window are **bound parameters**, never
+  SQL text and never a memtable (the two costs that sank the cube, §3.1).
+- **Edge pivot**: the frame turns the page's long-form rows (≤ page rows × members in the column window)
+  into wide cells in Arrow. This is the only place cells become columns.
+- **Sort keys in blocks**: measure sorts read the node's own row; a cell sort (REQ-SORT-004) reads the
+  member's long-form row; member keys (REQ-SORT-003) and tenor keys (REQ-SORT-005) are block columns. No
+  join back to the facts.
+- **Exact filters with pushdown**: a case-insensitive equality filter (the default; semantics unchanged) is
+  resolved against the cached catalog to the exact matching members and lowered as `col IN (?, …)` with
+  bound values; only a value the catalog cannot resolve falls back to `LOWER(col) = ?`.
+- **Catalog tier**: column members and their order (REQ-PIV-002) are cached per (dataset, revision, scope,
+  row filters, columns, order), invalidated with the data like the result tier.
+- **Pruning**: totals off skips the grand-total grouping sets; flat mode (`subtotals="none"`) builds no
+  ancestor measures.
+- **Invalidation and budget**: a load or mutation drops the dataset's level and catalog entries (cache
+  coordinator namespaces, like `core.result`); the scope fingerprint is in every key; the cache byte budget
+  evicts whole level tables, least recently used.
+- **Verification**: a level table is written only from a verified, scoped statement and read only under the
+  same scope fingerprint; `verify_scoped` accepts it on that binding.
+- **Response edge**: a cached result keeps its JSON-ready dict next to the Arrow table, so a warm hit does no
+  per-cell conversion; a viewport response cached with the column schema also serves the same viewport
+  requested without it.
+
+Expected: first view of a meaning = one scan with no `CASE` matrix (below today, also for wide); a new expand
+= one restricted scan + one parameterized view statement; scroll, horizontal scroll, collapse, re-expand,
+sort by a cached value and a warm hit read only level tables or the result tier. Gate rows: first view ≤ 1.0×
+AG Grid, expand of a new node ≤ 0.5×, interactions after a view ≤ 0.1×.
+
+Steps (each ships with its tests; no step adds code a later one deletes):
+1. **Parameters**: bound statement parameters for visible parents, offset/limit, filter scalars and the
+   column window in the compile tier; the SQL tier keyed by meaning only. Sync `run_pivot` uses the same
+   compiled-statement path as the async read.
+2. **Long-form blocks + edge pivot** as the lowering of column pivots (grouping sets, exact for every
+   registry aggregation), first without storage; equivalence vs `union_all` and the oracle. `union_all`'s
+   conditional cells remain only as the reference.
+3. **Level tables**: block insert for missing parents and the view over them, DuckDB first; property test
+   over interaction sequences (expand / collapse / scroll / horizontal scroll / sort / filter) vs the oracle on
+   every backend (backends without `level_tables` run the step-2 path).
+4. **Catalog tier, exact-filter pushdown, totals-off and flat-mode pruning, cell sorts read from blocks.**
+5. **Invalidation, scope binding and byte budget** through the controller's cache coordinator.
+6. **Response edge**: cached JSON-ready dicts; the column-schema superset hit.
+7. **Harness**: add "expand a new node", "collapse/re-expand", "horizontal scroll" and a 256-period
+   full-width wide scenario; report before/after at 1M for every scenario.
+
 ### 3.4 Runtime and bridge fixed cost
 
 Profile the per-request work outside the core read: admission, the session gate, layout, the column window,

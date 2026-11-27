@@ -39,6 +39,7 @@ export function useRuntimeChartModels({
   chartPanelServerScope,
   chartPanelSource,
   chartPanelSortMode,
+  chartPanelMeasureIds,
   chartPanelType,
   chartModal,
   colFields,
@@ -112,8 +113,9 @@ export function useRuntimeChartModels({
     maxColumns: chartPanelColumnLimit,
     rowFields,
     colFields,
-    sortMode: chartPanelSortMode
-  }), [chartModelingActive, chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]);
+    sortMode: chartPanelSortMode,
+    measureIds: chartPanelMeasureIds
+  }), [chartModelingActive, chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelMeasureIds, chartPanelLayers]);
   /** @type {any} */
   const overlayChartData = chartPaneDataById[TABLE_OVERLAY_CHART_PANE_ID] || null;
   /** @type {any} */
@@ -137,7 +139,8 @@ export function useRuntimeChartModels({
           maxColumns: chartPanelColumnLimit,
           rowFields,
           colFields,
-          sortMode: chartPanelSortMode
+          sortMode: chartPanelSortMode,
+          measureIds: chartPanelMeasureIds
         });
       }
       return chartPanelLockedModel || (chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel);
@@ -162,11 +165,12 @@ export function useRuntimeChartModels({
         maxColumns: chartPanelColumnLimit,
         rowFields,
         colFields,
-        sortMode: chartPanelSortMode
+        sortMode: chartPanelSortMode,
+        measureIds: chartPanelMeasureIds
       });
     }
     return chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel;
-  }, [chartPanelLocked, chartPanelLayers, chartPanelLockedModel, chartPanelLockedRequest, chartPanelSource, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, chartPanelRowLimit, chartPanelColumnLimit, chartPanelSortMode, colFields, livePivotChartModel, liveSelectionChartModel, overlayChartData, rowFields, visibleLeafColumns]);
+  }, [chartPanelLocked, chartPanelLayers, chartPanelLockedModel, chartPanelLockedRequest, chartPanelSource, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, chartPanelRowLimit, chartPanelColumnLimit, chartPanelSortMode, chartPanelMeasureIds, colFields, livePivotChartModel, liveSelectionChartModel, overlayChartData, rowFields, visibleLeafColumns]);
   /** @type {any} */
   const chartCanvasPaneModels = useMemo(() => {
     if (chartCanvasPanes.length === 0) return {};
@@ -195,7 +199,8 @@ export function useRuntimeChartModels({
             maxColumns: pane.columnLimit,
             rowFields,
             colFields,
-            sortMode: pane.sortMode
+            sortMode: pane.sortMode,
+            measureIds: pane.measureIds
           });
           return;
         }
@@ -246,7 +251,8 @@ export function useRuntimeChartModels({
         maxColumns: pane.columnLimit,
         rowFields,
         colFields,
-        sortMode: pane.sortMode
+        sortMode: pane.sortMode,
+        measureIds: pane.measureIds
       });
     });
     return nextModels;

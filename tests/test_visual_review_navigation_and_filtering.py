@@ -338,6 +338,20 @@ def test_vr208_column_filter_popover_and_badge(vr_session: VisualReviewSession) 
             timeout=8.0,
             message="FilterPopover dialog did not open",
         )
+        # Anchored below the header whenever there is comfortable room below it.
+        geometry = s.driver.execute_script(
+            """
+            const popover = document.querySelector('[aria-label="Filter column"]');
+            const anchor = document.activeElement && document.activeElement.closest
+                ? document.activeElement.closest('[role="columnheader"]') : null;
+            const header = anchor || document.querySelector('[role="columnheader"]');
+            if (!popover || !header) return null;
+            const p = popover.getBoundingClientRect(), h = header.getBoundingClientRect();
+            return {top: p.top, bottom: p.bottom, headerBottom: h.bottom, spaceBelow: innerHeight - h.bottom};
+            """
+        )
+        if geometry and geometry["spaceBelow"] >= 260:
+            assert geometry["top"] >= geometry["headerBottom"] - 2, f"Filter popover opened above its header: {geometry}"
 
     def apply_or_dismiss_popover(s: VisualReviewSession) -> None:
         # Type in filter input if available or click Apply / Escape

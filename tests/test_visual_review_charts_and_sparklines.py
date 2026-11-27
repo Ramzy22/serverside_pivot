@@ -1,7 +1,7 @@
 """Visual Review Suite 5: Visual Analytics, Chart Workspace Docking/Floating, Chart Families & Sparklines.
 
 Covers 3-phase visual verification (`01_before` -> `02_transition` -> `03_after`) for:
-- VR-501: `New Chart Pane` Preview Modal (`isPreview`) -> `Open in Panel` Docked Chart -> Splitter Resize
+- VR-501: `New Chart Pane` Preview Modal (`isPreview`) -> `Add to workspace` Docked Chart -> Splitter Resize
 - VR-502: Docked Chart Pane -> Transition to Floating / Bottom Dock Layout -> Close Cleanly
 - VR-503: Cell Selection -> `Range Chart` Activation & Launch -> `By Columns` Orientation
 - VR-504: Systematic Multi-Family Chart Gallery Sweep (`bar`, `line`, `area`, `donut`, `scatter`,
@@ -28,16 +28,16 @@ def _open_and_confirm_docked_chart(s: VisualReviewSession) -> None:
     s.open_toolbar_section("charts")
     s.click_button(title_contains="Add a resizable chart pane")
     s.wait_until(
-        lambda: any((b.text or "").strip() == "Open in Panel" for b in s.find_visible("button")),
+        lambda: any((b.text or "").strip() == "Add to workspace" for b in s.find_visible("button")),
         timeout=10.0,
         message="New Chart Pane preview modal did not open",
     )
     s.settle(0.25)
-    s.click_button(text="Open in Panel")
+    s.click_button(text="Add to workspace")
     s.wait_until(
         lambda: len(s.find_visible("[data-docked-chart-pane]")) > 0,
         timeout=10.0,
-        message="Docked chart pane did not mount after clicking Open in Panel",
+        message="Docked chart pane did not mount after clicking Add to workspace",
     )
     s.settle(0.3)
 
@@ -47,18 +47,18 @@ def test_vr501_docked_chart_pane_preview_open_and_resize(vr_session: VisualRevie
         s.open_toolbar_section("charts")
         s.click_button(title_contains="Add a resizable chart pane")
         s.wait_until(
-            lambda: any((b.text or "").strip() == "Open in Panel" for b in s.find_visible("button")),
+            lambda: any((b.text or "").strip() == "Add to workspace" for b in s.find_visible("button")),
             timeout=10.0,
             message="New Chart Pane preview modal did not open",
         )
         s.settle(0.3)
 
     def confirm_into_docked_panel_and_resize(s: VisualReviewSession) -> None:
-        s.click_button(text="Open in Panel")
+        s.click_button(text="Add to workspace")
         s.wait_until(
             lambda: len(s.find_visible("[data-docked-chart-pane]")) > 0,
             timeout=10.0,
-            message="Docked chart pane did not appear after Open in Panel",
+            message="Docked chart pane did not appear after Add to workspace",
         )
         s.settle(0.3)
         handles = s.find_visible('[title="Resize workspace panes"]')
@@ -76,7 +76,7 @@ def test_vr501_docked_chart_pane_preview_open_and_resize(vr_session: VisualRevie
 
     vr_session.record_transition(
         "VR_501_docked_chart_open_and_resize",
-        "Click New Chart Pane -> full Preview Modal -> click 'Open in Panel' to dock & resize splitter",
+        "Click New Chart Pane -> full Preview Modal -> click 'Add to workspace' to dock & resize splitter",
         route="/pivot",
         action_to_transition_fn=launch_chart_preview_modal,
         complete_to_after_fn=confirm_into_docked_panel_and_resize,

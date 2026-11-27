@@ -1326,20 +1326,24 @@ test('ResizableFieldPanel handles width, height, corner drag, auto-sidebar expan
         assert.equal(bodyStyle.cursor, 'auto');
         assert.equal(listeners.get('blur')?.size || 0, 0);
 
-        // 3. Corner drag with purely vertical motion on a width:null panel preserves width:null (100%)
-        let rowsTree = renderPanel('rows');
-        const rowsEl = {
-            style: {...rowsTree.props.style},
-            parentElement: {getBoundingClientRect: () => ({width: 324, height: 140})},
-            getBoundingClientRect: () => ({width: 324, height: 140}),
-        };
-        rowsTree.props.ref.current = rowsEl;
-        findNodes(rowsTree, el => el?.props?.title === 'Resize Rows')[0].props.onMouseDown({
-            clientX: 320, clientY: 500, preventDefault: noop, stopPropagation: noop,
-        });
-        dispatchWindow('mousemove', {clientX: 321, clientY: 550});
-        dispatchWindow('mouseup', {clientX: 321, clientY: 550});
-        assert.deepEqual(fieldPanelSizes.rows, {width: null, height: 190});
+        // 3. Layout zones size to their content: Available Fields is the only resizable panel.
+        const zoneTree = scheduler.render('sidebar-zones', () => SidebarPanel({
+            rowFields: ['Region'], colFields: [], valConfigs: [{field: 'Sales', agg: 'sum'}],
+            columnVisibility: {}, setColumnVisibility: noop, columnPinning: {}, setColumnPinning: noop,
+            availableFields: ['Region', 'Sales', 'Category'], table: null, pinningPresets: {},
+            showNotification: noop, filterAnchorEl: null, setFilterAnchorEl: noop,
+            colSearch: '', setColSearch: noop, colTypeFilter: 'all', setColTypeFilter: noop,
+            selectedCols: {}, setSelectedCols: noop, dropLine: null, onDragStart: noop, onDragOver: noop,
+            onDrop: noop, onDragEnd: noop, onKeyboardFieldDrop: noop, handleHeaderFilter: noop,
+            handleFilterClick: noop, requestFilterOptions: noop, handleExpandAllRows: noop,
+            handlePinColumn: noop, toggleAllColumnsPinned: noop, activeFilterCol: null,
+            closeFilterPopover: noop, filterOptions: {}, data: [], sidebarWidth, setSidebarWidth,
+            sidebarTab: 'fields', fieldPanelSizes, setFieldPanelSizes,
+        }));
+        assert.deepEqual(findNodes(zoneTree, el => el?.props?.panelId).map(el => el.props.panelId), ['availableFields']);
+        for (const zoneId of ['rows', 'cols', 'vals', 'filter']) {
+            assert.equal(findNodes(zoneTree, el => el?.props?.['data-sidebar-zone-panel'] === zoneId).length, 1, `zone ${zoneId} renders a content-sized panel`);
+        }
 
         // 4. Narrowing a previously auto-expanded panel contracts sidebarWidth back toward baseline, and double-click resets size
         afTree = renderPanel('availableFields');

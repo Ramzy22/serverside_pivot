@@ -344,7 +344,7 @@ def _create(driver, wait, observation):
     # Explicit public orientation preserves measure identities as row count changes.
     _button(driver, "By Rows").click()
     _button(driver, "Bar / Column").click()
-    _button(driver, "Open in Panel").click()
+    _button(driver, "Add to workspace").click()
     wait.until(lambda current: _pane_count(current) == 1)
     # Settings can widen panes and hide grid cells; close through the actual UI.
     # New docked panes normally start with settings closed. Close only an

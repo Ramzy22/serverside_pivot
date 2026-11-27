@@ -592,10 +592,9 @@ def _analysis(driver, host, wait, observation, downloads):
     wait.until(lambda d: analysis_cells_match(_analysis_cells(d), {
         ('__grand_total__', 'Q1_ventes_€_avg'): '75.00'}))
     observation['averageCells'] = _analysis_cells(driver)
-    header = element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+    expand_all = s._expand_all_rows(driver, True)
     checkpoint = driver.execute_script('return performance.now()')
-    ActionChains(driver).context_click(header).perform()
-    s._selection_menu(driver, 'Expand All Rows').click()
+    expand_all.click()
     wait.until(lambda d: {'東京', 'القاهرة'}.issubset({label for _, label in s._navigation_rows(d)}))
     def expanded(d):
         for req, reply in reversed(_responses(d, checkpoint)):

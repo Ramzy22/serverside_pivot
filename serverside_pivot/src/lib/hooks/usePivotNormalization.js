@@ -619,9 +619,17 @@ export const decorateAvailableFieldsWithCustomDimensions = (availableFields, cus
 
 // ─── Chart Utilities ───────────────────────────────────────────────────────
 
-/** @param {any} [columnFields] @returns {any} */
-export const getPreferredChartOrientation = (columnFields) => (
-    Array.isArray(columnFields) && columnFields.length > 0 ? 'columns' : 'rows'
+/**
+ * Rows are the categories by default; with column fields the series are the
+ * column members of the selected measure(s), which keeps the series count small.
+ * @param {any} [_columnFields] @returns {any}
+ */
+export const getPreferredChartOrientation = (_columnFields) => 'rows';
+
+/** 'all', 'auto' (first measure) or a non-empty list of measure keys. @param {any} [value] @returns {boolean} */
+export const isValidChartMeasureIds = (value) => (
+    value === 'all' || value === 'auto'
+    || (Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === 'string' && entry.trim() !== ''))
 );
 
 /** @param {any} [value] @param {any} [fallback] @returns {any} */
@@ -1241,10 +1249,10 @@ export const countReportNodes = (reportDef) => {
 export const getReportHeaderLabel = (reportDef) => {
     /** @type {any} */
     const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
-    if (!root || typeof root !== 'object') return 'Report';
+    if (!root || typeof root !== 'object') return 'Lines';
     if (root.label && root.label.trim()) return root.label.trim();
     if (root.field && root.field.trim()) return formatDisplayLabel(root.field);
-    return 'Report';
+    return 'Lines';
 };
 
 /** @param {any} [value] @returns {any} */
@@ -1345,6 +1353,12 @@ export const normalizeChartDefinition = (value, fallback = {}) => {
         ? source.sortMode
         : (VALID_CHART_SORT_MODES.has(fallbackSource.sortMode) ? fallbackSource.sortMode : 'natural');
     /** @type {any} */
+    const measureIds = isValidChartMeasureIds(source.measureIds)
+        ? (Array.isArray(source.measureIds) ? [...source.measureIds] : source.measureIds)
+        : (isValidChartMeasureIds(fallbackSource.measureIds)
+            ? (Array.isArray(fallbackSource.measureIds) ? [...fallbackSource.measureIds] : fallbackSource.measureIds)
+            : 'all');
+    /** @type {any} */
     const serverScope = VALID_CHART_SERVER_SCOPES.has(source.serverScope)
         ? source.serverScope
         : (VALID_CHART_SERVER_SCOPES.has(fallbackSource.serverScope) ? fallbackSource.serverScope : 'viewport');
@@ -1392,6 +1406,7 @@ export const normalizeChartDefinition = (value, fallback = {}) => {
         width,
         chartHeight,
         sortMode,
+        measureIds,
         interactionMode,
         serverScope,
         chartLayers: cloneSerializable(

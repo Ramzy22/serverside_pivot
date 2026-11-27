@@ -141,6 +141,8 @@ export function useChartWorkspacePresentation({
     sortMode: pane.sortMode,
     /** @param {any} [value] @returns {any} */
     onSortModeChange: value => updateChartCanvasPane(pane.id, { sortMode: value }),
+    /** @param {any} [value] @returns {any} */
+    onMeasureIdsChange: value => updateChartCanvasPane(pane.id, { measureIds: value }),
     interactionMode: pane.interactionMode,
     /** @param {any} [value] @returns {any} */
     onInteractionModeChange: value => updateChartCanvasPane(pane.id, { interactionMode: value }),

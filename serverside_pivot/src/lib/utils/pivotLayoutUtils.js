@@ -74,6 +74,31 @@ export const measureLongestHeaderWord = (text, measureFn) => {
     return maxWidth;
 };
 
+/** Measure the label as rendered, including CSS tracking and optional sort chrome.
+ * @param {any} text @param {any} options @returns {number}
+ */
+export const measureHeaderLabel = (text, {
+    measureText,
+    fontSize = 14,
+    theme = {},
+    measureSubHeader = true,
+    wrap = false,
+    canSort = false,
+    sortIndicator = theme.sortIndicator || 'arrow',
+} = {}) => {
+    const px = parseNumericPx(fontSize, 14);
+    const measure = measureText || createTextWidthMeasurer(`${theme.headerFontWeight ?? 600} ${px}px ${theme.fontFamily || 'Inter, system-ui, sans-serif'}`, px * .62);
+    const transform = measureSubHeader ? (theme.headerTextTransform ?? 'uppercase') : 'none';
+    const tracking = measureSubHeader ? (theme.headerLetterSpacing ?? '0.04em') : 0;
+    const spacing = String(tracking).endsWith('em') ? parseNumericPx(tracking, 0) * px : parseNumericPx(tracking, 0);
+    let label = String(text ?? '');
+    if (transform === 'uppercase') label = label.toUpperCase();
+    else if (transform === 'lowercase') label = label.toLowerCase();
+    else if (transform === 'capitalize') label = label.replace(/\b\w/g, char => char.toUpperCase());
+    const width = /** @param {string} word */ word => measure(word) + [...word].length * spacing;
+    return (wrap ? measureLongestHeaderWord(label, width) : width(label)) + (canSort && sortIndicator !== 'none' ? 14 : 0);
+};
+
 /** @param {any} [p0] @returns {any} */
 export const measureColumnFitMetric = ({
     columnId,
@@ -87,7 +112,7 @@ export const measureColumnFitMetric = ({
     headerLines = [],
     shortLabel = null,
     headerWrap = false,
-    headerControlsMode = 'always',
+    headerControlsMode = 'hover',
     canSort = true,
     sortIndicator = 'arrow',
     measureBodyText,
@@ -147,7 +172,7 @@ export const measureColumnFitMetric = ({
     });
     if (shortLabel) minLeafText = Math.min(minLeafText, measureHeaderText(String(shortLabel)));
     const sortReserve = canSort && sortIndicator !== 'none' ? 14 : 0;
-    const controlsReserve = headerControlsMode === 'always' ? 28 : 4;
+    const controlsReserve = headerControlsMode === 'always' ? 28 : 0;
     const totalHeaderPad = (headerPaddingX * 2) + sortReserve + controlsReserve + headerOverscan;
     /** @param {any} compactTheme @param {any} bodyScale @param {any} headerScale @param {any} groupScale */
     const getRequiredWidth = (compactTheme, bodyScale, headerScale, groupScale) => {

@@ -237,7 +237,7 @@ def qualify_axis_swap(host):
         wait = WebDriverWait(driver, 30)
         wait.until(support._totals)
         for _ in range(2):
-            _wait_for_visible_workspace_element(driver, '[title="Increase decimal places"]').click()
+            support._toolbar_control(driver, "format", '[title="Increase decimal places"]').click()
         if any(element.is_displayed() for element in _workspace_elements(driver, '[data-sidebar-drop-zone="rows"]')):
             _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
         if support._totals_control_button(driver, "Transpose") is None:

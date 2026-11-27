@@ -1718,6 +1718,46 @@ def _apply_qualification_column_order(driver):
     )
 
 
+def test_flagship_compact_workspace_at_390px(flagship_host, flagship_driver, flagship_artifacts):
+    _, _, _, _, _, _, _, WebDriverWait = _selenium()
+    flagship_driver.set_window_size(390, 900)
+    flagship_driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+        "width": 390, "height": 900, "deviceScaleFactor": 1, "mobile": False,
+    })
+    _switch_to_workspace(flagship_driver, flagship_host)
+    wait = WebDriverWait(flagship_driver, 20)
+    row = wait.until(lambda driver: _workspace_element(driver, '[data-pivot-toolbar-row="compact"]', required=False))
+    frame = _workspace_element(flagship_driver, '[data-compact-layout="true"]')
+    geometry = flagship_driver.execute_script("""
+        const row = arguments[0], frame = arguments[1], rect = row.getBoundingClientRect();
+        return {width: frame.clientWidth, left: rect.left, right: rect.right,
+            children: Array.from(row.children).map(child => { const r = child.getBoundingClientRect(); return {left:r.left, right:r.right, top:r.top, bottom:r.bottom}; })};
+    """, row, frame)
+    assert all(child["left"] >= geometry["left"] - 1 and child["right"] <= geometry["right"] + 1 for child in geometry["children"]), geometry
+    assert max(child["top"] for child in geometry["children"]) < min(child["bottom"] for child in geometry["children"]), geometry
+    hierarchy = _workspace_element(flagship_driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+    expected_width = min(320, max(140, geometry["width"] * .4))
+    assert abs(hierarchy.rect["width"] - expected_width) <= 2
+    more = _workspace_element(flagship_driver, 'summary[aria-label="More workspace actions"]')
+    more.click()
+    for label in ("View", "Format", "Charts", "Theme", "Undo", "Redo", "Zoom out", "Zoom in", "Immersive"):
+        assert _workspace_element_with_text(flagship_driver, '[role^="menuitem"]', label), label
+    toolbar_logs = _save_evidence(flagship_driver, flagship_artifacts, "compact-390px-toolbar-menu")
+    assert not _relevant_browser_errors(toolbar_logs)
+    _workspace_element_with_text(flagship_driver, '[role^="menuitem"]', 'View').click()
+    wait.until(lambda driver: _workspace_element(driver, '[data-toolbar-sheet="true"]', required=False))
+    assert not _workspace_element(flagship_driver, '[role="menu"][aria-label="More workspace actions"]', required=False)
+    _workspace_element(flagship_driver, 'summary[aria-label="Status actions"]').click()
+    status_menu = _workspace_element(flagship_driver, '[role="menu"][aria-label="Status actions"]')
+    assert flagship_driver.execute_script("""
+        const menu = arguments[0], item = menu.querySelector('button'), rect = item.getBoundingClientRect();
+        const topElement = menu.getRootNode().elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return item === topElement || item.contains(topElement);
+    """, status_menu), "Status overflow must appear above pinned rows"
+    logs = _save_evidence(flagship_driver, flagship_artifacts, "compact-390px-status-menu")
+    assert not _relevant_browser_errors(logs)
+
+
 def test_flagship_startup_navigation_and_controls(flagship_host, flagship_driver, flagship_artifacts):
     _, _, _, _, _, _, _, WebDriverWait = _selenium()
     _switch_to_workspace(flagship_driver, flagship_host)

@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ColumnFilter from './ColumnFilter';
 import { useDismiss, OverlayPortal } from '../../hooks/useDismiss';
+import { computeAnchoredPlacement } from '../../utils/anchoredPlacement';
 
-const FALLBACK_WIDTH = 300;
-const FALLBACK_HEIGHT = 400;
-const VIEWPORT_PADDING = 16;
+const POPOVER_WIDTH = 320;
+const VIEWPORT_PADDING = 12;
 
 /** @param {any} p0 @returns {any} */
 const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, theme }) => {
@@ -40,28 +40,24 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
         const updatePosition = () => {
             /** @type {any} */
             const rect = target.getBoundingClientRect();
-            const viewportHeight = window.innerHeight;
-            const viewportWidth = window.innerWidth;
             /** @type {any} */
-            const popoverWidth = (popoverRef.current && popoverRef.current.offsetWidth) || FALLBACK_WIDTH;
+            const popover = popoverRef.current;
             /** @type {any} */
-            const popoverHeight = (popoverRef.current && popoverRef.current.offsetHeight) || FALLBACK_HEIGHT;
-
-            let top = rect.bottom + 4;
-            let left = rect.left;
-
-            if (top + popoverHeight + VIEWPORT_PADDING > viewportHeight) {
-                top = rect.top - popoverHeight - 4;
-            }
-
-            top = Math.max(VIEWPORT_PADDING, Math.min(top, viewportHeight - popoverHeight - VIEWPORT_PADDING));
-            left = Math.max(VIEWPORT_PADDING, Math.min(left, viewportWidth - popoverWidth - VIEWPORT_PADDING));
+            const next = computeAnchoredPlacement(rect, {
+                width: (popover && popover.offsetWidth) || Math.min(POPOVER_WIDTH, window.innerWidth - (VIEWPORT_PADDING * 2)),
+                // scrollHeight is the content's natural height even while maxHeight clips it.
+                contentHeight: popover ? popover.scrollHeight : undefined,
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                margin: VIEWPORT_PADDING,
+                comfortableHeight: 240,
+            });
 
             setPosition(/** @param {any} [prevPosition] @returns {any} */ (prevPosition) => {
-                if (prevPosition && prevPosition.top === top && prevPosition.left === left) {
+                if (prevPosition && prevPosition.top === next.top && prevPosition.left === next.left && prevPosition.maxHeight === next.maxHeight) {
                     return prevPosition;
                 }
-                return { top, left };
+                return { top: next.top, left: next.left, maxHeight: next.maxHeight };
             });
         };
 
@@ -102,11 +98,12 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
                     boxShadow: resolvedTheme.shadow || resolvedTheme.shadowMd || '0 14px 36px rgba(0,0,0,0.18)',
                     zIndex: 10002,
                     padding: '12px',
-                    borderRadius: 'var(--sp-radius-lg, 10px)',
-                    width: '300px',
-                    maxWidth: 'calc(100vw - 32px)',
-                    maxHeight: 'calc(100vh - 32px)',
-                    overflowY: 'auto',
+                    borderRadius: 'var(--sp-radius-lg, 12px)',
+                    width: `${POPOVER_WIDTH}px`,
+                    maxWidth: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
+                    maxHeight: `${position.maxHeight}px`,
+                    overflow: 'hidden',
+                    boxSizing: 'border-box',
                     pointerEvents: 'auto',
                     display: 'flex',
                     flexDirection: 'column',

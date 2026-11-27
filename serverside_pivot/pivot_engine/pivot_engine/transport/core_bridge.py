@@ -961,8 +961,8 @@ def _column_orders(spec: Any, query: PivotQuery) -> List[ColumnOrder]:
     """REQ-PIV-002 from the request's ``column_sort_options`` (the order the column catalog shows).
 
     Per column field: ``pivotSortMode`` "total" orders by the first measure's
-    total, "label" by the member; with neither, a direction means "label" and
-    otherwise the default is "total" (descending) when the view has a measure.
+    total, "label" by the member; with neither, the order is "label" (ascending
+    unless a direction is given). "total" defaults to descending.
     A custom dimension's "creation"/"numeric" order is the field's default
     member key (``__sortkey__<field>``).
     """
@@ -988,8 +988,8 @@ def _column_orders(spec: Any, query: PivotQuery) -> List[ColumnOrder]:
         raw = {**default, **explicit}
         mode = str(raw.get("pivotSortMode") or "").strip().lower()
         direction = str(raw.get("pivotDirection") or "").strip().lower()
-        if mode not in {"label", "total"}:
-            mode = "label" if direction in {"asc", "desc"} or total is None else "total"
+        if mode not in {"label", "total"} or (mode == "total" and total is None):
+            mode = "label"
         if direction not in {"asc", "desc"}:
             direction = "desc" if mode == "total" and total is not None else "asc"
         sort_type = str(raw.get("sortType") or "").strip().lower()
@@ -1210,7 +1210,7 @@ def core_hierarchy_view(
         return _legacy_row(record, query, projection)
 
     # One statement: the window, the tree's row count and the grand total.
-    frame = execute(query, resolver, grand_total=totals)
+    frame = execute(query, resolver, grand_total=totals, prune_total=not totals)
     nodes = int(frame.total or 0) - 1  # the tree's rows, less its grand total
     if end_row is None:  # the whole flattened list
         end_row = nodes
@@ -1309,7 +1309,8 @@ def core_pivot_table(resolve: Callable[[str], Any], spec: Any) -> Any:
     totals_column = bool(getattr(getattr(spec, "pivot_config", None), "include_totals_column", False))
     end = None if limit is None else offset + max(0, int(limit))
     if query.rows:  # the flat layout: leaves first, the grand total last
-        frame = execute(replace(query, window=Window(offset, None if end is None else end - offset)), resolver)
+        frame = execute(replace(query, window=Window(offset, None if end is None else end - offset)), resolver,
+                        prune_total=not bool(getattr(spec, "totals", False)))
         table = frame.table if getattr(spec, "totals", False) else frame.table.filter(pc.greater(frame.table[DEPTH], 0))
     else:
         frame = execute(replace(query, window=Window()), resolver)

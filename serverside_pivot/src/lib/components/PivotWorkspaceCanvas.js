@@ -26,7 +26,7 @@ const LazyDetailSidePanel = React.lazy(() => import(/* webpackChunkName: "pivot-
 const LazyEditSidePanel = React.lazy(() => import(/* webpackChunkName: "pivot-edit-panel" */ './Table/EditSidePanel'));
 
 /** Owns the chart/table canvas presentation and its adjacent detail surfaces.  @param {any} p0 @returns {any} */
-export function PivotWorkspaceCanvas({ canvas }) {
+export function PivotWorkspaceCanvas({ canvas, compact = false }) {
   const {
     activeColumnSkeletonCount,
     activeDetailDisplayMode,
@@ -233,6 +233,7 @@ export function PivotWorkspaceCanvas({ canvas }) {
         selectedCells={selectedCells}
         rowCount={statusRowCount}
         isRequestPending={isRequestPending}
+        compact={compact}
         statusModel={statusAccessoryModel}
         statusActions={statusAccessoryActions}
         treeSuppressGroupRowsSticky={Boolean(viewMode === 'tree' && treeConfig && treeConfig.suppressGroupRowsSticky)}

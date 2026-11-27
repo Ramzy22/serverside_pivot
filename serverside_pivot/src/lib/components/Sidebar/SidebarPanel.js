@@ -3369,6 +3369,30 @@ import {
     );
 }
 
+const MODELING_OPEN_STORAGE_KEY = 'serverside-pivot:sidebar:modeling-open';
+
+/** A per-viewer convenience: whether the Modeling section is expanded. @returns {boolean} */
+function readModelingOpen() {
+    try {
+        return typeof window !== 'undefined' && window.localStorage
+            ? window.localStorage.getItem(MODELING_OPEN_STORAGE_KEY) === 'true'
+            : false;
+    } catch (_error) {
+        return false;
+    }
+}
+
+/** @param {boolean} open */
+function writeModelingOpen(open) {
+    try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.setItem(MODELING_OPEN_STORAGE_KEY, open ? 'true' : 'false');
+        }
+    } catch (_error) {
+        // Storage can be unavailable (private windows, blocked site data); the section still toggles.
+    }
+}
+
 /** @type {any} */ export const SidebarPanel = React.memo(/** @param {any} p0 @returns {any} */ function SidebarPanel({
     sidebarTab, setSidebarTab,
     rowFields, setRowFields,
@@ -3428,6 +3452,14 @@ import {
     /** @type {any} */ const dragScrollRafRef = React.useRef(null);
     /** @type {[any, (...args: any[]) => any]} */ const [keyboardDragItem, setKeyboardDragItem] = React.useState(null);
     /** @type {[any, (...args: any[]) => any]} */ const [availableFieldSearch, setAvailableFieldSearch] = React.useState('');
+    /** @type {[boolean, (...args: any[]) => any]} */ const [modelingOpen, setModelingOpen] = React.useState(() => readModelingOpen());
+    /** @type {(...args: any[]) => any} */ const toggleModelingOpen = React.useCallback(() => {
+        setModelingOpen(/** @param {boolean} previous */ (previous) => {
+            const next = !previous;
+            writeModelingOpen(next);
+            return next;
+        });
+    }, []);
     /** @type {any} */ const fixedSparklineValueKeySet = React.useMemo(
         () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
         [fixedSparklineValueKeys]
@@ -4252,17 +4284,7 @@ import {
                     ) : (isReportMode ? reportTab !== 'columns' : sidebarTab !== 'columns') ? (
                         <>
                             {sidebarTab === 'fields' && (
-                                <div style={{flexShrink: 0}}>
-                                    <CustomCategoriesEditor
-                                        availableFields={availableFields}
-                                        customDimensions={customDimensions}
-                                        setCustomDimensions={setCustomDimensions}
-                                        data={data}
-                                        theme={theme}
-                                        showNotification={showNotification}
-                                        getFieldLabel={getFieldLabel}
-                                        onDeleteField={handleDeleteCustomCategoryField}
-                                    />
+                                <div style={{flexShrink: 0, marginBottom: '16px'}}>
                                     <div style={styles.sectionTitleSm}><Icons.Database/> Available Fields</div>
                                     {renderAvailableFieldSearch(displayAvailableFields.length, visibleAvailableFields.length)}
                                     <ResizableFieldPanel
@@ -4276,9 +4298,8 @@ import {
                                         outerStyle={dropZoneBaseStyle}
                                         contentStyle={{
                                             display: 'flex',
-                                            flexWrap: 'wrap',
-                                            gap: '4px',
-                                            alignContent: 'flex-start',
+                                            flexDirection: 'column',
+                                            gap: '1px',
                                             padding: '2px 12px 12px 2px',
                                         }}
                                     >
@@ -4300,26 +4321,29 @@ import {
                                                     onDragEnd={onDragEnd}
                                                     onKeyDown={(e) => handleDraggableKeyDown(e, f, sourceZone, -1, fieldLabel)}
                                                     title={isMeasureAxisVirtualField ? 'Drag to Rows or Columns to show measure names' : `Move ${getFieldLabel(f)}`}
+                                                    className="sp-field-row"
                                                     style={{
-                                                    padding: '4px 8px',
-                                                    fontSize: '11px',
-                                                    lineHeight: 1.2,
-                                                    fontWeight: isMeasureAxisVirtualField ? 700 : 500,
-                                                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
-                                                    borderRadius: theme.radiusSm || theme.radius || '10px',
-                                                    border: isMeasureAxisVirtualField ? `1px dashed ${theme.primary}` : `1px solid ${theme.isDark ? theme.border : '#D7DDEA'}`,
-                                                    background: isMeasureAxisVirtualField ? `${theme.primary}12` : (theme.isDark ? theme.background : (theme.surfaceInset || '#ffffff')),
-                                                    color: isMeasureAxisVirtualField ? theme.primary : (theme.isDark ? theme.text : '#334155'),
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px',
-                                                    boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
-                                                    cursor: 'grab',
-                                                    userSelect: 'none',
-                                                    minHeight: '24px',
-                                                }}>
-                                                    {isMeasureAxisVirtualField && <Icons.Sigma />}
-                                                    {fieldLabel}
+                                                        padding: '4px 8px',
+                                                        fontSize: '12px',
+                                                        lineHeight: 1.3,
+                                                        fontWeight: isMeasureAxisVirtualField ? 700 : 500,
+                                                        borderRadius: '6px',
+                                                        border: isMeasureAxisVirtualField ? `1px dashed ${theme.primary}` : '1px solid transparent',
+                                                        background: isMeasureAxisVirtualField ? `${theme.primary}12` : 'transparent',
+                                                        color: isMeasureAxisVirtualField ? theme.primary : theme.text,
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '8px',
+                                                        cursor: 'grab',
+                                                        userSelect: 'none',
+                                                        minHeight: '26px',
+                                                        whiteSpace: 'nowrap',
+                                                        overflow: 'hidden',
+                                                    }}>
+                                                    <span aria-hidden="true" style={{display: 'inline-flex', width: '14px', justifyContent: 'center', color: isMeasureAxisVirtualField ? theme.primary : theme.textSec, flexShrink: 0}}>
+                                                        {isMeasureAxisVirtualField ? <Icons.Sigma /> : <Icons.DragIndicator />}
+                                                    </span>
+                                                    <span style={{overflow: 'hidden', textOverflow: 'ellipsis'}}>{fieldLabel}</span>
                                                 </div>
                                             );
                                         })}
@@ -4385,16 +4409,15 @@ import {
                                             >- Collapse All</button>
                                         </div>
                                     )}
-                                    <ResizableFieldPanel
-                                        panelId={zone.id}
-                                        panelLabel={zone.label}
-                                        size={fieldPanelSizes && fieldPanelSizes[zone.id]}
-                                        onSizeChange={handleFieldPanelSizeChange}
-                                        getSidebarWidth={getSidebarContainerWidth}
-                                        onSidebarWidthChange={handleSidebarWidthFromPanel}
-                                        theme={theme}
-                                        outerStyle={dropZoneBaseStyle}
-                                        contentStyle={{padding: `${dropZonePadding} 12px 12px ${dropZonePadding}`}}
+                                    <div
+                                        data-sidebar-zone-panel={zone.id}
+                                        style={{
+                                            ...dropZoneBaseStyle,
+                                            boxSizing: 'border-box',
+                                            maxHeight: '280px',
+                                            overflow: 'auto',
+                                            padding: `${dropZonePadding} 12px 4px ${dropZonePadding}`,
+                                        }}
                                     >
                                         <div
                                             data-sidebar-drop-zone={zone.id}
@@ -4479,7 +4502,7 @@ import {
                                                                             </ThemedSelect>
                                                                         )}
                                                                         <ThemedSelect size="sm" aria-label="Window calculation" value={item.windowFn || 'none'} onClick={(/** @type {any} */ e) => e.stopPropagation()} onChange={(/** @type {any} */ e) => handleValueWindowFnChange(idx, e.target.value)} style={{...valueSelectStyle, width:'68px'}}>
-                                                                            <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
+                                                                            <option value="none">Value</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
                                                                         </ThemedSelect>
                                                                     </div>
                                                                 )}
@@ -4545,10 +4568,43 @@ import {
                                             )}
                                             <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,zoneItems.length)} onDrop={e=>onDrop(e, zone.id)} />
                                         </div>
-                                    </ResizableFieldPanel>
+                                    </div>
                                 </div>
                                 );
                             })}
+                            {sidebarTab === 'fields' && (
+                                <div data-sidebar-modeling="true" style={{flexShrink: 0, marginBottom: '16px', borderTop: `1px solid ${theme.border}`, paddingTop: '8px'}}>
+                                    <button
+                                        type="button"
+                                        aria-expanded={modelingOpen}
+                                        aria-controls="pivot-sidebar-modeling"
+                                        onClick={toggleModelingOpen}
+                                        style={{...styles.sectionTitleSm, display: 'flex', alignItems: 'center', width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', justifyContent: 'space-between', padding: '4px 2px', color: theme.textSec}}
+                                    >
+                                        <span style={{display: 'inline-flex', alignItems: 'center', gap: '6px'}}>
+                                            <Icons.Settings /> Modeling
+                                            {Array.isArray(customDimensions) && customDimensions.length > 0 ? (
+                                                <span style={{fontSize: '10px', fontWeight: 700, color: theme.primary, background: theme.select, borderRadius: '999px', padding: '0 6px'}}>{customDimensions.length}</span>
+                                            ) : null}
+                                        </span>
+                                        <span aria-hidden="true" style={{display: 'inline-flex', transform: modelingOpen ? 'rotate(180deg)' : 'none'}}><Icons.ChevronDown /></span>
+                                    </button>
+                                    {modelingOpen ? (
+                                        <div id="pivot-sidebar-modeling">
+                                            <CustomCategoriesEditor
+                                                availableFields={availableFields}
+                                                customDimensions={customDimensions}
+                                                setCustomDimensions={setCustomDimensions}
+                                                data={data}
+                                                theme={theme}
+                                                showNotification={showNotification}
+                                                getFieldLabel={getFieldLabel}
+                                                onDeleteField={handleDeleteCustomCategoryField}
+                                            />
+                                        </div>
+                                    ) : null}
+                                </div>
+                            )}
                         </>
                     ) : (
                         <div style={{display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', overflow: 'hidden'}}>

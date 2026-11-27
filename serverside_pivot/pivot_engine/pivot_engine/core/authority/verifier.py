@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Set
 import ibis.expr.operations as ops
 from ibis.common.graph import Graph
 
+from .level_binding import SCHEMA_PREFIX, accepts
 from .scope import PathNotProvenError, compile_scope_predicate, current_scope, is_protecting
 
 __all__ = ["PlanVerificationError", "verify_scoped"]
@@ -35,8 +36,6 @@ def verify_scoped(expr: Any, protected: Iterable[str] = ()) -> None:
     """Raise :class:`PlanVerificationError` unless ``expr`` reads protected tables scoped."""
     ctx = current_scope()
     tables = {_bare(t) for t in protected} | {t for t, g in ctx.grants.items() if is_protecting(g)}
-    if not tables:
-        return
     graph = Graph.from_bfs(expr.op())
     parents: Dict[Any, Set[Any]] = {}
     for node, children in graph.items():
@@ -45,6 +44,10 @@ def verify_scoped(expr: Any, protected: Iterable[str] = ()) -> None:
 
     problems: List[str] = []
     for node in graph:
+        if isinstance(node, ops.DatabaseTable) and str(node.namespace.database or "").startswith(SCHEMA_PREFIX):
+            if not accepts(node):
+                problems.append(f"{node.name}: level table read under a different scope binding")
+            continue
         if not isinstance(node, ops.PhysicalTable) or _bare(node.name) not in tables:
             continue
         grant = ctx.grant_for(node.name)

@@ -13,9 +13,18 @@ import { applySavedReport } from '../utils/savedReports';
 import { isEventInsideElement, isEventInsideSelector } from '../utils/domEvents';
 import { updateDataBarMaximums } from '../utils/dataBars';
 import { useDismiss, OverlayPortal, resolveOverlayPortalTarget } from '../hooks/useDismiss';
+import { computeAnchoredPlacement } from '../utils/anchoredPlacement';
+import { ToolbarMenu, ToolbarMenuItem, ToolbarMenuSection } from './ToolbarMenu';
 
 const SHOW_PIVOT_MODE_TOGGLE = true;
 
+/** @type {any[]} */
+const COLOR_SCALE_MODE_OPTIONS = [
+    { value: 'off', label: 'Off' },
+    { value: 'row', label: 'By Row' },
+    { value: 'col', label: 'By Column' },
+    { value: 'table', label: 'By Table' },
+];
 /** @type {any[]} */
 const COLOR_PALETTE_OPTIONS = [
     { value: 'redGreen',   label: 'Red to Green' },
@@ -215,7 +224,7 @@ function NumberFormatDialog({
                 role="dialog"
                 className="sp-dialog-surface"
                 aria-modal="true"
-                aria-label="Format Cells"
+                aria-label="Number Format"
                 onClick={(event) => event.stopPropagation()}
                 style={{
                     width: 'min(760px, 96vw)',
@@ -238,8 +247,8 @@ function NumberFormatDialog({
                     background: theme.headerSubtleBg || theme.hover,
                 }}>
                     <div>
-                        <div style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', color: theme.text }}>Format Cells</div>
-                        <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>Number</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', color: theme.text }}>Number Format</div>
+                        <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>How values are displayed</div>
                     </div>
                     <button
                         type="button"
@@ -527,27 +536,20 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
             /** @type {any} */
             const rect = anchor.getBoundingClientRect();
             const viewportMargin = 12;
-            const gap = 6;
             /** @type {any} */
             const width = Math.min(360, Math.max(280, window.innerWidth - (viewportMargin * 2)));
             /** @type {any} */
-            const left = Math.max(
-                viewportMargin,
-                Math.min(rect.left, window.innerWidth - width - viewportMargin),
-            );
-            /** @type {any} */
-            const spaceBelow = window.innerHeight - rect.bottom - viewportMargin - gap;
-            /** @type {any} */
-            const spaceAbove = rect.top - viewportMargin - gap;
-            /** @type {any} */
-            const openAbove = spaceBelow < 360 && spaceAbove > spaceBelow;
-            /** @type {any} */
-            const maxHeight = Math.max(240, openAbove ? spaceAbove : spaceBelow);
-            /** @type {any} */
-            const top = openAbove
-                ? Math.max(viewportMargin, rect.top - Math.min(640, maxHeight) - gap)
-                : rect.bottom + gap;
-            setPopoverPosition({ left, top, width, maxHeight: Math.min(640, maxHeight) });
+            const placement = computeAnchoredPlacement(rect, {
+                width,
+                contentHeight: popoverRef.current ? popoverRef.current.scrollHeight : undefined,
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                gap: 6,
+                margin: viewportMargin,
+                comfortableHeight: 360,
+                maxHeightCap: 640,
+            });
+            setPopoverPosition({ left: placement.left, top: placement.top, width, maxHeight: placement.maxHeight });
         };
 
         updatePosition();
@@ -1135,7 +1137,7 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
 }
 
 /** @param {any} p0 @returns {any} */
-function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
+function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme, compact = false }) {
     /** @type {any} */
     const menuRef = useRef(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -1194,7 +1196,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
                 onClick={() => exportPivot()}
                 disabled={isExporting}
             >
-                <Icons.Export/> {isExporting ? 'Exporting...' : 'Export XLSX'}
+                <Icons.Export/> {compact ? null : (isExporting ? 'Exporting...' : 'Export XLSX')}
             </button>
             <details
                 ref={menuRef}
@@ -1270,6 +1272,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
 
 /** @type {any} */
 export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (updater: (prev: any) => any): any; (val?: any): any }, [key: string]: any }} p0 @returns {any} */ function PivotAppBar({
+    compact = false,
     immersiveMode, setImmersiveMode,
     sidebarOpen, setSidebarOpen,
     themeName, setThemeName,
@@ -1462,8 +1465,8 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
     /** @type {[any, (...args: any[]) => any]} */
     const [openToolbarSections, setOpenToolbarSections] = useState({
         view: false,
-        format: true,
-        charts: true,
+        format: false,
+        charts: false,
         theme: false,
     });
     /** @type {any} */
@@ -1860,9 +1863,9 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     className={`sp-btn ${cellFormatOpen || hasSelection || hasSavedCellFormats ? 'sp-btn-active' : 'sp-btn-subtle'}`}
                     style={cellFormatOpen || hasSelection || hasSavedCellFormats ? btnActive : btnSubtle}
                     onClick={() => setCellFormatOpen(/** @param {any} [open] @returns {any} */ open => !open)}
-                    title={hasSelection ? 'Format selected cells' : 'Open cell formatting'}
+                    title={hasSelection ? 'Style selected cells' : 'Open cell styling'}
                 >
-                    Format Cells{hasSelection ? ` (${selectedCellKeys.length})` : ''}
+                    Cell Style{hasSelection ? ` (${selectedCellKeys.length})` : ''}
                 </button>
                 {cellFormatOpen && (
                     <CellFormatPopover
@@ -1878,74 +1881,72 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
             </div>
             <button
                 className={`sp-btn ${numberFormatDialogOpen || hasSelection || hasNumberFormatCustomization ? 'sp-btn-active' : 'sp-btn-subtle'}`}
-                style={numberFormatDialogOpen || hasSelection || hasNumberFormatCustomization ? {
-                    ...btnActive,
+                style={{
+                    ...(numberFormatDialogOpen || hasSelection || hasNumberFormatCustomization ? btnActive : btnSubtle),
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '8px',
-                    minWidth: '220px',
-                    justifyContent: 'space-between',
-                } : {
-                    ...btnSubtle,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    minWidth: '220px',
-                    justifyContent: 'space-between',
+                    gap: '6px',
+                    maxWidth: '240px',
                 }}
                 onClick={() => setNumberFormatDialogOpen(true)}
                 title="Open number format options"
+                aria-label={`Number format: ${activeFormatCategoryLabel}, ${displayDecimal} decimal places, ${displayedSeparatorLabel}`}
             >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                    <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '28px',
-                        height: '28px',
-                        borderRadius: '8px',
-                        background: theme.background || '#fff',
-                        border: `1px solid ${theme.border}`,
-                        flexShrink: 0,
-                    }}>
-                        <Icons.NumberFormat />
-                    </span>
-                    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: theme.text, lineHeight: 1.1 }}>Number Format</span>
-                        <span style={{ fontSize: '10px', color: theme.textSec, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '138px' }}>
-                            {`${activeFormatCategoryLabel} · ${displayDecimal} dp · ${displayedSeparatorLabel}`}
-                        </span>
-                    </span>
+                <Icons.NumberFormat />
+                <span style={{ whiteSpace: 'nowrap' }}>{activeFormatCategoryLabel}</span>
+                <span style={{ fontSize: '11px', color: theme.textSec, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {`${displayDecimal} dp · ${displayedSeparatorLabel}`}
                 </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                    <Icons.ChevronDown />
-                </span>
+                <Icons.ChevronDown />
             </button>
-            <ThemedSelect
-                size="sm"
-                value={colorScaleMode}
-                onChange={(/** @type {any} */ e) => setColorScaleMode(e.target.value, Array.from(selectedCellColIds))}
-                title="Color scale"
-                style={{...compactSelectStyle, ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
+            <ToolbarMenu
+                theme={theme}
+                ariaLabel="Color scale"
+                title={selectedCellColIds && selectedCellColIds.size > 0 ? 'Color scale for the selected columns' : 'Color scale'}
+                active={colorScaleMode !== 'off'}
+                buttonStyle={colorScaleMode !== 'off' ? btnActive : btnSubtle}
+                label={(
+                    <>
+                        <span>Color Scale</span>
+                        {colorScaleMode !== 'off' ? <span aria-hidden="true" style={{ width: '6px', height: '6px', borderRadius: '999px', background: theme.primary }} /> : null}
+                    </>
+                )}
             >
-                <option value="off">Color: Off</option>
-                <option value="row">By Row</option>
-                <option value="col">By Col</option>
-                <option value="table">By Table</option>
-            </ThemedSelect>
-            {colorScaleMode !== 'off' && (
-                <ThemedSelect
-                    size="sm"
-                    aria-label="Color palette"
-                    value={colorPalette}
-                    onChange={(/** @type {any} */ e) => setColorPalette(e.target.value)}
-                    style={{...compactSelectStyle, background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary}}
-                >
-                    {COLOR_PALETTE_OPTIONS.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                </ThemedSelect>
-            )}
+                {(close) => (
+                    <>
+                        <ToolbarMenuSection theme={theme}>Scale</ToolbarMenuSection>
+                        {COLOR_SCALE_MODE_OPTIONS.map((option) => (
+                            <ToolbarMenuItem
+                                key={option.value}
+                                theme={theme}
+                                radio
+                                checked={colorScaleMode === option.value}
+                                data-value={option.value}
+                                onSelect={() => { setColorScaleMode(option.value, Array.from(selectedCellColIds)); close(); }}
+                            >
+                                {option.label}
+                            </ToolbarMenuItem>
+                        ))}
+                        {colorScaleMode !== 'off' ? (
+                            <>
+                                <ToolbarMenuSection theme={theme}>Palette</ToolbarMenuSection>
+                                {COLOR_PALETTE_OPTIONS.map((option) => (
+                                    <ToolbarMenuItem
+                                        key={option.value}
+                                        theme={theme}
+                                        radio
+                                        checked={colorPalette === option.value}
+                                        data-palette={option.value}
+                                        onSelect={() => { setColorPalette(option.value); close(); }}
+                                    >
+                                        {option.label}
+                                    </ToolbarMenuItem>
+                                ))}
+                            </>
+                        ) : null}
+                    </>
+                )}
+            </ToolbarMenu>
             {(() => {
                 /** @type {any} */
                 const hasCellSel = selectedCellColIds && selectedCellColIds.size > 0;
@@ -1955,50 +1956,65 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                 const anyBars = dataBarsColumns && dataBarsColumns.size > 0;
                 /** @type {any} */
                 const isActive = hasBars || anyBars;
+                const { border: barBorder, borderRadius: barRadius, ...barBase } = isActive ? btnActive : btnSubtle;
+                const barRadiusValue = barRadius || '8px';
+                const barBorderValue = barBorder || `1px solid ${theme.border}`;
                 return (
-                    <button
-                        className={`sp-btn ${isActive ? 'sp-btn-active' : 'sp-btn-subtle'}`}
-                        title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
-                        style={isActive ? btnActive : btnSubtle}
-                        onClick={() => {
-                            if (!setDataBarsColumns) return;
-                            if (hasCellSel) {
-                                setDataBarsColumns(/** @param {any} [prev] @returns {any} */ prev => {
-                                    /** @type {any} */
-                                    const next = new Set(prev);
-                                    /** @type {any} */
-                                    const allOn = [...selectedCellColIds].every(id => next.has(id));
-                                    selectedCellColIds.forEach(/** @param {any} [id] @returns {any} */ id => allOn ? next.delete(id) : next.add(id));
-                                    return next;
-                                });
-                            } else {
-                                setDataBarsColumns(new Set());
-                            }
-                        }}
-                    >
-                        <><Icons.DataBars /> Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}</>
-                    </button>
+                    <div role="group" aria-label="Data bars" style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+                        <button
+                            className={`sp-btn ${isActive ? 'sp-btn-active' : 'sp-btn-subtle'}`}
+                            title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
+                            style={{ ...barBase, border: barBorderValue, borderRight: 'none', borderRadius: `${barRadiusValue} 0 0 ${barRadiusValue}` }}
+                            onClick={() => {
+                                if (!setDataBarsColumns) return;
+                                if (hasCellSel) {
+                                    setDataBarsColumns(/** @param {any} [prev] @returns {any} */ prev => {
+                                        /** @type {any} */
+                                        const next = new Set(prev);
+                                        /** @type {any} */
+                                        const allOn = [...selectedCellColIds].every(id => next.has(id));
+                                        selectedCellColIds.forEach(/** @param {any} [id] @returns {any} */ id => allOn ? next.delete(id) : next.add(id));
+                                        return next;
+                                    });
+                                } else {
+                                    setDataBarsColumns(new Set());
+                                }
+                            }}
+                        >
+                            <><Icons.DataBars /> Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}</>
+                        </button>
+                        <ToolbarMenu
+                            theme={theme}
+                            ariaLabel="Data bar options"
+                            title="Data bar options"
+                            active={isActive}
+                            align="right"
+                            buttonStyle={{ ...barBase, border: barBorderValue, borderRadius: `0 ${barRadiusValue} ${barRadiusValue} 0`, paddingLeft: '7px', paddingRight: '7px' }}
+                            label={null}
+                        >
+                            {(close) => (
+                                <>
+                                    <ToolbarMenuItem
+                                        theme={theme}
+                                        title={selectedNumericColumnIds.length ? 'Set data bar bounds for selected columns' : 'Select numeric cells to set data bar bounds'}
+                                        disabled={selectedNumericColumnIds.length === 0}
+                                        onSelect={() => { setDataBarBoundsColumns([...selectedNumericColumnIds]); close(); }}
+                                    >
+                                        Bounds…
+                                    </ToolbarMenuItem>
+                                    {typeof setDataBarVariant === 'function' ? (
+                                        <>
+                                            <ToolbarMenuSection theme={theme}>Style</ToolbarMenuSection>
+                                            <ToolbarMenuItem theme={theme} radio checked={dataBarVariant !== 'underbar'} data-bar-variant="fill" title="Data bars fill the cell" onSelect={() => { setDataBarVariant('fill'); close(); }}>Fill</ToolbarMenuItem>
+                                            <ToolbarMenuItem theme={theme} radio checked={dataBarVariant === 'underbar'} data-bar-variant="underbar" title="Data bars as a slim track under the value" onSelect={() => { setDataBarVariant('underbar'); close(); }}>Underbar</ToolbarMenuItem>
+                                        </>
+                                    ) : null}
+                                </>
+                            )}
+                        </ToolbarMenu>
+                    </div>
                 );
             })()}
-            <button
-                type="button"
-                className="sp-btn sp-btn-subtle"
-                title={selectedNumericColumnIds.length ? 'Set data bar bounds for selected columns' : 'Select numeric cells to set data bar bounds'}
-                disabled={selectedNumericColumnIds.length === 0}
-                onClick={() => setDataBarBoundsColumns([...selectedNumericColumnIds])}
-                style={{ ...btnSubtle, opacity: selectedNumericColumnIds.length ? 1 : 0.45 }}
-            >Bar Bounds</button>
-            {typeof setDataBarVariant === 'function' && (
-                <button
-                    type="button"
-                    className={`sp-btn ${dataBarVariant === 'underbar' ? 'sp-btn-active' : 'sp-btn-subtle'}`}
-                    title="Switch Data Bars between slim under-bar track and full cell fill"
-                    onClick={() => setDataBarVariant(/** @param {any} [prev] @returns {any} */ prev => (prev === 'underbar' ? 'fill' : 'underbar'))}
-                    style={dataBarVariant === 'underbar' ? btnActive : btnSubtle}
-                >
-                    {dataBarVariant === 'underbar' ? 'Bar: Underbar' : 'Bar: Fill'}
-                </button>
-            )}
             <ThemedSelect size="sm" value={fontFamily} onChange={(/** @type {any} */ e) => setFontFamily(e.target.value)} title="Font family"
                 style={{...compactSelectStyle, fontFamily}}>
                 {FONT_FAMILY_OPTIONS.map(opt => (
@@ -2084,46 +2100,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
         openToolbarSections.theme ? { id: 'theme', label: 'Theme', controls: themeControls } : null,
     ].filter(Boolean);
 
-    return (
-        <>
-        <div style={{
-            ...styles.appBar,
-            height: 'auto',
-            minHeight: '50px',
-            padding: '8px 14px',
-            gap: '8px',
-            flexDirection: 'column',
-            overflowX: 'visible',
-            overflowY: 'visible',
-            justifyContent: 'flex-start',
-            alignContent: 'stretch',
-            alignItems: 'stretch'
-        }}>
-            <div style={firstLineStyle}>
-                {uiConfig.showSidebar !== false && <button
-                    className="sp-btn sp-btn-ghost"
-                    data-testid="pivot-toggle-sidebar"
-                    onClick={() => setSidebarOpen(!sidebarOpen)}
-                    style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
-                >
-                    <Icons.Menu />
-                    <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
-                </button>}
-                <button
-                    className="sp-btn sp-btn-ghost"
-                    style={{...(canUndoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
-                    onClick={onUndoTransaction}
-                    title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
-                    disabled={!canUndoTransactions || transactionHistoryPending}
-                ><Icons.Undo /></button>
-                <button
-                    className="sp-btn sp-btn-ghost"
-                    style={{...(canRedoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
-                    onClick={onRedoTransaction}
-                    title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
-                    disabled={!canRedoTransactions || transactionHistoryPending}
-                ><Icons.Redo /></button>
-                {SHOW_PIVOT_MODE_TOGGLE ? (
+    const modeControl = (SHOW_PIVOT_MODE_TOGGLE ? (
                     <div style={{
                         position: 'relative',
                         display: 'inline-grid',
@@ -2159,7 +2136,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                                 position: 'relative',
                                 zIndex: 1,
                                 justifyContent: 'center',
-                                padding: '4px 12px',
+                                padding: compact ? '4px 6px' : '4px 12px',
                                 minHeight: '28px',
                                 fontSize: '11px',
                                 borderRadius: '7px',
@@ -2172,7 +2149,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                             onClick={() => setPivotMode('pivot')}
                             title="Pivot Mode"
                         >
-                            <Icons.Columns /> Pivot
+                            {!compact && <Icons.Columns />} Pivot
                         </button>
                         <button
                             className="sp-btn"
@@ -2182,7 +2159,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                                 position: 'relative',
                                 zIndex: 1,
                                 justifyContent: 'center',
-                                padding: '4px 12px',
+                                padding: compact ? '4px 6px' : '4px 12px',
                                 minHeight: '28px',
                                 fontSize: '11px',
                                 borderRadius: '7px',
@@ -2195,10 +2172,103 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                             onClick={() => setPivotMode('report')}
                             title="Report Mode"
                         >
-                            <Icons.Report /> Report
+                            {!compact && <Icons.Report />} Report
                         </button>
                     </div>
-                ) : null}
+                ) : null);
+    const searchControl = (<div style={{display:'flex', alignItems:'center', flex: compact ? '1 1 0' : '1 1 160px', minWidth: compact ? 0 : '140px', maxWidth: compact ? 'none' : '260px'}}>
+                    <div className="sp-search-shell" style={{
+                        ...styles.searchBox,
+                        width:'100%',
+                        borderRadius:theme.radiusSm || '8px',
+                        border:`1px solid ${theme.border}`,
+                        height: '32px',
+                        padding: compact ? '0 5px' : '0 10px'
+                    }}>
+                        <Icons.Search />
+                        <GlobalSearchInput
+                            style={{border:'none',background:'transparent',marginLeft: compact ? '3px' : '8px',outline:'none',width:'100%', minWidth: 0, flex: '1 1 0', color: theme.text, fontSize:'13px'}}
+                            placeholder={compact ? 'Search' : 'Search records...'}
+                            value={(filters && filters.global) || ''}
+                            onCommit={val => {
+                                setFilters(/** @param {any} [p] @returns {any} */ p => {
+                                    /** @type {Record<string, any>} */
+                                    const next = {...p};
+                                    if (val) next.global = val;
+                                    else delete next.global;
+                                    return next;
+                                });
+                            }}
+                        />
+                    </div>
+                </div>);
+    const compactOverflow = (
+        <ToolbarMenu label="⋯" ariaLabel="More workspace actions" theme={theme} align="right" chevron={false} buttonStyle={{ ...btnSubtle, padding: '4px 8px', flexShrink: 0 }}>
+            {close => <>
+                {['view', 'format', ...(uiConfig.showCharts !== false ? ['charts'] : []), 'theme'].map(section => (
+                    <ToolbarMenuItem key={section} theme={theme} data-toolbar-section-toggle={section} data-testid={`pivot-toolbar-${section}`} checked={Boolean(openToolbarSections[section])} onSelect={() => { toggleToolbarSection(section); close(); }}>{section[0].toUpperCase() + section.slice(1)}</ToolbarMenuItem>
+                ))}
+                <ToolbarMenuSection theme={theme}>History</ToolbarMenuSection>
+                <ToolbarMenuItem theme={theme} disabled={!canUndoTransactions || transactionHistoryPending} onSelect={() => { onUndoTransaction(); close(); }}>Undo</ToolbarMenuItem>
+                <ToolbarMenuItem theme={theme} disabled={!canRedoTransactions || transactionHistoryPending} onSelect={() => { onRedoTransaction(); close(); }}>Redo</ToolbarMenuItem>
+                <ToolbarMenuSection theme={theme}>Zoom {zoomLevel}%</ToolbarMenuSection>
+                <ToolbarMenuItem theme={theme} disabled={zoomLevel <= ZOOM_MIN} onSelect={() => handleZoomChange(-ZOOM_STEP)}>Zoom out</ToolbarMenuItem>
+                <ToolbarMenuItem theme={theme} disabled={zoomLevel >= ZOOM_MAX} onSelect={() => handleZoomChange(ZOOM_STEP)}>Zoom in</ToolbarMenuItem>
+                {!uiConfig.lockImmersiveMode && <ToolbarMenuItem theme={theme} checked={Boolean(immersiveMode)} onSelect={() => { setImmersiveMode(!immersiveMode); close(); }}>Immersive</ToolbarMenuItem>}
+            </>}
+        </ToolbarMenu>
+    );
+    return (
+        <>
+        <div data-pivot-toolbar-compact={compact ? 'true' : undefined} style={{
+            ...styles.appBar,
+            position: 'relative',
+            zIndex: 110,
+            height: 'auto',
+            minHeight: '50px',
+            padding: compact ? '6px 8px' : '8px 14px',
+            gap: '8px',
+            flexDirection: 'column',
+            overflowX: 'visible',
+            overflowY: 'visible',
+            justifyContent: 'flex-start',
+            alignContent: 'stretch',
+            alignItems: 'stretch'
+        }}>
+            {compact ? <div data-pivot-toolbar-row="compact" style={{ ...firstLineStyle, flexWrap: 'nowrap', minWidth: 0, gap: '4px' }}>
+                {uiConfig.showSidebar !== false && <button type="button" className={`sp-btn ${sidebarOpen ? 'sp-btn-active' : 'sp-btn-ghost'}`} data-testid="pivot-toggle-sidebar" aria-label="Fields" aria-pressed={Boolean(sidebarOpen)} title="Fields" style={{ ...btnGhost, padding: '5px', flexShrink: 0 }} onClick={() => setSidebarOpen(!sidebarOpen)}><Icons.SidePanel /></button>}
+                {modeControl}
+                {searchControl}
+                <PivotExportControl compact exportPivot={exportPivot} isExporting={isExporting} buttonStyle={{ ...btnPrimary, padding: '5px' }} theme={theme} />
+                {compactOverflow}
+            </div> : <div style={firstLineStyle}>
+                {uiConfig.showSidebar !== false && <button
+                    type="button"
+                    className={`sp-btn ${sidebarOpen ? 'sp-btn-active' : 'sp-btn-ghost'}`}
+                    data-testid="pivot-toggle-sidebar"
+                    aria-pressed={Boolean(sidebarOpen)}
+                    title={sidebarOpen ? 'Hide the fields panel' : 'Show the fields panel'}
+                    onClick={() => setSidebarOpen(!sidebarOpen)}
+                    style={{...(sidebarOpen ? btnActive : btnGhost), padding:'6px 10px', display: 'flex', alignItems: 'center', gap: '8px'}}
+                >
+                    <Icons.SidePanel />
+                    <span style={{fontSize: '13px', fontWeight: 600}}>Fields</span>
+                </button>}
+                <button
+                    className="sp-btn sp-btn-ghost"
+                    style={{...(canUndoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
+                    onClick={onUndoTransaction}
+                    title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
+                    disabled={!canUndoTransactions || transactionHistoryPending}
+                ><Icons.Undo /></button>
+                <button
+                    className="sp-btn sp-btn-ghost"
+                    style={{...(canRedoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
+                    onClick={onRedoTransaction}
+                    title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
+                    disabled={!canRedoTransactions || transactionHistoryPending}
+                ><Icons.Redo /></button>
+                {modeControl}
                 <div style={{fontWeight:800, fontSize:'15px', color:theme.text, whiteSpace:'nowrap', opacity: 0.92, minWidth: 0}}>
                     {pivotTitle || ''}
                 </div>
@@ -2235,32 +2305,7 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     </ThemedSelect>
                 )}
                 <div style={innerDividerStyle} />
-                <div style={{display:'flex', alignItems:'center', flex:'1 1 160px', minWidth:'140px', maxWidth:'260px'}}>
-                    <div className="sp-search-shell" style={{
-                        ...styles.searchBox,
-                        width:'100%',
-                        borderRadius:theme.radiusSm || '8px',
-                        border:`1px solid ${theme.border}`,
-                        height: '32px',
-                        padding: '0 10px'
-                    }}>
-                        <Icons.Search />
-                        <GlobalSearchInput
-                            style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
-                            placeholder="Search records..."
-                            value={(filters && filters.global) || ''}
-                            onCommit={val => {
-                                setFilters(/** @param {any} [p] @returns {any} */ p => {
-                                    /** @type {Record<string, any>} */
-                                    const next = {...p};
-                                    if (val) next.global = val;
-                                    else delete next.global;
-                                    return next;
-                                });
-                            }}
-                        />
-                    </div>
-                </div>
+                {searchControl}
                 {uiConfig.showEditing !== false && <>
                 <div style={innerDividerStyle} />
                 <div style={valueModeFrameStyle} title="Switch between current edited values and the original values captured before this session's active edits">
@@ -2327,10 +2372,10 @@ export const PivotAppBar = React.memo(/** @param {{ setShowSubtotals?: { (update
                     <div style={innerDividerStyle} />
                 </>}
                 <PivotExportControl exportPivot={exportPivot} isExporting={isExporting} buttonStyle={btnPrimary} theme={theme} />
-            </div>
+            </div>}
 
             {activeSections.length > 0 ? (
-                <div className="sp-toolbar-drawer" style={secondLineStyle}>
+                <div className="sp-toolbar-drawer" data-toolbar-sheet={compact ? 'true' : undefined} style={secondLineStyle}>
                     {activeSections.map(/** @param {any} [section] @param {any} [index] @returns {any} */ (section, index) => (
                         <div key={section.id} style={sectionBlockStyle(index === activeSections.length - 1)}>
                             <span style={sectionLabelStyle}>{section.label}</span>

@@ -32,6 +32,19 @@ _STRUCTURAL = (ops.SortKey, ScalarUDF, AggUDF)
 _NATIVE_NULL_SAFE_SEMI_JOIN = frozenset({"duckdb"})
 
 
+def level_tables(backend: Any) -> bool:
+    """Native writable level storage is available only on an in-process DuckDB connection."""
+    from ibis.backends.duckdb import Backend
+
+    if not isinstance(backend, Backend) or getattr(backend, "con", None) is None:
+        return False
+    options = getattr(backend, "_con_kwargs", {})
+    args = getattr(backend, "_con_args", ())
+    database = str(options.get("database", args[0] if args else ":memory:"))
+    return not options.get("read_only", False) and not database.lower().startswith(
+        ("md:", "motherduck:", "http:", "https:", "s3:"))
+
+
 def _filtered_ordered_aggregate(node: Any) -> bool:
     return isinstance(node, (ops.First, ops.Last, ops.ArrayCollect)) and bool(node.order_by) and node.where is not None
 

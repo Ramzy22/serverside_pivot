@@ -501,6 +501,7 @@ export function useCommandRuntimeStage(input, transportDomain) {
     chartPanelRowLimit: stage.chartPanelRowLimit,
     chartPanelServerScope: stage.chartPanelServerScope,
     chartPanelSortMode: stage.chartPanelSortMode,
+    chartPanelMeasureIds: stage.chartPanelMeasureIds,
     chartPanelSource: stage.chartPanelSource,
     chartPanelTitle: stage.chartPanelTitle,
     chartPanelType: stage.chartPanelType,

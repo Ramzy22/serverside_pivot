@@ -28,6 +28,7 @@ export function useRuntimeChartCanvasCommands({
   chartPanelRowLimit,
   chartPanelServerScope,
   chartPanelSortMode,
+  chartPanelMeasureIds,
   chartPanelSource,
   chartPanelTitle,
   chartPanelType,
@@ -72,6 +73,7 @@ export function useRuntimeChartCanvasCommands({
       width: chartPanelWidth,
       chartHeight: chartPanelGraphHeight,
       sortMode: chartPanelSortMode,
+      measureIds: chartPanelMeasureIds,
       interactionMode: chartPanelInteractionMode,
       serverScope: chartPanelServerScope,
     }, initialChartDefinition);
@@ -96,7 +98,7 @@ export function useRuntimeChartCanvasCommands({
     };
     setChartCanvasPanes(/** @param {any} [previousPanes] @returns {any} */ previousPanes => [...previousPanes, newPane]);
     setPreviewChartPaneId(newPane.id);
-  }, [chartCanvasPanes.length, chartPanelAxisMode, chartPanelBarLayout, chartPanelColumnLimit, chartPanelGraphHeight, chartPanelHierarchyLevel, chartPanelInteractionMode, chartPanelLayers, chartPanelOrientation, chartPanelRowLimit, chartPanelServerScope, chartPanelSortMode, chartPanelSource, chartPanelTitle, chartPanelType, chartPanelWidth, initialChartDefinition, setChartCanvasPanes, setPreviewChartPaneId]);
+  }, [chartCanvasPanes.length, chartPanelAxisMode, chartPanelBarLayout, chartPanelColumnLimit, chartPanelGraphHeight, chartPanelHierarchyLevel, chartPanelInteractionMode, chartPanelLayers, chartPanelOrientation, chartPanelRowLimit, chartPanelServerScope, chartPanelSortMode, chartPanelMeasureIds, chartPanelSource, chartPanelTitle, chartPanelType, chartPanelWidth, initialChartDefinition, setChartCanvasPanes, setPreviewChartPaneId]);
 
   /** @type {(...args: any[]) => any} */
   const handleConfirmPreviewChartPane = useCallback(() => {

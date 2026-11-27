@@ -682,7 +682,7 @@ def _open_selection_number_format(driver, observation=None):
     steps.append({"formatBandVisible": options.is_displayed()})
     options.send_keys(Keys.SPACE)
     steps.append({"after": "options Space", "focusedControl": active_control()})
-    dialog = '[role="dialog"][aria-label="Format Cells"]'
+    dialog = '[role="dialog"][aria-label="Number Format"]'
     _wait_for_visible_workspace_element(driver, dialog)
     return dialog
 
@@ -1369,7 +1369,7 @@ def qualify_native_input_copy(host: str) -> None:
         copy_focused_input(filter_input, "M\u00fcnchen", "filter search")
         result["filterInputNativeCopyVerified"] = True
         close_filter = wait.until(lambda current: next((button for button in _workspace_elements(current, "button")
-            if button.is_displayed() and button.text.strip() == "Clear & Close"), False))
+            if button.is_displayed() and button.text.strip() == "Clear"), False))
         close_filter.click()
         dialog = _open_selection_number_format(driver, observation)
         number = wait.until(lambda current: _native_copy_input_target(current, dialog + ' input[type="number"]'))
@@ -2726,7 +2726,7 @@ def qualify_header_filter(host: str) -> None:
 
         click_filter()
         clear_at = driver.execute_script("return performance.now()")
-        visible_popover_item("button", "Clear & Close").click()
+        visible_popover_item("button", "Clear").click()
         wait.until(lambda current: response_after(clear_at, None)
                    and {label for _, label in _navigation_rows(current)} ==
                    {region, "M\u00fcnchen", "Grand Total"})
@@ -2744,7 +2744,7 @@ def qualify_header_filter(host: str) -> None:
                                       "rows": munich["rows"], "visibleRows": _navigation_rows(driver)})
         click_filter()
         reset_at = driver.execute_script("return performance.now()")
-        visible_popover_item("button", "Clear & Close").click()
+        visible_popover_item("button", "Clear").click()
         wait.until(lambda current: response_after(reset_at, None)
                    and {label for _, label in _navigation_rows(current)} ==
                    {region, "M\u00fcnchen", "Grand Total"})
@@ -3792,6 +3792,25 @@ def _navigation_response_after(trace, checkpoint, expected_children):
                  and _navigation_response_matches(entry, expected_children)), None)
 
 
+def _expand_all_rows(driver, expand=True):
+    """Expand or collapse every row level through the sidebar Rows zone (the row-expansion home)."""
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+
+    selector = '[title="Expand all hierarchy levels"]' if expand else '[title="Collapse all rows"]'
+    if not any(item.is_displayed() for item in _workspace_elements(driver, selector)):
+        _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
+    return _wait_for_visible_workspace_element(driver, selector)
+
+
+def _toolbar_control(driver, section, selector):
+    """A control in a toolbar ribbon; ribbons start closed, so open the section when needed."""
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+
+    if not any(item.is_displayed() for item in _workspace_elements(driver, selector)):
+        _wait_for_visible_workspace_element(driver, f'[data-testid="pivot-toolbar-{section}"]').click()
+    return _wait_for_visible_workspace_element(driver, selector)
+
+
 def _set_hierarchy_two_decimal_display(driver):
     """Set global display precision through the visible toolbar before navigation."""
     from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
@@ -3967,11 +3986,9 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
             _click_hierarchy_toggle(driver, parent_id)
             expected_children = ("東京",)
         else:
-            from tests.test_flagship_certification import _wait_for_visible_workspace_element
-            header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
-            ActionChains(driver).context_click(header).perform()
+            expand_all = _expand_all_rows(driver, True)
             checkpoint = driver.execute_script("return performance.now()")
-            _selection_menu(driver, "Expand All Rows").click()
+            expand_all.click()
             expected_children = ("東京", "القاهرة")
 
         def expanded(current):
@@ -4014,9 +4031,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         if requirement == "hierarchy-expand.round-trip":
             _click_hierarchy_toggle(driver, parent_id)
         else:
-            header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
-            ActionChains(driver).context_click(header).perform()
-            _selection_menu(driver, "Collapse All Rows").click()
+            _expand_all_rows(driver, False).click()
 
         def collapsed(current):
             rows = _navigation_rows(current)

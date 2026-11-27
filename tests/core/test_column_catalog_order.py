@@ -83,8 +83,12 @@ def _catalog(resolve, **spec):
     return [e["c"] for e in core_column_catalog(resolve, PivotSpec.from_dict({**base, **spec}))]
 
 
-def test_the_request_default_is_the_first_measure_total_descending(resolve):  # REQ-PIV-002
-    assert _catalog(resolve) == ["c", "b", None, "a"]
+def test_the_request_default_is_label_ascending(resolve):  # REQ-PIV-002
+    assert _catalog(resolve) == ["a", "b", "c", None]
+
+
+def test_request_total_mode_defaults_to_descending(resolve):  # REQ-PIV-002
+    assert _catalog(resolve, column_sort_options={"c": {"pivotSortMode": "total"}}) == ["c", "b", None, "a"]
 
 
 def test_request_label_mode_and_direction(resolve):  # REQ-PIV-002

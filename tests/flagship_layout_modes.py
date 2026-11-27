@@ -189,7 +189,7 @@ def qualify_layout_modes(host):
         wait = WebDriverWait(driver, 30)
         wait.until(support._totals)
         for _ in range(2):
-            _wait_for_visible_workspace_element(driver, '[title="Increase decimal places"]').click()
+            support._toolbar_control(driver, "format", '[title="Increase decimal places"]').click()
         if support._totals_control_button(driver, "Hierarchy") is None:
             support._click_totals_control(driver, "View")
         expand = _wait_for_visible_workspace_element(driver, '[title="Expand all hierarchy levels"]')

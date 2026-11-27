@@ -89,23 +89,13 @@ function App() {
             <div className="hero-copy">
                 <span className="eyebrow"><i /> serverside-pivot / React</span>
                 <h1>A host-neutral pivot workspace for the analytical web.</h1>
-                <p>
-                    This standalone page consumes the published React API directly. It uses a compact,
-                    typed V1 request envelope—not a Dash callback bridge—and the grid below is the exact
-                    shared workspace used by the Dash and Streamlit showcases.
-                </p>
+                <p>Explore revenue, shape the model, analyze trends, and export a saved view.</p>
             </div>
             <aside className="hero-stats" aria-label="Demo facts">
                 <div><strong>V1</strong><span>runtime protocol</span></div>
                 <div><strong>12k</strong><span>source rows</span></div>
-                <div><strong>HTTP</strong><span>direct transport</span></div>
-                <div><strong>lazy</strong><span>charts + XLSX</span></div>
             </aside>
         </header>
-
-        <section className="capability-grid" aria-label="Core capabilities">
-            {capabilities.map((capability) => <CapabilityCard key={capability.number} {...capability} />)}
-        </section>
 
         <section className="workspace-card" aria-label="Interactive pivot workspace">
             <div className="workspace-intro">
@@ -143,6 +133,10 @@ function App() {
                     </div>
                 </div>
             )}
+        </section>
+
+        <section className="capability-grid" aria-label="Core capabilities">
+            {capabilities.map((capability) => <CapabilityCard key={capability.number} {...capability} />)}
         </section>
 
         <section className="integration-grid">

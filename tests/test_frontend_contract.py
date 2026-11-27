@@ -1002,6 +1002,11 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     assert "_reportFormat" in column_source
     assert "reportFormat.numberFormat" in column_source
     assert "_reportDisplayLabel" in column_source
+    assert 'aria-label="Line settings"' in column_source
+    assert 'sp-report-row-settings' in column_source
+    assert 'getReportHeaderLabel(reportDef)' in column_source
+    assert 'const getReportHeaderLabel = ()' not in column_source
+    assert "return 'Lines';" in normalization_source
     assert "const HIERARCHY_INDENT_PX = 32;" in column_source
     assert "depth * HIERARCHY_INDENT_PX" in column_source
     assert "(depth * HIERARCHY_INDENT_PX) + (Number.isFinite(indent)" in column_source
@@ -1099,7 +1104,7 @@ def test_sidebar_field_panels_allow_compact_minimum_sizes():
     assert "minHeight: 44" in field_layout_source
     assert "minHeight: 56" in field_layout_source
     assert "minHeight: 40" in field_layout_source
-    assert "minHeight: '24px'" in sidebar_source
+    assert "minHeight: '26px'" in sidebar_source
     assert "padding: '4px 8px'" in sidebar_source
 
 
@@ -1817,7 +1822,7 @@ async def test_absolute_sort_order_and_cells_survive_horizontal_window_change(ad
         3,
         [],
         col_start=0,
-        col_end=2,
+        col_end=len(products) - 1,
         needs_col_schema=True,
     )
     schema_ids = [column["id"] for column in schema_response.col_schema["columns"]]
@@ -3826,8 +3831,10 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
             "PivotAppBar.js",
         )
     ).read_text(encoding="utf-8")
-    assert "view: false," in app_bar_source
-    assert "format: true," in app_bar_source
+    # Every ribbon starts closed; the first row carries the primary actions.
+    assert re.search(r"view: false,\s+format: false,\s+charts: false,\s+theme: false,", app_bar_source)
+    assert 'aria-pressed={Boolean(sidebarOpen)}' in app_bar_source
+    assert 'aria-label="Number Format"' in app_bar_source and 'aria-label="Format Cells"' not in app_bar_source
 
     styles_source = Path(
         os.path.join(
@@ -3899,15 +3906,17 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "data-pivot-status-actions=\"true\"" in status_bar_source
     assert "data-pivot-status-panel={id}" in status_bar_source
     assert "data-pivot-status-action={id}" in status_bar_source
-    assert "label={showDetails ? 'Hide Status' : 'Show Status'}" in status_bar_source
-    assert "Detailed panels are off by default." in status_bar_source
+    assert "label=\"Details\"" in status_bar_source and "ariaExpanded={showDetails}" in status_bar_source
+    assert "Detailed panels are off by default." not in status_bar_source
+    # Selection statistics appear only for a numeric selection; Range Chart lives in the Charts ribbon.
+    assert "selectionSummary.numericCount > 0 ? (" in status_bar_source
     assert "label=\"Mean\"" in status_bar_source
     assert "label=\"Std Dev\"" in status_bar_source
     assert "summarizeSelection" in status_bar_source
     assert "label=\"Selection\"" in status_bar_source
     assert "label=\"Editing\"" in status_bar_source
     assert "label=\"Charts\"" in status_bar_source
-    assert "label=\"Range Chart\"" in status_bar_source
+    assert "label=\"Range Chart\"" not in status_bar_source
     assert "label=\"Refresh View\"" in status_bar_source
     assert "const statusAccessoryModel = useMemo(() => ({" in component_source
     assert "const statusAccessoryActions = useMemo(() => ({" in component_source
@@ -4757,23 +4766,32 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "window.addEventListener('resize', updatePosition);" in filter_popover_source
     assert "window.addEventListener('scroll', updatePosition, true);" in filter_popover_source
     assert "background: resolvedTheme.surfaceBg" in filter_popover_source
+    assert "computeAnchoredPlacement(rect," in filter_popover_source
+    assert "maxHeight: `${position.maxHeight}px`" in filter_popover_source
 
     assert "const tabAutoInitialized = useRef(false);" in column_filter_source
     assert "const cloneFilterConditions = (filter)" in column_filter_source
     assert "filter.conditions.map(condition => ({ ...condition }))" in column_filter_source
     assert "conditionIndex === index ? { ...condition, [key]: value } : condition" in column_filter_source
     assert "const selectTab = (nextTab) =>" in column_filter_source
-    assert "selectTab('condition')" in column_filter_source
+    assert "onClick={() => selectTab(entry.id)}" in column_filter_source
     assert "if (tabAutoInitialized.current) return;" in column_filter_source
     assert "[options && options.length, isDate]" in column_filter_source
-    assert "DateRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose}" in column_filter_source
-    assert "NumericRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose}" in column_filter_source
+    # One footer (Clear / Cancel / Apply) owned by ColumnFilter; each tab body registers its builder.
+    assert "DateRangeFilter currentFilter={currentFilter} theme={resolvedTheme} applyRef={applyRef}" in column_filter_source
+    assert "NumericRangeFilter currentFilter={currentFilter} theme={resolvedTheme} applyRef={applyRef} onSubmit={handleApply}" in column_filter_source
+    assert "applyRef={applyRef}" in column_filter_source and "onSubmit={handleApply}" in column_filter_source
+    assert 'role="tablist"' in column_filter_source and 'role="tab"' in column_filter_source
+    assert ">Clear</button>" in column_filter_source and ">Cancel</button>" in column_filter_source and ">Apply</button>" in column_filter_source
+    assert "Clear & Close" not in column_filter_source
+    for body in (date_filter_source, numeric_filter_source, multi_select_source):
+        assert "applyRef.current = " in body
+        assert ">Apply<" not in body
+        assert "#ddd" not in body and "#f5f5f5" not in body
     assert "formatLocalDate" in date_filter_source
     assert "toISOString().split('T')[0]" not in date_filter_source
-    assert "onClose) onClose();" in date_filter_source
     assert "Number.isFinite(numericValue)" in numeric_filter_source
     assert "Min must be less than or equal to max." in numeric_filter_source
-    assert "onClose) onClose();" in numeric_filter_source
     assert "onSearchOptions={onSearchOptions}" in column_filter_source
     assert "const LOCAL_RENDER_LIMIT = 250;" in multi_select_source
     assert "onSearchOptions(search);" in multi_select_source

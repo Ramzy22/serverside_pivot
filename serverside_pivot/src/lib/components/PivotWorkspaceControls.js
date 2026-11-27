@@ -85,6 +85,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
   } = toolbar;
 
   return <PivotAppBar
+    compact={toolbar.compact}
     immersiveMode={immersiveMode} setImmersiveMode={setImmersiveMode}
     sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
     themeName={themeName} setThemeName={setThemeName}

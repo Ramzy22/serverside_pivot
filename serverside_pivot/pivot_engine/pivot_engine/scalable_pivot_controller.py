@@ -8,6 +8,7 @@ through ``transport.core_bridge``; the controller exposes the stable
 """
 from typing import Optional, Any, Dict, List, Mapping, Tuple, Union, Callable, Generator
 import asyncio
+import copy
 import decimal
 import logging
 import threading
@@ -111,7 +112,8 @@ class ScalablePivotController:
         # dropped for a table on its load or mutation and expired after ``cache_ttl``.
         self.core_cache = CacheManager(
             budgets={"result": self.resource_governor.limits.cache_bytes},
-            sizeof=lambda entry: int(getattr(entry[1], "nbytes", 1024)),
+            sizeof=lambda entry: int(getattr(entry[1], "nbytes", 1024)) +
+                (len(repr(entry[2]).encode()) * 2 if len(entry) > 2 and entry[2] is not None else 0),
         )
         self._core_result_ttl = float(cache_ttl)
         self.cache_coordinator.register_namespace(
@@ -122,6 +124,30 @@ class ScalablePivotController:
             invalidator=lambda event: self._invalidate_core(
                 lambda: self.core_cache.invalidate(dataset=event.table, tiers=("result",))),
         )
+        from .core.physical.capabilities import level_tables
+        from .core.physical.level_tables import LevelTableStore
+        from .core.catalog import CatalogStore
+
+        self.catalog_store = CatalogStore(self.con, budget=self.resource_governor.limits.cache_bytes)
+        object.__setattr__(self.con, "_pivot_catalog_store", self.catalog_store)
+        self.cache_coordinator.register_namespace(
+            "core.catalog", owner="controller",
+            key_dimensions=("dataset", "revision", "scope_fingerprint", "filters", "columns", "order"),
+            size_getter=lambda: {"bytes": self.catalog_store.cache.used_bytes("catalog")},
+            invalidator=lambda event: self._invalidate_core(lambda: self.catalog_store.invalidate(event.table)),
+        )
+
+        self.level_store = None
+        if level_tables(self.con):
+            self.level_store = LevelTableStore(self.con, budget=self.resource_governor.limits.cache_bytes)
+            object.__setattr__(self.con, "_pivot_level_store", self.level_store)
+            self.cache_coordinator.register_namespace(
+                "core.level",
+                owner="controller",
+                key_dimensions=("dataset", "level_meaning", "scope_fingerprint", "revision"),
+                size_getter=lambda: {"bytes": self.level_store.cache.used_bytes("level")},
+                invalidator=lambda event: self._invalidate_core(lambda: self.level_store.invalidate(event.table)),
+            )
 
         self.enable_streaming = enable_streaming
         self.enable_incremental_views = enable_incremental_views
@@ -187,6 +213,9 @@ class ScalablePivotController:
         if self.cache is not None and hasattr(self.cache, "clear"):
             self.cache.clear()
         self._invalidate_core(self.core_cache.invalidate)
+        self._invalidate_core(self.catalog_store.invalidate)
+        if self.level_store is not None:
+            self._invalidate_core(self.level_store.invalidate)
 
     def _invalidate_core(self, drop: Callable[[], Any]) -> None:
         with self._core_epoch_lock:
@@ -210,7 +239,20 @@ class ScalablePivotController:
         with self._core_epoch_lock:
             if epoch != self._core_epoch:
                 return
-            self.core_cache.put(key_for("result", str(spec.table), spec_fingerprint(spec)), (time.monotonic(), table))
+            self.core_cache.put(key_for("result", str(spec.table), spec_fingerprint(spec)), (time.monotonic(), table, None))
+
+    def core_result_dict(self, spec: Any, table: pa.Table) -> Dict[str, Any]:
+        """Reuse the JSON-ready response next to its Arrow result, with isolated caller ownership."""
+        key = key_for("result", str(spec.table), spec_fingerprint(spec))
+        entry = self.core_cache.get(key)
+        if entry is not None and entry[1] is table and len(entry) > 2 and entry[2] is not None:
+            return copy.deepcopy(entry[2])
+        result = self._convert_table_to_dict(table, spec)
+        with self._core_epoch_lock:
+            current = self.core_cache.get(key)
+            if current is entry and entry is not None and entry[1] is table:
+                self.core_cache.put(key, (entry[0], table, copy.deepcopy(result)))
+        return result
 
     def close(self) -> None:
         """Release the controller's caches and backend connection."""
@@ -344,7 +386,7 @@ class ScalablePivotController:
             epoch = self.core_epoch()  # before the read: a write during it voids the store
             table = core_locked_call(self, normalized.table, lambda: core_pivot_table(self.resolve_table, normalized))
             self.store_core_result(normalized, table, epoch)
-        return self._convert_table_to_dict(table, normalized) if return_format == "dict" else table
+        return self.core_result_dict(normalized, table) if return_format == "dict" else table
 
     def run_pivot_arrow(self, spec: Any) -> pa.Table:
         """``run_pivot`` as an Arrow table (Arrow Flight)."""

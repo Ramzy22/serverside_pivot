@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icons from '../../utils/Icons';
-import { getStyles } from '../../utils/styles';
 import ThemedSelect from '../ThemedSelect';
 import DateRangeFilter from './DateRangeFilter';
 import NumericRangeFilter from './NumericRangeFilter';
 import MultiSelectFilter from './MultiSelectFilter';
+import { filterButtonStyle, filterCardStyle, filterHintStyle, filterInputStyle } from './filterStyles';
 
 /** @returns {any} */
 const createDefaultCondition = () => ({type: 'contains', value: '', caseSensitive: false});
@@ -26,12 +26,15 @@ const cloneFilterConditions = (filter) => (
         : [createDefaultCondition()]
 );
 
-/** @param {any} p0 @returns {any} */
+/**
+ * Column filter editor: Rules / List / Date / Range tabs over one footer
+ * (Clear · Cancel · Apply). Each tab body registers how to build its filter
+ * in `applyRef`; Apply builds it, sends it and closes.
+ * @param {any} p0 @returns {any}
+ */
 const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, theme, onClose }) => {
     /** @type {any} */
-    const resolvedTheme = theme || { primary: '#1976d2', border: '#e0e0e0', headerBg: '#f5f5f5', text: '#212121', textSec: '#666', background: '#fff' };
-    /** @type {any} */
-    const styles = getStyles(resolvedTheme);
+    const resolvedTheme = theme || { primary: '#4F46E5', border: '#e2e8f0', headerBg: '#f8fafc', text: '#0f172a', textSec: '#64748b', background: '#fff' };
     /** @type {any} */
     const isLeaf = column.getLeafColumns
         ? column.getLeafColumns().length === 1
@@ -60,6 +63,9 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
     const [tab, setTab] = useState('condition');
     /** @type {any} */
     const tabAutoInitialized = useRef(false);
+    /** The active tab's filter builder: () => ({ filter } | { error }). */
+    /** @type {{ current: null | (() => any) }} */
+    const applyRef = useRef(null);
     /** @param {any} [nextTab] @returns {any} */
     const selectTab = (nextTab) => {
         tabAutoInitialized.current = true;
@@ -78,7 +84,6 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
         }
     }, [options && options.length, isDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // --- Existing Condition Logic ---
     /** @type {any} */
     const isMulti = currentFilter && currentFilter.conditions;
     /** @type {[any, (...args: any[]) => any]} */
@@ -95,7 +100,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
 
     if (!isLeaf) {
         return (
-            <div style={{ padding: '12px', fontSize: '12px', background: resolvedTheme.background, color: resolvedTheme.text }}>
+            <div style={{ ...filterHintStyle(resolvedTheme), padding: '12px', fontSize: '12px' }}>
                 Filters are available only for value columns.
             </div>
         );
@@ -107,7 +112,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
             conditionIndex === index ? { ...condition, [key]: value } : condition
         )));
     };
-    
+
     /** @returns {any} */
     const addCondition = () => {
         setConditions(/** @param {any} [previousConditions] @returns {any} */ previousConditions => [...previousConditions, createDefaultCondition()]);
@@ -119,128 +124,189 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
     };
 
     /** @returns {any} */
-    const handleApply = () => {
+    const buildRulesFilter = () => {
         /** @type {any} */
         const validConditions = conditions.filter(/** @param {any} [c] @returns {any} */ c => {
              if (c.type === 'between') return c.value && c.value2;
              if (c.type === 'in') return parseFilterListText(c.value).length > 0;
              return String(c.value).trim() !== '';
         });
-        
-        /** @type {Record<string, any>} */
-        const newFilter = {
-            operator: operator,
-            conditions: validConditions.map(/** @param {any} [c] @returns {any} */ c => {
-                 let finalVal = c.value;
-                 let finalVal2 = c.value2;
-                 
-                 if (c.type === 'in') {
-                     /** @type {any} */
-                     const listValues = parseFilterListText(finalVal).map(/** @param {any} [value] @returns {any} */ value => (
-                         isNumeric && value !== '' && !isNaN(Number(value)) ? Number(value) : value
-                     ));
-                     return { ...c, value: listValues };
-                 }
 
-                 if (isNumeric) {
-                     if (finalVal !== '' && !isNaN(Number(finalVal))) finalVal = Number(finalVal);
-                     if (finalVal2 !== '' && !isNaN(Number(finalVal2))) finalVal2 = Number(finalVal2);
-                 }
+        /** @type {any[]} */
+        const builtConditions = validConditions.map(/** @param {any} [c] @returns {any} */ c => {
+             let finalVal = c.value;
+             let finalVal2 = c.value2;
 
-                 if (c.type === 'between') {
-                      return { ...c, value: [finalVal, finalVal2] };
-                 }
-                 return { ...c, value: finalVal };
-            })
-        };
-        
-        if (newFilter.conditions.length > 0) {
-            onFilter(newFilter);
-        } else {
-            onFilter(null);
-        }
+             if (c.type === 'in') {
+                 /** @type {any} */
+                 const listValues = parseFilterListText(finalVal).map(/** @param {any} [value] @returns {any} */ value => (
+                     isNumeric && value !== '' && !isNaN(Number(value)) ? Number(value) : value
+                 ));
+                 return { ...c, value: listValues };
+             }
+
+             if (isNumeric) {
+                 if (finalVal !== '' && !isNaN(Number(finalVal))) finalVal = Number(finalVal);
+                 if (finalVal2 !== '' && !isNaN(Number(finalVal2))) finalVal2 = Number(finalVal2);
+             }
+
+             if (c.type === 'between') {
+                  return { ...c, value: [finalVal, finalVal2] };
+             }
+             return { ...c, value: finalVal };
+        });
+        return { filter: builtConditions.length > 0 ? { operator, conditions: builtConditions } : null };
+    };
+
+    if (tab === 'condition') applyRef.current = buildRulesFilter;
+
+    /** @returns {any} */
+    const handleApply = () => {
+        /** @type {any} */
+        const result = typeof applyRef.current === 'function' ? applyRef.current() : { filter: null };
+        if (!result || result.error) return;
+        onFilter(result.filter || null);
         if (onClose) onClose();
     };
 
+    /** @returns {any} */
+    const handleClear = () => {
+        onFilter(null);
+        if (onClose) onClose();
+    };
+
+    /** @type {{ id: string, label: string }[]} */
+    const tabs = [
+        { id: 'condition', label: 'Rules' },
+        { id: 'values', label: 'List' },
+        ...(isDate ? [{ id: 'date', label: 'Date' }] : []),
+        ...(isNumeric ? [{ id: 'numeric', label: 'Range' }] : []),
+    ];
+    /** @param {any} [event] @returns {any} */
+    const handleTabKeyDown = (event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+        event.preventDefault();
+        const index = tabs.findIndex((entry) => entry.id === tab);
+        const nextIndex = (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        selectTab(tabs[nextIndex].id);
+        /** @type {any} */
+        const list = event.currentTarget;
+        const nextButton = list && list.querySelectorAll ? list.querySelectorAll('[role="tab"]')[nextIndex] : null;
+        if (nextButton && typeof nextButton.focus === 'function') nextButton.focus();
+    };
+
     return (
-        <div style={{display: 'flex', flexDirection: 'column', gap: '8px', color: resolvedTheme.text}}>
-            <div style={{fontWeight: 600, fontSize: '12px', borderBottom: `1px solid ${resolvedTheme.border || '#eee'}`, paddingBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span>Filter: {columnLabel}</span>
-                <div style={{display: 'flex', background: resolvedTheme.headerSubtleBg || resolvedTheme.headerBg || resolvedTheme.background || '#f5f5f5', borderRadius: '4px', padding: '2px'}}>
-                    <div onClick={() => selectTab('condition')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='condition'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='condition'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Rules</div>
-                    <div onClick={() => selectTab('values')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='values'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='values'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>List</div>
-                    {isDate && <div onClick={() => selectTab('date')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='date'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='date'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Date</div>}
-                    {isNumeric && <div onClick={() => selectTab('numeric')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='numeric'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='numeric'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Range</div>}
+        <div style={{display: 'flex', flexDirection: 'column', gap: '10px', color: resolvedTheme.text, fontSize: '12px', minHeight: 0, flex: 1}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
+                <span style={{fontWeight: 700, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={String(columnLabel)}>Filter: {columnLabel}</span>
+                <div
+                    role="tablist"
+                    aria-label="Filter mode"
+                    onKeyDown={handleTabKeyDown}
+                    style={{display: 'flex', gap: '2px', padding: '2px', borderRadius: resolvedTheme.radiusSm || '8px', background: resolvedTheme.headerSubtleBg || resolvedTheme.hover, flexShrink: 0}}
+                >
+                    {tabs.map((entry) => (
+                        <button
+                            key={entry.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={tab === entry.id}
+                            tabIndex={tab === entry.id ? 0 : -1}
+                            onClick={() => selectTab(entry.id)}
+                            style={{
+                                border: 'none',
+                                padding: '4px 10px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                borderRadius: '6px',
+                                color: tab === entry.id ? resolvedTheme.text : resolvedTheme.textSec,
+                                background: tab === entry.id ? (resolvedTheme.surfaceBg || resolvedTheme.background) : 'transparent',
+                                boxShadow: tab === entry.id ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
+                            }}
+                        >
+                            {entry.label}
+                        </button>
+                    ))}
                 </div>
             </div>
-            
-            <div style={{maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px'}}>
+
+            <div role="tabpanel" style={{overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', minHeight: 0, flex: 1}}>
                 {tab === 'values' && (
                     <MultiSelectFilter
                         options={options}
                         optionMeta={optionMeta}
                         onSearchOptions={onSearchOptions}
                         onLoadMoreOptions={onLoadMoreOptions}
-                        onFilter={onFilter}
                         currentFilter={currentFilter}
-                        onClose={onClose}
+                        applyRef={applyRef}
+                        onSubmit={handleApply}
                         theme={resolvedTheme}
                     />
                 )}
 
                 {tab === 'date' && (
-                    <DateRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose} />
+                    <DateRangeFilter currentFilter={currentFilter} theme={resolvedTheme} applyRef={applyRef} />
                 )}
 
                 {tab === 'numeric' && (
-                    <NumericRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose} />
+                    <NumericRangeFilter currentFilter={currentFilter} theme={resolvedTheme} applyRef={applyRef} onSubmit={handleApply} />
                 )}
 
                 {tab === 'condition' && (
                     <>
-                        <div style={{display: 'flex', justifyContent: 'flex-end', gap: '4px', marginBottom: '4px'}}>
-                            <button onClick={() => setOperator('AND')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'AND' ? resolvedTheme.primary: (resolvedTheme.headerSubtleBg || '#eee'), color: operator === 'AND' ? '#fff' : resolvedTheme.text, border: 'none', borderRadius: '2px'}}>AND</button>
-                            <button onClick={() => setOperator('OR')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'OR' ? resolvedTheme.primary: (resolvedTheme.headerSubtleBg || '#eee'), color: operator === 'OR' ? '#fff' : resolvedTheme.text, border: 'none', borderRadius: '2px'}}>OR</button>
-                        </div>
-                        <div style={{display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '8px'}}>
+                        {conditions.length > 1 ? (
+                            <div role="group" aria-label="Combine conditions" style={{display: 'flex', justifyContent: 'flex-end', gap: '4px'}}>
+                                <button type="button" aria-pressed={operator === 'AND'} onClick={() => setOperator('AND')} style={filterButtonStyle(resolvedTheme, 'toggle', operator === 'AND')}>AND</button>
+                                <button type="button" aria-pressed={operator === 'OR'} onClick={() => setOperator('OR')} style={filterButtonStyle(resolvedTheme, 'toggle', operator === 'OR')}>OR</button>
+                            </div>
+                        ) : null}
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
                         {conditions.map(/** @param {any} [cond] @param {any} [index] @returns {any} */ (cond, index) => (
-                            <div key={index} style={{display: 'flex', flexDirection: 'column', gap: '4px', border: '1px solid #f0f0f0', padding: '8px', borderRadius: '4px'}}>
-                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                                    <label style={{fontSize:'11px', color: '#666'}}>Condition {index + 1}</label>
-                                    {conditions.length > 1 && <span onClick={() => removeCondition(index)} style={{cursor: 'pointer'}}><Icons.Close/></span>}
+                            <div key={index} style={{ ...filterCardStyle(resolvedTheme), display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px' }}>
+                                <div style={{display: 'flex', gap: '6px', alignItems: 'center'}}>
+                                    <ThemedSelect size="sm" aria-label={`Condition ${index + 1} operator`} value={cond.type} onChange={(/** @type {any} */ e) => updateCondition(index, 'type', e.target.value)} style={{flex: 1, minWidth: 0}}>
+                                        <option value="eq">Equals</option>
+                                        <option value="ne">Not Equals</option>
+                                        <option value="contains">Contains</option>
+                                        <option value="startsWith">Starts With</option>
+                                        <option value="endsWith">Ends With</option>
+                                        <option value="gt">Greater Than</option>
+                                        <option value="lt">Less Than</option>
+                                        <option value="between">Between (Range)</option>
+                                        <option value="in">In List</option>
+                                    </ThemedSelect>
+                                    {conditions.length > 1 && (
+                                        <button type="button" aria-label={`Remove condition ${index + 1}`} onClick={() => removeCondition(index)} style={{ ...filterButtonStyle(resolvedTheme, 'ghost'), padding: '2px 4px' }}><Icons.Close/></button>
+                                    )}
                                 </div>
-                                <ThemedSelect size="sm" aria-label={`Condition ${index + 1} operator`} value={cond.type} onChange={(/** @type {any} */ e) => updateCondition(index, 'type', e.target.value)} style={{padding:'4px 6px', borderRadius:'4px', width: '100%'}}>
-                                    <option value="eq">Equals</option>
-                                    <option value="ne">Not Equals</option>
-                                    <option value="contains">Contains</option>
-                                    <option value="startsWith">Starts With</option>
-                                    <option value="endsWith">Ends With</option>
-                                    <option value="gt">Greater Than</option>
-                                    <option value="lt">Less Than</option>
-                                    <option value="between">Between (Range)</option>
-                                    <option value="in">In List</option>
-                                </ThemedSelect>
-                                
+
                                 {cond.type === 'between' ? (
-                                    <div style={{display: 'flex', gap: '4px'}}>
-                                        <input 
-                                            placeholder="Start" 
-                                            value={cond.value} 
-                                            onChange={e => updateCondition(index, 'value', e.target.value)} 
-                                            style={{padding:'6px', borderRadius:'2px', border:'1px solid #ddd', fontSize: '13px', width: '50%'}}
+                                    <div style={{display: 'flex', gap: '6px'}}>
+                                        <input
+                                            placeholder="Start"
+                                            aria-label={`Condition ${index + 1} start`}
+                                            value={cond.value}
+                                            onChange={e => updateCondition(index, 'value', e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter') handleApply(); }}
+                                            style={{ ...filterInputStyle(resolvedTheme), width: '50%' }}
                                         />
-                                        <input 
-                                            placeholder="End" 
-                                            value={cond.value2 || ''} 
-                                            onChange={e => updateCondition(index, 'value2', e.target.value)} 
-                                            style={{padding:'6px', borderRadius:'2px', border:'1px solid #ddd', fontSize: '13px', width: '50%'}}
+                                        <input
+                                            placeholder="End"
+                                            aria-label={`Condition ${index + 1} end`}
+                                            value={cond.value2 || ''}
+                                            onChange={e => updateCondition(index, 'value2', e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter') handleApply(); }}
+                                            style={{ ...filterInputStyle(resolvedTheme), width: '50%' }}
                                         />
                                     </div>
                                 ) : (
-                                    <input 
+                                    <input
                                         placeholder={cond.type === 'in' ? "Paste or enter values..." : "Value..."}
+                                        aria-label={`Condition ${index + 1} value`}
                                         value={Array.isArray(cond.value) ? cond.value.join(', ') : cond.value}
-                                        onChange={e => updateCondition(index, 'value', e.target.value)} 
+                                        onChange={e => updateCondition(index, 'value', e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') handleApply(); }}
                                         onPaste={e => {
                                             if (cond.type !== 'in') return;
                                             /** @type {any} */
@@ -251,36 +317,32 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                                             e.preventDefault();
                                             updateCondition(index, 'value', pastedValues.join(', '));
                                         }}
-                                        style={{padding:'6px', borderRadius:'2px', border:'1px solid #ddd', fontSize: '13px'}}
+                                        style={filterInputStyle(resolvedTheme)}
                                     />
                                 )}
-                                
-                                <div style={{display:'flex', alignItems:'center', gap:'4px', marginTop:'2px'}}>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={cond.caseSensitive || false} 
+
+                                <label style={{ ...filterHintStyle(resolvedTheme), display:'flex', alignItems:'center', gap:'6px', cursor: 'pointer' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={cond.caseSensitive || false}
                                         onChange={e => updateCondition(index, 'caseSensitive', e.target.checked)}
-                                        id={`cs-${index}`}
+                                        style={{margin: 0, accentColor: resolvedTheme.primary}}
                                     />
-                                    <label htmlFor={`cs-${index}`} style={{fontSize:'11px', color:'#555', cursor:'pointer'}}>Match Case</label>
-                                </div>
+                                    Match case
+                                </label>
                             </div>
                         ))}
                         </div>
-                        <button onClick={addCondition} style={{...styles.btn, justifyContent: 'center', background: '#f5f5f5'}}>Add Condition</button>
+                        <button type="button" className="sp-btn sp-btn-subtle" onClick={addCondition} style={filterButtonStyle(resolvedTheme, 'subtle')}>Add condition</button>
                     </>
                 )}
             </div>
 
-            <div style={{display:'flex', justifyContent: 'space-between', gap: '8px', marginTop: '8px', borderTop: '1px solid #eee', paddingTop: '8px'}}>
-                <button onClick={() => { onFilter(null); if(onClose) onClose(); }} style={{padding: '4px 8px', border:'none', background:'none', cursor:'pointer', color: '#d32f2f', fontSize: '11px'}}>Clear & Close</button>
+            <div style={{display:'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', borderTop: `1px solid ${resolvedTheme.border}`, paddingTop: '10px'}}>
+                <button type="button" className="sp-btn sp-btn-ghost" onClick={handleClear} style={filterButtonStyle(resolvedTheme, 'danger')}>Clear</button>
                 <div style={{display: 'flex', gap: '8px'}}>
-                    {onClose && <button onClick={onClose} style={{padding: '4px 8px', border:'none', background:'none', cursor:'pointer', fontSize: '11px'}}>Close</button>}
-                    {tab === 'condition' && (
-                        <button onClick={handleApply} style={{padding: '4px 12px', background: resolvedTheme.primary, color: '#fff', border:'none', borderRadius: '2px', cursor:'pointer', fontSize: '11px'}}>
-                            Apply
-                        </button>
-                    )}
+                    {onClose && <button type="button" className="sp-btn sp-btn-subtle" onClick={onClose} style={filterButtonStyle(resolvedTheme, 'subtle')}>Cancel</button>}
+                    <button type="button" className="sp-btn sp-btn-primary" onClick={handleApply} style={filterButtonStyle(resolvedTheme, 'primary')}>Apply</button>
                 </div>
             </div>
         </div>

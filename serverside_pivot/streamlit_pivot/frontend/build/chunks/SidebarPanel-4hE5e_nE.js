@@ -1,9 +1,9 @@
-import { j as e, I as E, a1 as ke, a2 as Or, a3 as Nr, a4 as wt, a5 as it, a6 as Hr, a7 as Ur, a8 as Vr, a9 as Ne, aa as st, ab as dt, G as Kr, ac as Yr, ad as Zr, ae as Gr, af as Je, ag as ur, ah as Xr, ai as qt, T as ne, aj as qr, ak as Jr, al as Qr, am as Jt, an as en, ao as tn } from "./index-BXM8DLHY.js";
-import { a as de, R as u } from "./charts-DthW1Q8W.js";
-const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: j, onLoadMoreOptions: y, onOpen: F }) => {
-  const [s, b] = de.useState(!1), W = l && (l.conditions || l.value), P = () => b(!1), M = () => {
+import { j as e, I as F, a1 as ke, a2 as Ur, a3 as Vr, a4 as Ct, a5 as it, a6 as Kr, a7 as Yr, a8 as Zr, a9 as He, aa as st, ab as dt, E as Gr, ac as Xr, ad as qr, ae as Jr, af as Je, ag as sr, ah as Qr, ai as Gt, T as ne, aj as en, ak as tn, al as rn, am as Xt, an as nn, ao as ln } from "./index-BO6HjsL-.js";
+import { a as de, R as c } from "./charts-DthW1Q8W.js";
+const on = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: j, onLoadMoreOptions: y, onOpen: E }) => {
+  const [s, h] = de.useState(!1), W = l && (l.conditions || l.value), P = () => h(!1), M = () => {
     const $ = !s;
-    b($), $ && typeof F == "function" && F(t.id);
+    h($), $ && typeof E == "function" && E(t.id);
   };
   return /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexDirection: "column" }, children: [
     /* @__PURE__ */ e.jsxs(
@@ -17,16 +17,16 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
         },
         onClick: M,
         children: [
-          /* @__PURE__ */ e.jsx("span", { style: { marginRight: "8px", opacity: 0.7, display: "flex" }, children: s ? /* @__PURE__ */ e.jsx(E.ChevronDown, {}) : /* @__PURE__ */ e.jsx(E.ChevronRight, {}) }),
+          /* @__PURE__ */ e.jsx("span", { style: { marginRight: "8px", opacity: 0.7, display: "flex" }, children: s ? /* @__PURE__ */ e.jsx(F.ChevronDown, {}) : /* @__PURE__ */ e.jsx(F.ChevronRight, {}) }),
           /* @__PURE__ */ e.jsxs("span", { style: { flex: 1, fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }, children: [
-            W && /* @__PURE__ */ e.jsx(E.Filter, { style: { fontSize: "12px", color: n.primary } }),
+            W && /* @__PURE__ */ e.jsx(F.Filter, { style: { fontSize: "12px", color: n.primary } }),
             ke(typeof t.header == "string" ? t.header : t.columnDef && typeof t.columnDef.header == "string" ? t.columnDef.header : t.id)
           ] })
         ]
       }
     ),
     s && /* @__PURE__ */ e.jsx("div", { style: { padding: "8px", borderBottom: `1px solid ${n.border}44` }, children: /* @__PURE__ */ e.jsx(
-      Or,
+      Ur,
       {
         column: t,
         onFilter: o,
@@ -40,8 +40,8 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       }
     ) })
   ] });
-}, kt = ({ title: t, children: n, items: i, renderItem: o, theme: l, styles: x, initialExpanded: f = !0, count: j, onDrop: y, sectionId: F }) => {
-  const [s, b] = de.useState(f), [W, P] = de.useState(f), [M, $] = de.useState(f), [h, C] = de.useState(!1), D = de.useRef(null);
+}, wt = ({ title: t, children: n, items: i, renderItem: o, theme: l, styles: x, initialExpanded: f = !0, count: j, onDrop: y, sectionId: E }) => {
+  const [s, h] = de.useState(f), [W, P] = de.useState(f), [M, $] = de.useState(f), [b, C] = de.useState(!1), A = de.useRef(null);
   de.useEffect(() => {
     if (s) {
       P(!0);
@@ -52,9 +52,9 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
     const k = setTimeout(() => P(!1), 220);
     return () => clearTimeout(k);
   }, [s]);
-  const I = Nr({
+  const I = Vr({
     count: i ? i.length : 0,
-    getScrollElement: () => D.current,
+    getScrollElement: () => A.current,
     estimateSize: () => 32,
     overscan: 10,
     enabled: !!i && (s || W)
@@ -65,9 +65,9 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
   }, O = (k) => {
     k.preventDefault(), C(!1);
     const w = k.dataTransfer.getData("text/plain");
-    y && w && y(w, F);
+    y && w && y(w, E);
   }, a = (k) => {
-    (k.key === "Enter" || k.key === " ") && (k.preventDefault(), b(
+    (k.key === "Enter" || k.key === " ") && (k.preventDefault(), h(
       /** @param {any} [prev] @returns {any} */
       (w) => !w
     ));
@@ -75,16 +75,16 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
-      "data-is-over": h ? "true" : void 0,
+      "data-is-over": b ? "true" : void 0,
       style: {
         ...x.toolPanelSection,
         flex: s ? "0 1 auto" : "0 0 auto",
         minHeight: s ? "40px" : "32px",
         overflow: "hidden",
         // Prevent overlap
-        borderRadius: h ? "8px" : void 0,
-        background: h ? l.select || "rgba(37,99,235,0.08)" : void 0,
-        boxShadow: h ? `inset 0 0 0 1.5px ${l.primary}` : void 0,
+        borderRadius: b ? "8px" : void 0,
+        background: b ? l.select || "rgba(37,99,235,0.08)" : void 0,
+        boxShadow: b ? `inset 0 0 0 1.5px ${l.primary}` : void 0,
         transition: "background-color 140ms ease, box-shadow 140ms ease"
       },
       onDragOver: N,
@@ -99,7 +99,7 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
             "aria-expanded": s,
             className: "sp-btn sp-btn-ghost",
             style: { ...x.toolPanelSectionHeader, borderRadius: "6px" },
-            onClick: () => b(!s),
+            onClick: () => h(!s),
             onKeyDown: a,
             children: [
               /* @__PURE__ */ e.jsx("span", { style: {
@@ -109,7 +109,7 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                 alignItems: "center",
                 transform: s ? "rotate(90deg)" : "rotate(0deg)",
                 transition: "transform 160ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))"
-              }, children: /* @__PURE__ */ e.jsx(E.ChevronRight, {}) }),
+              }, children: /* @__PURE__ */ e.jsx(F.ChevronRight, {}) }),
               /* @__PURE__ */ e.jsx("span", { style: { flex: 1 }, children: t }),
               j !== void 0 && /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", opacity: 0.7, background: l.hover, padding: "2px 7px", borderRadius: "10px", fontVariantNumeric: "tabular-nums" }, children: j })
             ]
@@ -124,7 +124,7 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
             children: /* @__PURE__ */ e.jsx(
               "div",
               {
-                ref: D,
+                ref: A,
                 className: "sp-disclosure-inner",
                 style: {
                   ...x.toolPanelList,
@@ -160,25 +160,25 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       ]
     }
   );
-}, pr = ({ column: t, level: n, theme: i, styles: o, handlePinColumn: l, colSearch: x, selectedCols: f, setSelectedCols: j, onDrop: y, sectionId: F }) => {
-  const [s, b] = de.useState(n < 1), [W, P] = de.useState(!1), [M, $] = de.useState(!1), h = de.useRef(null), C = t.columns && t.columns.length > 0, D = t.columnDef.header;
-  let I = typeof D == "string" ? D : t.id;
+}, dr = ({ column: t, level: n, theme: i, styles: o, handlePinColumn: l, colSearch: x, selectedCols: f, setSelectedCols: j, onDrop: y, sectionId: E }) => {
+  const [s, h] = de.useState(n < 1), [W, P] = de.useState(!1), [M, $] = de.useState(!1), b = de.useRef(null), C = t.columns && t.columns.length > 0, A = t.columnDef.header;
+  let I = typeof A == "string" ? A : t.id;
   typeof I == "string" && I.startsWith("group_") && (I = t.id.replace("group_", "").split("|||").pop() || I), t.headerVal && (I = t.headerVal), I = ke(I);
-  const N = t.getIsPinned(), R = t.getIsVisible(), O = C ? wt(t) : [t.id], a = O.length > 0 && O.every((A) => f.has(A)), k = !a && O.some((A) => f.has(A));
+  const N = t.getIsPinned(), R = t.getIsVisible(), O = C ? Ct(t) : [t.id], a = O.length > 0 && O.every((D) => f.has(D)), k = !a && O.some((D) => f.has(D));
   if (de.useEffect(() => {
-    h.current && (h.current.indeterminate = k);
+    b.current && (b.current.indeterminate = k);
   }, [k]), x && !I.toLowerCase().includes(x.toLowerCase()))
     if (C) {
-      const A = (H) => {
+      const D = (H) => {
         const Z = H.columnDef.header;
-        return (typeof Z == "string" ? Z : H.id).toLowerCase().includes(x.toLowerCase()) ? !0 : H.columns ? H.columns.some(A) : !1;
+        return (typeof Z == "string" ? Z : H.id).toLowerCase().includes(x.toLowerCase()) ? !0 : H.columns ? H.columns.some(D) : !1;
       };
-      if (!A(t)) return null;
+      if (!D(t)) return null;
     } else
       return null;
-  const w = (A) => {
-    A.stopPropagation();
-    const H = new Set(f), Z = C ? wt(t) : [t.id];
+  const w = (D) => {
+    D.stopPropagation();
+    const H = new Set(f), Z = C ? Ct(t) : [t.id];
     Z.every(
       /** @param {any} [id] @returns {any} */
       (U) => H.has(U)
@@ -189,9 +189,9 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       /** @param {any} [id] @returns {any} */
       (U) => H.add(U)
     ), j(H);
-  }, B = (A) => {
-    if (A.stopPropagation(), C) {
-      const H = Hr(t), Z = H.some(
+  }, B = (D) => {
+    if (D.stopPropagation(), C) {
+      const H = Kr(t), Z = H.some(
         /** @param {any} [c] @returns {any} */
         (Q) => !Q.getIsVisible()
       );
@@ -201,31 +201,31 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       );
     } else
       t.toggleVisibility();
-  }, _ = (A, H) => {
-    A.stopPropagation(), l(t.id, H);
-  }, Y = (A) => {
-    $(!0), A.dataTransfer.setData("text/plain", t.id), A.dataTransfer.effectAllowed = "move";
+  }, _ = (D, H) => {
+    D.stopPropagation(), l(t.id, H);
+  }, Y = (D) => {
+    $(!0), D.dataTransfer.setData("text/plain", t.id), D.dataTransfer.effectAllowed = "move";
   }, L = () => {
     $(!1);
-  }, g = (A) => {
-    A.preventDefault(), A.stopPropagation();
-    const H = A.dataTransfer.getData("text/plain");
-    H && y && H !== t.id && y(H, F, t.id);
-  }, z = (A) => {
-    A.key === "Enter" ? B(A) : A.key === " " ? (A.preventDefault(), w(A)) : A.altKey && A.key === "ArrowLeft" ? (A.preventDefault(), l(t.id, "left")) : A.altKey && A.key === "ArrowRight" ? (A.preventDefault(), l(t.id, "right")) : A.altKey && A.key === "ArrowDown" && (A.preventDefault(), l(t.id, !1));
-  }, V = (A) => ({
+  }, g = (D) => {
+    D.preventDefault(), D.stopPropagation();
+    const H = D.dataTransfer.getData("text/plain");
+    H && y && H !== t.id && y(H, E, t.id);
+  }, z = (D) => {
+    D.key === "Enter" ? B(D) : D.key === " " ? (D.preventDefault(), w(D)) : D.altKey && D.key === "ArrowLeft" ? (D.preventDefault(), l(t.id, "left")) : D.altKey && D.key === "ArrowRight" ? (D.preventDefault(), l(t.id, "right")) : D.altKey && D.key === "ArrowDown" && (D.preventDefault(), l(t.id, !1));
+  }, V = (D) => ({
     width: "20px",
     height: "20px",
     padding: "2px",
-    background: A ? i.primary : "transparent",
+    background: D ? i.primary : "transparent",
     border: "none",
     cursor: "pointer",
     borderRadius: "4px",
-    color: A ? "#fff" : i.textSec,
+    color: D ? "#fff" : i.textSec,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    opacity: A ? 1 : 0.72,
+    opacity: D ? 1 : 0.72,
     transition: "background-color var(--sp-dur-fast, 140ms) ease, color var(--sp-dur-fast, 140ms) ease, opacity var(--sp-dur-fast, 140ms) ease"
   });
   return /* @__PURE__ */ e.jsxs(
@@ -235,7 +235,7 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       draggable: !C,
       onDragStart: Y,
       onDragEnd: L,
-      onDragOver: (A) => A.preventDefault(),
+      onDragOver: (D) => D.preventDefault(),
       onDrop: g,
       role: "treeitem",
       "aria-selected": a || k,
@@ -262,16 +262,16 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
               /* @__PURE__ */ e.jsx(
                 "input",
                 {
-                  ref: h,
+                  ref: b,
                   type: "checkbox",
                   checked: a,
                   onChange: w,
-                  onClick: (A) => A.stopPropagation(),
+                  onClick: (D) => D.stopPropagation(),
                   style: { margin: 0, cursor: "pointer", pointerEvents: "auto", flexShrink: 0 },
                   tabIndex: -1
                 }
               ),
-              !C && /* @__PURE__ */ e.jsx("span", { style: { cursor: "grab", display: "inline-flex", opacity: 0.55, flexShrink: 0 }, children: /* @__PURE__ */ e.jsx(E.DragIndicator, {}) }),
+              !C && /* @__PURE__ */ e.jsx("span", { style: { cursor: "grab", display: "inline-flex", opacity: 0.55, flexShrink: 0 }, children: /* @__PURE__ */ e.jsx(F.DragIndicator, {}) }),
               C && /* @__PURE__ */ e.jsx(
                 "span",
                 {
@@ -279,12 +279,12 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                   tabIndex: 0,
                   "aria-expanded": s,
                   "aria-label": s ? `Collapse ${I}` : `Expand ${I}`,
-                  onClick: () => b(!s),
-                  onKeyDown: (A) => {
-                    (A.key === "Enter" || A.key === " ") && (A.preventDefault(), b(!s));
+                  onClick: () => h(!s),
+                  onKeyDown: (D) => {
+                    (D.key === "Enter" || D.key === " ") && (D.preventDefault(), h(!s));
                   },
                   style: { cursor: "pointer", display: "inline-flex", opacity: 0.75, flexShrink: 0 },
-                  children: s ? /* @__PURE__ */ e.jsx(E.ChevronDown, {}) : /* @__PURE__ */ e.jsx(E.ChevronRight, {})
+                  children: s ? /* @__PURE__ */ e.jsx(F.ChevronDown, {}) : /* @__PURE__ */ e.jsx(F.ChevronRight, {})
                 }
               ),
               /* @__PURE__ */ e.jsx(
@@ -300,7 +300,7 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                   },
                   title: R ? "Hide Column" : "Show Column",
                   "aria-label": R ? "Hide Column" : "Show Column",
-                  children: R ? /* @__PURE__ */ e.jsx(E.Visibility, {}) : /* @__PURE__ */ e.jsx(E.VisibilityOff, {})
+                  children: R ? /* @__PURE__ */ e.jsx(F.Visibility, {}) : /* @__PURE__ */ e.jsx(F.VisibilityOff, {})
                 }
               ),
               /* @__PURE__ */ e.jsxs(
@@ -318,31 +318,31 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
                     alignItems: "center",
                     gap: "4px"
                   },
-                  onClick: () => C && b(!s),
+                  onClick: () => C && h(!s),
                   title: I,
                   children: [
-                    C && /* @__PURE__ */ e.jsx(E.Group, { style: { fontSize: "13px", opacity: 0.8, flexShrink: 0 } }),
+                    C && /* @__PURE__ */ e.jsx(F.Group, { style: { fontSize: "13px", opacity: 0.8, flexShrink: 0 } }),
                     /* @__PURE__ */ e.jsx("span", { style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: I })
                   ]
                 }
               ),
               !C && /* @__PURE__ */ e.jsxs("div", { className: "pin-controls sp-col-pin-controls", "data-pinned": N || void 0, children: [
-                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "left"), onClick: (A) => _(A, "left"), title: "Pin Column Left", "aria-label": "Pin Column Left", children: /* @__PURE__ */ e.jsx(E.PinLeft, {}) }),
-                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(!N), onClick: (A) => _(A, !1), title: "Unpin Column", "aria-label": "Unpin Column", children: /* @__PURE__ */ e.jsx(E.Unpin, {}) }),
-                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "right"), onClick: (A) => _(A, "right"), title: "Pin Column Right", "aria-label": "Pin Column Right", children: /* @__PURE__ */ e.jsx(E.PinRight, {}) })
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "left"), onClick: (D) => _(D, "left"), title: "Pin Column Left", "aria-label": "Pin Column Left", children: /* @__PURE__ */ e.jsx(F.PinLeft, {}) }),
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(!N), onClick: (D) => _(D, !1), title: "Unpin Column", "aria-label": "Unpin Column", children: /* @__PURE__ */ e.jsx(F.Unpin, {}) }),
+                /* @__PURE__ */ e.jsx("button", { type: "button", style: V(N === "right"), onClick: (D) => _(D, "right"), title: "Pin Column Right", "aria-label": "Pin Column Right", children: /* @__PURE__ */ e.jsx(F.PinRight, {}) })
               ] })
             ]
           }
         ),
         C && s && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: t.columns.filter(
           /** @param {any} [child] @returns {any} */
-          (A) => it(A, F)
+          (D) => it(D, E)
         ).map(
           /** @param {any} [child] @returns {any} */
-          (A) => /* @__PURE__ */ e.jsx(
-            pr,
+          (D) => /* @__PURE__ */ e.jsx(
+            dr,
             {
-              column: A,
+              column: D,
               level: n + 1,
               theme: i,
               styles: o,
@@ -351,15 +351,15 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
               selectedCols: f,
               setSelectedCols: j,
               onDrop: y,
-              sectionId: F
+              sectionId: E
             },
-            A.id
+            D.id
           )
         ) })
       ]
     }
   );
-}, xr = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, fr = /^[A-Za-z_][A-Za-z0-9_]*$/, ct = /\[([^\]]+)\]/g, nn = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), ln = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Ee = {
+}, cr = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, pr = /^[A-Za-z_][A-Za-z0-9_]*$/, ct = /\[([^\]]+)\]/g, an = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), sn = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Me = {
   type: "line",
   metric: "last",
   showCurrentValue: !0,
@@ -370,26 +370,26 @@ const rn = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
   source: "pivot",
   displayMode: "trend"
 };
-function gr(t) {
+function ur(t) {
   return String(t || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function Me(t, n = "formula") {
+function _e(t, n = "formula") {
   const o = String(t || "").trim().toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9_]/g, "") || String(n || "formula").toLowerCase().replace(/[^a-z0-9_]/g, "") || "formula";
   return /^[a-z_]/.test(o) ? o : `f_${o}`;
 }
 function J(t) {
   return !t || typeof t != "object" ? "" : String(
-    t.formulaRef || Me(t.label || "", t.field || "formula") || t.field || ""
+    t.formulaRef || _e(t.label || "", t.field || "formula") || t.field || ""
   ).trim();
 }
-function He(t) {
+function Ue(t) {
   const n = String(t || "").trim().toLowerCase();
   return ["columns", "display", "displayed", "displayed_columns", "rendered", "rendered_columns"].includes(n) ? "columns" : "measures";
 }
-function ze(t) {
-  return He(t) === "columns";
+function Fe(t) {
+  return Ue(t) === "columns";
 }
-const on = [
+const dn = [
   { value: "eq", label: "Equals" },
   { value: "ne", label: "Does not equal" },
   { value: "contains", label: "Contains" },
@@ -403,20 +403,20 @@ const on = [
   { value: "not_in", label: "Not in list" },
   { value: "is_null", label: "Is empty" },
   { value: "is_not_null", label: "Is not empty" }
-], Qt = /* @__PURE__ */ new Set(["in", "not_in"]), an = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
-function yr(t) {
+], qt = /* @__PURE__ */ new Set(["in", "not_in"]), cn = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
+function xr(t) {
   return { field: t && t[0] || "", operator: "eq", value: "", values: [], caseSensitive: !1 };
 }
-function br(t, n = 0) {
+function fr(t, n = 0) {
   return {
     id: `rule-${Date.now().toString(36)}-${n}`,
     label: n === 0 ? "Group A" : `Group ${n + 1}`,
-    condition: { op: "AND", clauses: [yr(t)] }
+    condition: { op: "AND", clauses: [xr(t)] }
   };
 }
-function er(t, n = null) {
+function Jt(t, n = null) {
   if (n) {
-    const o = Ne([n])[0] || n;
+    const o = He([n])[0] || n;
     return { ...JSON.parse(JSON.stringify(o)), __editingField: o.field, __editingId: o.id };
   }
   const i = st(`category_${Date.now().toString(36)}`);
@@ -426,11 +426,11 @@ function er(t, n = null) {
     name: "New Category",
     fallbackLabel: "Other",
     order: "creation",
-    rules: [br(t, 0)],
+    rules: [fr(t, 0)],
     __isNew: !0
   };
 }
-function sn(t, n) {
+function pn(t, n) {
   if (!n) return "string";
   const i = Array.isArray(t) ? t.slice(0, 250) : [];
   for (let o = 0; o < i.length; o += 1) {
@@ -451,8 +451,8 @@ function sn(t, n) {
   }
   return "string";
 }
-const at = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => sn(t, o) === i);
-function dn(t, n) {
+const at = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => pn(t, o) === i);
+function un(t, n) {
   const o = at(n, t, "date")[0] || t[0] || "", l = st(`${o || "date"}_month`);
   return {
     id: l,
@@ -466,7 +466,7 @@ function dn(t, n) {
     __isNew: !0
   };
 }
-function cn(t, n) {
+function xn(t, n) {
   const o = at(n, t, "number")[0] || t[0] || "", l = st(`${o || "number"}_bins`);
   return {
     id: l,
@@ -482,9 +482,9 @@ function cn(t, n) {
     __isNew: !0
   };
 }
-const tr = (t) => String(t || "").split(",").map((n) => n.trim()).filter(Boolean), rr = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase(), hr = (t) => t && (t.__editingField || t.field) ? t.__editingField || t.field : "";
-function un(t, n) {
-  const i = Array.isArray(t) ? t : [], o = hr(n);
+const Qt = (t) => String(t || "").split(",").map((n) => n.trim()).filter(Boolean), er = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase(), gr = (t) => t && (t.__editingField || t.field) ? t.__editingField || t.field : "";
+function fn(t, n) {
+  const i = Array.isArray(t) ? t : [], o = gr(n);
   if (!o) return i;
   const l = i.findIndex(
     /** @param {any} [dimension] @returns {any} */
@@ -492,7 +492,7 @@ function un(t, n) {
   );
   return l >= 0 ? i.slice(0, l) : i;
 }
-function nr(t) {
+function tr(t) {
   const n = [];
   return (t && Array.isArray(t.rules) ? t.rules : []).forEach(
     /** @param {any} [rule] @returns {any} */
@@ -506,30 +506,30 @@ function nr(t) {
     }
   ), Array.from(new Set(n));
 }
-function pn(t, n) {
+function gn(t, n) {
   const i = (Array.isArray(t) ? t : []).filter((o) => o && typeof o == "object").filter((o) => !o._isTotal && o._path !== "__grand_total__" && o._path !== "__color_scale_stats__");
-  return Ur(i, n || []);
+  return Yr(i, n || []);
 }
-function xn(t, n) {
+function yn(t, n) {
   return !Array.isArray(t) || t.length === 0 || !Array.isArray(n) || n.length === 0 ? !1 : n.every((i) => t.some((o) => o && Object.prototype.hasOwnProperty.call(o, i)));
 }
-const fn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
+const hn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
   /** @param {any} [rule] @returns {any} */
   (i) => ({
     label: i && i.label ? i.label : "Rule",
     count: t.reduce(
       /** @param {any} [matches] @param {any} [row] @returns {any} */
-      (o, l) => Vr(l, i.condition) ? o + 1 : o,
+      (o, l) => Zr(l, i.condition) ? o + 1 : o,
       0
     )
   })
-), gn = u.lazy(() => import(
+), bn = c.lazy(() => import(
   /* webpackChunkName: "pivot-report-editor" */
-  "./ReportEditor-DKIDJ3cz.js"
+  "./ReportEditor-BTh14WY9.js"
 ).then((t) => ({
   default: t.ReportEditor
-}))), yn = (t) => /* @__PURE__ */ e.jsx(u.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(gn, { ...t }) });
-function lr({
+}))), mn = (t) => /* @__PURE__ */ e.jsx(c.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(bn, { ...t }) });
+function rr({
   availableFields: t,
   customDimensions: n,
   setCustomDimensions: i,
@@ -539,19 +539,19 @@ function lr({
   getFieldLabel: f,
   onDeleteField: j
 }) {
-  const y = u.useMemo(
+  const y = c.useMemo(
     () => (t || []).filter(
       /** @param {any} [field] @returns {any} */
-      (a) => a && !ur(a)
+      (a) => a && !sr(a)
     ),
     [t]
-  ), F = u.useMemo(
-    () => Ne(n || []),
+  ), E = c.useMemo(
+    () => He(n || []),
     [n]
-  ), [s, b] = u.useState(null), W = u.useMemo(
-    () => un(F, s),
-    [s, F]
-  ), P = u.useMemo(() => {
+  ), [s, h] = c.useState(null), W = c.useMemo(
+    () => fn(E, s),
+    [s, E]
+  ), P = c.useMemo(() => {
     const a = /* @__PURE__ */ new Set(), k = [];
     return y.forEach(
       /** @param {any} [field] @returns {any} */
@@ -564,22 +564,22 @@ function lr({
         w && w.field && !a.has(w.field) && (a.add(w.field), k.push(w.field));
       }
     ), k;
-  }, [W, y]), M = u.useMemo(
+  }, [W, y]), M = c.useMemo(
     () => {
       const a = at(o, y, "date");
       return a.length > 0 ? a : y;
     },
     [y, o]
-  ), $ = u.useMemo(
+  ), $ = c.useMemo(
     () => {
       const a = at(o, y, "number");
       return a.length > 0 ? a : y;
     },
     [y, o]
-  ), h = u.useMemo(
-    () => pn(o, W),
+  ), b = c.useMemo(
+    () => gn(o, W),
     [W, o]
-  ), C = u.useMemo(() => ({
+  ), C = c.useMemo(() => ({
     border: `1px solid ${l.border}`,
     background: l.background,
     color: l.text,
@@ -588,7 +588,7 @@ function lr({
     padding: "7px 8px",
     outline: "none",
     minWidth: 0
-  }), [l.background, l.border, l.text]), D = u.useCallback((a = "default") => ({
+  }), [l.background, l.border, l.text]), A = c.useCallback((a = "default") => ({
     border: a === "primary" ? `1px solid ${l.primary}` : `1px solid ${l.border}`,
     background: a === "primary" ? l.primary || "#2563EB" : l.hover || "#F8FAFC",
     color: a === "primary" ? "#fff" : l.text,
@@ -601,15 +601,15 @@ function lr({
     alignItems: "center",
     gap: "5px"
   }), [l.border, l.hover, l.primary, l.text]);
-  u.useEffect(() => {
+  c.useEffect(() => {
     if (!s) return;
     const a = (k) => {
-      k.key === "Escape" && (k.preventDefault(), b(null));
+      k.key === "Escape" && (k.preventDefault(), h(null));
     };
     return window.addEventListener("keydown", a), () => window.removeEventListener("keydown", a);
   }, [s]);
-  const I = u.useCallback((a, k) => {
-    b(
+  const I = c.useCallback((a, k) => {
+    h(
       /** @param {any} [current] @returns {any} */
       (w) => {
         if (!w) return w;
@@ -617,7 +617,7 @@ function lr({
         return B[a] = typeof k == "function" ? k(B[a]) : k, { ...w, rules: B };
       }
     );
-  }, []), N = u.useCallback((a, k, w) => {
+  }, []), N = c.useCallback((a, k, w) => {
     I(
       a,
       /** @param {any} [rule] @returns {any} */
@@ -626,8 +626,8 @@ function lr({
         return Y[k] = { ...Y[k], ...w }, { ...B, condition: { ..._, clauses: Y } };
       }
     );
-  }, [I]), R = u.useCallback(() => {
-    const a = Ne([s])[0];
+  }, [I]), R = c.useCallback(() => {
+    const a = He([s])[0];
     if (!a || !a.name) {
       x && x("A grouped field needs a name.", "warning");
       return;
@@ -640,26 +640,26 @@ function lr({
       x && x("Choose the source field to group.", "warning");
       return;
     }
-    const k = hr(s), w = rr(a.name);
-    if (F.some(
+    const k = gr(s), w = er(a.name);
+    if (E.some(
       /** @param {any} [dimension] @returns {any} */
-      (_) => _ && _.field !== k && rr(_.name) === w
+      (_) => _ && _.field !== k && er(_.name) === w
     )) {
       x && x(`A category named "${a.name}" already exists.`, "warning");
       return;
     }
     if (a.kind === "category") {
       const _ = new Set(P);
-      if (nr(a).find(
+      if (tr(a).find(
         /** @param {any} [field] @returns {any} */
         (g) => !_.has(g)
       )) {
         x && x("A category can only use base fields or categories defined before it.", "warning");
         return;
       }
-      const L = nr(a);
-      if (xn(h, L)) {
-        const g = fn(h, a).find(
+      const L = tr(a);
+      if (yn(b, L)) {
+        const g = hn(b, a).find(
           /** @param {any} [summary] @returns {any} */
           (z) => z.count === 0
         );
@@ -685,20 +685,20 @@ function lr({
     }
     i(
       /** @param {any} [previous] @returns {any} */
-      (_) => [...Ne(_ || []).filter(
+      (_) => [...He(_ || []).filter(
         /** @param {any} [dimension] @returns {any} */
         (g) => g.id !== a.id && g.field !== a.field && g.field !== k
       ), a]
-    ), b(null), x && x(`Applied ${a.name}.`, "success");
-  }, [P, M, s, F, $, i, x, h]), O = u.useCallback((a) => {
-    const k = Ne([a])[0];
+    ), h(null), x && x(`Applied ${a.name}.`, "success");
+  }, [P, M, s, E, $, i, x, b]), O = c.useCallback((a) => {
+    const k = He([a])[0];
     k && (i(
       /** @param {any} [previous] @returns {any} */
-      (w) => Ne(w || []).filter(
+      (w) => He(w || []).filter(
         /** @param {any} [item] @returns {any} */
         (B) => B.field !== k.field
       )
-    ), typeof j == "function" && j(k.field), s && s.field === k.field && b(null), x && x(`Removed ${k.name}.`, "success"));
+    ), typeof j == "function" && j(k.field), s && s.field === k.field && h(null), x && x(`Removed ${k.name}.`, "success"));
   }, [s, j, i, x]);
   return /* @__PURE__ */ e.jsxs("div", { style: {
     border: `1px solid ${l.border}`,
@@ -719,8 +719,8 @@ function lr({
         "button",
         {
           type: "button",
-          onClick: () => b(er(P)),
-          style: { ...D("primary"), whiteSpace: "nowrap", flexShrink: 0 },
+          onClick: () => h(Jt(P)),
+          style: { ...A("primary"), whiteSpace: "nowrap", flexShrink: 0 },
           children: "+ Category"
         }
       )
@@ -730,12 +730,12 @@ function lr({
         "button",
         {
           type: "button",
-          onClick: () => b(dn(y, o)),
+          onClick: () => h(un(y, o)),
           disabled: M.length === 0,
-          style: { ...D(), opacity: M.length === 0 ? 0.5 : 1, cursor: M.length === 0 ? "not-allowed" : "pointer" },
+          style: { ...A(), opacity: M.length === 0 ? 0.5 : 1, cursor: M.length === 0 ? "not-allowed" : "pointer" },
           title: M.length === 0 ? "No date fields detected" : "Create date buckets",
           children: [
-            /* @__PURE__ */ e.jsx(E.Group, {}),
+            /* @__PURE__ */ e.jsx(F.Group, {}),
             " Date Group"
           ]
         }
@@ -744,18 +744,18 @@ function lr({
         "button",
         {
           type: "button",
-          onClick: () => b(cn(y, o)),
+          onClick: () => h(xn(y, o)),
           disabled: $.length === 0,
-          style: { ...D(), opacity: $.length === 0 ? 0.5 : 1, cursor: $.length === 0 ? "not-allowed" : "pointer" },
+          style: { ...A(), opacity: $.length === 0 ? 0.5 : 1, cursor: $.length === 0 ? "not-allowed" : "pointer" },
           title: $.length === 0 ? "No numeric fields detected" : "Create numeric bins",
           children: [
-            /* @__PURE__ */ e.jsx(E.NumberFormat, {}),
+            /* @__PURE__ */ e.jsx(F.NumberFormat, {}),
             " Number Bins"
           ]
         }
       )
     ] }),
-    F.length > 0 && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px" }, children: F.map(
+    E.length > 0 && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px" }, children: E.map(
       /** @param {any} [dimension] @returns {any} */
       (a) => {
         const k = a.kind || "category", w = k === "date_group" ? `${f(a.sourceField)} by ${a.granularity}` : k === "number_group" ? `${f(a.sourceField)} every ${a.binSize}` : `${a.rules.length} rule${a.rules.length === 1 ? "" : "s"} | fallback: ${a.fallbackLabel}`;
@@ -772,16 +772,16 @@ function lr({
               gap: "8px"
             },
             children: [
-              k === "number_group" ? /* @__PURE__ */ e.jsx(E.NumberFormat, {}) : /* @__PURE__ */ e.jsx(E.Branch, {}),
+              k === "number_group" ? /* @__PURE__ */ e.jsx(F.NumberFormat, {}) : /* @__PURE__ */ e.jsx(F.Branch, {}),
               /* @__PURE__ */ e.jsxs("div", { style: { minWidth: 0, flex: 1 }, children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "12px", fontWeight: 800, color: l.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: a.name }),
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec }, children: w })
               ] }),
-              /* @__PURE__ */ e.jsxs("button", { type: "button", onClick: () => b(er(y, a)), style: D(), children: [
-                /* @__PURE__ */ e.jsx(E.Edit, {}),
+              /* @__PURE__ */ e.jsxs("button", { type: "button", onClick: () => h(Jt(y, a)), style: A(), children: [
+                /* @__PURE__ */ e.jsx(F.Edit, {}),
                 " Edit"
               ] }),
-              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => O(a), style: { ...D(), color: "#B91C1C" }, children: /* @__PURE__ */ e.jsx(E.Delete, {}) })
+              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => O(a), style: { ...A(), color: "#B91C1C" }, children: /* @__PURE__ */ e.jsx(F.Delete, {}) })
             ]
           },
           a.field
@@ -793,7 +793,7 @@ function lr({
       {
         role: "presentation",
         onMouseDown: (a) => {
-          a.target === a.currentTarget && b(null);
+          a.target === a.currentTarget && h(null);
         },
         style: {
           position: "fixed",
@@ -835,7 +835,7 @@ function lr({
                   /* @__PURE__ */ e.jsx("div", { style: { fontSize: "13px", fontWeight: 900, color: l.text }, children: s.kind === "date_group" || s.kind === "number_group" ? s.__editingField ? "Edit Grouped Field" : "Add Grouped Field" : s.__editingField ? "Edit Custom Category" : "Add Custom Category" }),
                   /* @__PURE__ */ e.jsx("div", { style: { fontSize: "11px", color: l.textSec, marginTop: "2px" }, children: s.kind === "date_group" ? "Create calendar buckets from a date field." : s.kind === "number_group" ? "Create fixed-width numeric bins from a number field." : "Rules can use base fields and categories defined before this one." })
                 ] }),
-                /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: { ...D(), padding: "6px 8px" }, "aria-label": "Close category editor", children: /* @__PURE__ */ e.jsx(E.Close, {}) })
+                /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => h(null), style: { ...A(), padding: "6px 8px" }, "aria-label": "Close category editor", children: /* @__PURE__ */ e.jsx(F.Close, {}) })
               ] }),
               /* @__PURE__ */ e.jsxs("div", { style: {
                 padding: "14px",
@@ -854,7 +854,7 @@ function lr({
                         value: s.name || "",
                         onChange: (a) => {
                           const k = a.target.value, w = s.id || st(k);
-                          b({ ...s, name: k, id: w, field: s.field || dt(w) });
+                          h({ ...s, name: k, id: w, field: s.field || dt(w) });
                         },
                         style: C,
                         placeholder: "Example: Priority Segment"
@@ -867,7 +867,7 @@ function lr({
                       "input",
                       {
                         value: s.fallbackLabel || "",
-                        onChange: (a) => b({ ...s, fallbackLabel: a.target.value }),
+                        onChange: (a) => h({ ...s, fallbackLabel: a.target.value }),
                         style: C,
                         placeholder: "Other"
                       }
@@ -881,7 +881,7 @@ function lr({
                         size: "sm",
                         "aria-label": "Member Order",
                         value: s.order || "creation",
-                        onChange: (a) => b({ ...s, order: a.target.value }),
+                        onChange: (a) => h({ ...s, order: a.target.value }),
                         style: { ...C, width: "100%" },
                         children: [
                           /* @__PURE__ */ e.jsx("option", { value: "creation", children: "Creation Order" }),
@@ -911,7 +911,7 @@ function lr({
                         size: "sm",
                         "aria-label": "Date Field",
                         value: s.sourceField || "",
-                        onChange: (a) => b({
+                        onChange: (a) => h({
                           ...s,
                           sourceField: a.target.value,
                           name: s.__isNew ? `${f(a.target.value)} ${ke(s.granularity || "month")}` : s.name
@@ -932,9 +932,9 @@ function lr({
                         size: "sm",
                         "aria-label": "Date Part",
                         value: s.granularity || "month",
-                        onChange: (a) => b({ ...s, granularity: a.target.value }),
+                        onChange: (a) => h({ ...s, granularity: a.target.value }),
                         style: { ...C, width: "100%" },
-                        children: Array.from(Jr).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
+                        children: Array.from(tn).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
                       }
                     )
                   ] }),
@@ -946,7 +946,7 @@ function lr({
                         size: "sm",
                         "aria-label": "Fiscal Start",
                         value: s.fiscalYearStartMonth || 1,
-                        onChange: (a) => b({ ...s, fiscalYearStartMonth: Number(a.target.value) }),
+                        onChange: (a) => h({ ...s, fiscalYearStartMonth: Number(a.target.value) }),
                         style: { ...C, width: "100%" },
                         children: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((a, k) => /* @__PURE__ */ e.jsx("option", { value: k + 1, children: a }, a))
                       }
@@ -970,7 +970,7 @@ function lr({
                         size: "sm",
                         "aria-label": "Number Field",
                         value: s.sourceField || "",
-                        onChange: (a) => b({
+                        onChange: (a) => h({
                           ...s,
                           sourceField: a.target.value,
                           name: s.__isNew ? `${f(a.target.value)} Bins` : s.name
@@ -990,7 +990,7 @@ function lr({
                       {
                         type: "number",
                         value: s.binSize === void 0 ? "" : s.binSize,
-                        onChange: (a) => b({ ...s, binSize: a.target.value }),
+                        onChange: (a) => h({ ...s, binSize: a.target.value }),
                         style: C
                       }
                     )
@@ -1002,7 +1002,7 @@ function lr({
                       {
                         type: "number",
                         value: s.minValue === null || s.minValue === void 0 ? "" : s.minValue,
-                        onChange: (a) => b({ ...s, minValue: a.target.value }),
+                        onChange: (a) => h({ ...s, minValue: a.target.value }),
                         style: C
                       }
                     )
@@ -1014,7 +1014,7 @@ function lr({
                       {
                         type: "number",
                         value: s.maxValue === null || s.maxValue === void 0 ? "" : s.maxValue,
-                        onChange: (a) => b({ ...s, maxValue: a.target.value }),
+                        onChange: (a) => h({ ...s, maxValue: a.target.value }),
                         style: C
                       }
                     )
@@ -1028,7 +1028,7 @@ function lr({
                         min: "0",
                         max: "8",
                         value: s.precision === null || s.precision === void 0 ? "" : s.precision,
-                        onChange: (a) => b({ ...s, precision: a.target.value }),
+                        onChange: (a) => h({ ...s, precision: a.target.value }),
                         style: C
                       }
                     )
@@ -1075,20 +1075,20 @@ function lr({
                           "button",
                           {
                             type: "button",
-                            onClick: () => b({ ...s, rules: (s.rules || []).filter(
+                            onClick: () => h({ ...s, rules: (s.rules || []).filter(
                               /** @param {any} [_] @param {any} [index] @returns {any} */
                               (_, Y) => Y !== k
                             ) }),
-                            style: { ...D(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
+                            style: { ...A(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
                             title: "Remove rule",
-                            children: /* @__PURE__ */ e.jsx(E.Close, {})
+                            children: /* @__PURE__ */ e.jsx(F.Close, {})
                           }
                         )
                       ] }),
                       B.map(
                         /** @param {any} [clause] @param {any} [clauseIndex] @returns {any} */
                         (_, Y) => {
-                          const L = an.has(_.operator), g = Qt.has(_.operator);
+                          const L = cn.has(_.operator), g = qt.has(_.operator);
                           return /* @__PURE__ */ e.jsxs("div", { style: { display: "grid", gridTemplateColumns: L ? "1fr 130px 28px" : "1fr 130px 1fr 28px", gap: "6px", alignItems: "center" }, children: [
                             /* @__PURE__ */ e.jsx(
                               ne,
@@ -1114,18 +1114,18 @@ function lr({
                                   const V = z.target.value;
                                   N(k, Y, {
                                     operator: V,
-                                    values: Qt.has(V) ? _.values && _.values.length ? _.values : tr(_.value) : _.values
+                                    values: qt.has(V) ? _.values && _.values.length ? _.values : Qt(_.value) : _.values
                                   });
                                 },
                                 style: { ...C, width: "100%" },
-                                children: on.map((z) => /* @__PURE__ */ e.jsx("option", { value: z.value, children: z.label }, z.value))
+                                children: dn.map((z) => /* @__PURE__ */ e.jsx("option", { value: z.value, children: z.label }, z.value))
                               }
                             ),
                             !L && /* @__PURE__ */ e.jsx(
                               "input",
                               {
                                 value: g ? (_.values || []).join(", ") : _.value || "",
-                                onChange: (z) => N(k, Y, g ? { values: tr(z.target.value), value: z.target.value } : { value: z.target.value }),
+                                onChange: (z) => N(k, Y, g ? { values: Qt(z.target.value), value: z.target.value } : { value: z.target.value }),
                                 style: C,
                                 placeholder: g ? "A, B, C" : "Value"
                               }
@@ -1144,9 +1144,9 @@ function lr({
                                     )
                                   }
                                 }),
-                                style: { ...D(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
+                                style: { ...A(), padding: "6px", justifyContent: "center", color: "#B91C1C" },
                                 title: "Remove condition",
-                                children: /* @__PURE__ */ e.jsx(E.Close, {})
+                                children: /* @__PURE__ */ e.jsx(F.Close, {})
                               }
                             )
                           ] }, `${a.id || k}:${Y}`);
@@ -1160,10 +1160,10 @@ function lr({
                             ...a,
                             condition: {
                               ...w,
-                              clauses: [...B, yr(P)]
+                              clauses: [...B, xr(P)]
                             }
                           }),
-                          style: { ...D(), alignSelf: "flex-start" },
+                          style: { ...A(), alignSelf: "flex-start" },
                           children: "+ Condition"
                         }
                       )
@@ -1174,17 +1174,17 @@ function lr({
                   "button",
                   {
                     type: "button",
-                    onClick: () => b({
+                    onClick: () => h({
                       ...s,
-                      rules: [...s.rules || [], br(P, (s.rules || []).length)]
+                      rules: [...s.rules || [], fr(P, (s.rules || []).length)]
                     }),
-                    style: { ...D(), alignSelf: "flex-start" },
+                    style: { ...A(), alignSelf: "flex-start" },
                     children: "+ Rule"
                   }
                 ),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px" }, children: [
-                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => b(null), style: D(), children: "Cancel" }),
-                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: R, style: D("primary"), children: s.kind === "date_group" || s.kind === "number_group" ? "Apply Group" : "Apply Category" })
+                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: () => h(null), style: A(), children: "Cancel" }),
+                  /* @__PURE__ */ e.jsx("button", { type: "button", onClick: R, style: A("primary"), children: s.kind === "date_group" || s.kind === "number_group" ? "Apply Group" : "Apply Category" })
                 ] })
               ] })
             ]
@@ -1194,36 +1194,36 @@ function lr({
     )
   ] });
 }
-function mr(t) {
+function yr(t) {
   const n = [], i = /* @__PURE__ */ new Set();
   return String(t || "").replace(ct, (o, l) => {
     const x = String(l || "").trim();
     return x && !i.has(x) && (n.push(x), i.add(x)), "";
   }), n;
 }
-function or(t, n = []) {
+function nr(t, n = []) {
   const i = String(t || ""), o = [], l = /* @__PURE__ */ new Set(), x = (y) => {
-    const F = String(y || "").trim();
-    !F || l.has(F) || (o.push(F), l.add(F));
+    const E = String(y || "").trim();
+    !E || l.has(E) || (o.push(E), l.add(E));
   };
-  mr(i).forEach(x);
+  yr(i).forEach(x);
   let f = i.replace(ct, " ");
-  return (Array.isArray(n) ? n : Array.from(n || [])).map((y) => String(y || "").trim()).filter((y) => y && !fr.test(y)).sort((y, F) => F.length - y.length).forEach(
+  return (Array.isArray(n) ? n : Array.from(n || [])).map((y) => String(y || "").trim()).filter((y) => y && !pr.test(y)).sort((y, E) => E.length - y.length).forEach(
     /** @param {any} [reference] @returns {any} */
     (y) => {
-      const F = new RegExp(`(^|[^A-Za-z0-9_])${gr(y)}(?=$|[^A-Za-z0-9_])`, "g");
+      const E = new RegExp(`(^|[^A-Za-z0-9_])${ur(y)}(?=$|[^A-Za-z0-9_])`, "g");
       f = f.replace(
-        F,
+        E,
         /** @param {any} [match] @param {any} [prefix] @returns {any} */
-        (s, b) => (x(y), `${b} `)
+        (s, h) => (x(y), `${h} `)
       );
     }
   ), f.replace(
-    xr,
+    cr,
     /** @param {any} [token] @param {any} [offset] @returns {any} */
-    (y, F) => {
-      const s = f.slice(F + y.length).trimStart();
-      return ln.has(y) || nn.has(y) && s.startsWith("(") || x(y), y;
+    (y, E) => {
+      const s = f.slice(E + y.length).trimStart();
+      return sn.has(y) || an.has(y) && s.startsWith("(") || x(y), y;
     }
   ), o;
 }
@@ -1231,12 +1231,12 @@ function se(t) {
   const n = String(t || "").trim();
   return n ? `[${n}]` : "";
 }
-function Fe(t) {
+function Ee(t) {
   const n = String(t || "").trim();
-  return n ? fr.test(n) ? n : `[${n}]` : "";
+  return n ? pr.test(n) ? n : `[${n}]` : "";
 }
-function bn(t, n, i = "formula") {
-  const o = Me(t, i), l = new Set(
+function vn(t, n, i = "formula") {
+  const o = _e(t, i), l = new Set(
     (Array.isArray(n) ? n : []).map((j) => j ? j.agg === "formula" ? J(j) : j.field : null).filter(Boolean).map((j) => String(j).toLowerCase())
   );
   if (!l.has(o)) return o;
@@ -1245,15 +1245,15 @@ function bn(t, n, i = "formula") {
     x += 1, f = `${o}${x}`;
   return f;
 }
-function hn(t, n, i) {
+function Sn(t, n, i) {
   if (!t || !n || n === i) return t;
-  const o = Fe(i), l = [];
-  let f = String(t).replace(ct, (j, y) => String(y || "").trim() === n ? o : (l.push(j), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${gr(n)}\\b`, "g"), o);
+  const o = Ee(i), l = [];
+  let f = String(t).replace(ct, (j, y) => String(y || "").trim() === n ? o : (l.push(j), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${ur(n)}\\b`, "g"), o);
   return l.forEach((j, y) => {
     f = f.replace(`@@${y}@@`, j);
   }), f;
 }
-function Ct(t, n, i) {
+function Rt(t, n, i) {
   t(
     /** @param {any} [prev] @returns {any} */
     (o) => {
@@ -1262,18 +1262,18 @@ function Ct(t, n, i) {
     }
   );
 }
-function ir(t) {
+function lr(t) {
   return !t || typeof t.closest != "function" ? !1 : !!t.closest('button, input, select, textarea, [contenteditable="true"]');
 }
-function mn(t) {
+function jn(t) {
   if (!t || typeof t != "object") return "";
   const n = t.field === void 0 || t.field === null ? "" : String(t.field), i = t.agg === void 0 || t.agg === null ? "" : String(t.agg);
   return `${n}::${i}`;
 }
-function Rt(t) {
-  const n = tn(t);
+function At(t) {
+  const n = ln(t);
   return n ? {
-    ...Ee,
+    ...Me,
     ...n,
     header: n.header || "",
     color: n.color || "",
@@ -1281,13 +1281,13 @@ function Rt(t) {
     negativeColor: n.negativeColor || ""
   } : null;
 }
-function vn(t) {
+function kn(t) {
   const n = {
-    ...Ee,
+    ...Me,
     ...t || {}
   }, i = {
-    type: n.type || Ee.type,
-    metric: n.metric || Ee.metric,
+    type: n.type || Me.type,
+    metric: n.metric || Me.metric,
     showCurrentValue: n.showCurrentValue !== !1,
     showDelta: n.showDelta !== !1,
     compact: !!n.compact,
@@ -1301,7 +1301,7 @@ function vn(t) {
     l && (i[o] = l);
   }), Number.isFinite(Number(n.areaOpacity)) && (i.areaOpacity = Math.max(0.02, Math.min(0.45, Number(n.areaOpacity)))), i;
 }
-function vr(t, n = []) {
+function hr(t, n = []) {
   const i = String(t && t.agg || "").trim().toLowerCase(), o = Array.isArray(n) && n.length > 0, l = i === "array_agg", x = i !== "array_agg" && o;
   return {
     canUseFieldSeries: l,
@@ -1310,26 +1310,26 @@ function vr(t, n = []) {
     defaultSource: l ? "field" : x ? "pivot" : null
   };
 }
-function At(t, n) {
+function $t(t, n) {
   return !n || !n.canUseAny ? !1 : t === "field" ? n.canUseFieldSeries : n.canUsePivotSeries;
 }
-function Sr(t, n) {
-  const i = vn(t);
-  return !n || !n.canUseAny ? null : At(i.source, n) ? i : {
+function br(t, n) {
+  const i = kn(t);
+  return !n || !n.canUseAny ? null : $t(i.source, n) ? i : {
     ...i,
     source: n.defaultSource
   };
 }
 function Dt(t) {
   if (!Array.isArray(t) || t.length === 0) return "";
-  const n = t.map((i) => i && Fe(i.field)).filter(Boolean);
+  const n = t.map((i) => i && Ee(i.field)).filter(Boolean);
   return n.length === 0 ? "" : n.length === 1 ? `${n[0]} * 100` : `${n[0]} - ${n[1]}`;
 }
-function ar(t) {
+function or(t) {
   const n = (Array.isArray(t) ? t : []).map((i) => i && i.id).filter(Boolean);
   return n.length === 0 ? "" : n.length === 1 ? `${se(n[0])} * 100` : `${se(n[0])} - ${se(n[1])}`;
 }
-function Sn(t) {
+function wn(t) {
   const n = new Set(
     (Array.isArray(t) ? t : []).map((o) => o && o.field).filter(Boolean)
   );
@@ -1337,18 +1337,18 @@ function Sn(t) {
   for (; n.has(`formula_${i}`); ) i += 1;
   return `formula_${i}`;
 }
-function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
-  const j = String(t || "").trim(), y = ze(l);
+function Cn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
+  const j = String(t || "").trim(), y = Fe(l);
   if (!j)
     return {
       tone: "warning",
       text: y ? "Enter a formula using bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]" : "Enter a formula using value fields. Example: sales - [day pnl]"
     };
-  let F = 0;
+  let E = 0;
   for (const R of j)
-    if (R === "(" && (F += 1), R === ")" && (F -= 1), F < 0)
+    if (R === "(" && (E += 1), R === ")" && (E -= 1), E < 0)
       return { tone: "warning", text: "Parentheses are unbalanced." };
-  if (F !== 0)
+  if (E !== 0)
     return { tone: "warning", text: "Parentheses are unbalanced." };
   if (y) {
     const R = Array.isArray(x) ? x : [], O = new Set(
@@ -1356,13 +1356,13 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
         /** @param {any} [option] @returns {any} */
         (B) => B && B.id
       ).filter(Boolean)
-    ), a = mr(j);
+    ), a = yr(j);
     if (a.length === 0)
       return {
         tone: "warning",
         text: "Insert at least one rendered column reference like [column_id]."
       };
-    const k = j.replace(ct, ""), w = Array.from(new Set(k.match(xr) || []));
+    const k = j.replace(ct, ""), w = Array.from(new Set(k.match(cr) || []));
     if (w.length > 0)
       return {
         tone: "warning",
@@ -1393,14 +1393,14 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
       tone: "warning",
       text: "Add at least one value or formula reference before creating formulas."
     };
-  const b = s.filter(
+  const h = s.filter(
     /** @param {any} [config] @returns {any} */
     (R) => R.agg === "formula"
   ), W = /* @__PURE__ */ new Map();
-  b.forEach(
+  h.forEach(
     /** @param {any} [config] @returns {any} */
     (R) => {
-      const O = R.field === i ? Me(o || J(R), R.field) : J(R);
+      const O = R.field === i ? _e(o || J(R), R.field) : J(R);
       O && (W.set(O, O), W.set(O.toLowerCase(), O));
     }
   );
@@ -1410,13 +1410,13 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
   ).map(
     /** @param {any} [config] @returns {any} */
     (R) => R.field
-  ).filter(Boolean), M = new Set(P), $ = /* @__PURE__ */ new Set([...P, ...b.map(
+  ).filter(Boolean), M = new Set(P), $ = /* @__PURE__ */ new Set([...P, ...h.map(
     /** @param {any} [config] @returns {any} */
-    (R) => R.field === i ? Me(o || J(R), R.field) : J(R)
-  ).filter(Boolean), ...Array.isArray(f) ? f : []]), h = Array.from($), C = or(j, h), D = C.map(
+    (R) => R.field === i ? _e(o || J(R), R.field) : J(R)
+  ).filter(Boolean), ...Array.isArray(f) ? f : []]), b = Array.from($), C = nr(j, b), A = C.map(
     /** @param {any} [token] @returns {any} */
     (R) => W.get(R) || W.get(R.toLowerCase()) || R
-  ), I = D.filter(
+  ), I = A.filter(
     /** @param {any} [token] @returns {any} */
     (R) => !$.has(R) && !M.has(R)
   );
@@ -1425,7 +1425,7 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
       tone: "warning",
       text: `Unknown fields: ${I.join(", ")}`
     };
-  const N = i ? Me(o || i, i) : null;
+  const N = i ? _e(o || i, i) : null;
   if (i && N && s.some(
     /** @param {any} [config] @returns {any} */
     (O) => {
@@ -1438,22 +1438,22 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
       tone: "warning",
       text: `Reference key "${N}" is already in use.`
     };
-  if (N && D.includes(N))
+  if (N && A.includes(N))
     return {
       tone: "warning",
       text: "A formula cannot reference itself."
     };
   if (i && N) {
     const R = {};
-    b.forEach(
+    h.forEach(
       /** @param {any} [config] @returns {any} */
       (w) => {
-        const B = w.field === i ? N : J(w), _ = w.field === i ? j : String(w.formula || ""), Y = or(_, h).map(
+        const B = w.field === i ? N : J(w), _ = w.field === i ? j : String(w.formula || ""), Y = nr(_, b).map(
           /** @param {any} [token] @returns {any} */
           (L) => W.get(L) || W.get(L.toLowerCase()) || L
         ).filter(
           /** @param {any} [token] @returns {any} */
-          (L) => L !== B && b.some(
+          (L) => L !== B && h.some(
             /** @param {any} [candidate] @returns {any} */
             (g) => J(g) === L || g.field === i && N === L
           )
@@ -1481,19 +1481,19 @@ function jn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
     text: "Insert at least one measure or formula reference."
   } : {
     tone: "success",
-    text: `Using ${D.join(", ")}`
+    text: `Using ${A.join(", ")}`
   };
 }
-function kn(t) {
+function Rn(t) {
   if (!Array.isArray(t) || t.length === 0) return [];
-  const n = t.map((i) => i && Fe(i.field)).filter(Boolean);
+  const n = t.map((i) => i && Ee(i.field)).filter(Boolean);
   return n.length === 0 ? [] : n.length === 1 ? [{ label: "Scale x100", value: `${n[0]} * 100` }] : [
     { label: "Difference", value: `${n[0]} - ${n[1]}` },
     { label: "Ratio %", value: `(${n[0]} / ${n[1]}) * 100` },
     { label: "Margin %", value: `((${n[0]} - ${n[1]}) / ${n[0]}) * 100` }
   ];
 }
-function wn(t) {
+function An(t) {
   const n = (Array.isArray(t) ? t : []).map((i) => i && i.id).filter(Boolean);
   return n.length === 0 ? [] : n.length === 1 ? [{ label: "Scale x100", value: `${se(n[0])} * 100` }] : [
     { label: "Difference", value: `${se(n[0])} - ${se(n[1])}` },
@@ -1501,7 +1501,7 @@ function wn(t) {
     { label: "Spread %", value: `((${se(n[0])} - ${se(n[1])}) / ${se(n[0])}) * 100` }
   ];
 }
-function Cn(t, n) {
+function Dn(t, n) {
   const i = {
     muted: {
       text: t.textSec,
@@ -1521,31 +1521,31 @@ function Cn(t, n) {
   };
   return i[n] || i.muted;
 }
-function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], onClose: x }) {
-  const f = u.useMemo(
-    () => Rt(t && t.sparkline) || { ...Ee },
+function $n({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], onClose: x }) {
+  const f = c.useMemo(
+    () => At(t && t.sparkline) || { ...Me },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [t && t.sparkline]
-  ), j = u.useMemo(
-    () => vr(t, l),
+  ), j = c.useMemo(
+    () => hr(t, l),
     [l, t]
-  ), y = u.useMemo(() => {
-    const h = [];
-    return j.canUsePivotSeries && h.push({ value: "pivot", label: "Linked pivot" }), j.canUseFieldSeries && h.push({ value: "field", label: "Series field" }), h;
-  }, [j]), F = At(f.source || "pivot", j) ? f.source || "pivot" : j.defaultSource, s = u.useCallback((h) => {
-    Ct(
+  ), y = c.useMemo(() => {
+    const b = [];
+    return j.canUsePivotSeries && b.push({ value: "pivot", label: "Linked pivot" }), j.canUseFieldSeries && b.push({ value: "field", label: "Series field" }), b;
+  }, [j]), E = $t(f.source || "pivot", j) ? f.source || "pivot" : j.defaultSource, s = c.useCallback((b) => {
+    Rt(
       i,
       n,
       /** @param {any} [current] @returns {any} */
       (C) => {
-        const D = Rt(C.sparkline) || { ...Ee }, I = Sr({ ...D, ...h }, j);
+        const A = At(C.sparkline) || { ...Me }, I = br({ ...A, ...b }, j);
         return I ? {
           ...C,
           sparkline: I
         } : C;
       }
     );
-  }, [j, n, i]), b = u.useCallback((h) => h.stopPropagation(), []), W = [
+  }, [j, n, i]), h = c.useCallback((b) => b.stopPropagation(), []), W = [
     { value: "line", label: "Line" },
     { value: "area", label: "Area" },
     { value: "column", label: "Column" },
@@ -1575,12 +1575,12 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
     "div",
     {
       style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" },
-      onMouseDown: b,
+      onMouseDown: h,
       onClick: x,
       children: /* @__PURE__ */ e.jsxs(
         "div",
         {
-          onClick: b,
+          onClick: h,
           style: {
             background: o.background,
             border: `1px solid ${o.border}`,
@@ -1610,11 +1610,11 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
               y.length > 0 ? /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: y.map(
                   /** @param {any} p0 @returns {any} */
-                  ({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
+                  ({ value: b, label: C }) => /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
-                      onClick: () => s({ source: h }),
+                      onClick: () => s({ source: b }),
                       style: {
                         flex: 1,
                         padding: "4px 0",
@@ -1622,16 +1622,16 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                         fontWeight: 600,
                         borderRadius: "6px",
                         cursor: "pointer",
-                        border: `1px solid ${F === h ? o.primary : o.border}`,
-                        background: F === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
-                        color: F === h ? o.primary : o.textSec
+                        border: `1px solid ${E === b ? o.primary : o.border}`,
+                        background: E === b ? `${o.primary}18` : o.headerSubtleBg || o.background,
+                        color: E === b ? o.primary : o.textSec
                       },
                       children: C
                     },
-                    h
+                    b
                   )
                 ) }),
-                /* @__PURE__ */ e.jsx("div", { style: { marginTop: "5px", fontSize: "10px", color: o.textSec, lineHeight: 1.4 }, children: F === "pivot" ? "Trend values are collected across the pivot columns. Source value cells stay numeric unless hidden." : "Each cell already contains the full data series for its row." })
+                /* @__PURE__ */ e.jsx("div", { style: { marginTop: "5px", fontSize: "10px", color: o.textSec, lineHeight: 1.4 }, children: E === "pivot" ? "Trend values are collected across the pivot columns. Source value cells stay numeric unless hidden." : "Each cell already contains the full data series for its row." })
               ] }) : /* @__PURE__ */ e.jsx(
                 "div",
                 {
@@ -1649,16 +1649,16 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 }
               )
             ] }),
-            F === "field" && /* @__PURE__ */ e.jsxs("div", { style: $, children: [
+            E === "field" && /* @__PURE__ */ e.jsxs("div", { style: $, children: [
               /* @__PURE__ */ e.jsx("span", { style: M, children: "Cell display" }),
               /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: [
                 { value: "trend", label: "Trendline" },
                 { value: "value", label: "Value" }
-              ].map(({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
+              ].map(({ value: b, label: C }) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   type: "button",
-                  onClick: () => s({ displayMode: h }),
+                  onClick: () => s({ displayMode: b }),
                   style: {
                     flex: 1,
                     padding: "4px 0",
@@ -1666,23 +1666,23 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     fontWeight: 600,
                     borderRadius: "6px",
                     cursor: "pointer",
-                    border: `1px solid ${(f.displayMode || "trend") === h ? o.primary : o.border}`,
-                    background: (f.displayMode || "trend") === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
-                    color: (f.displayMode || "trend") === h ? o.primary : o.textSec
+                    border: `1px solid ${(f.displayMode || "trend") === b ? o.primary : o.border}`,
+                    background: (f.displayMode || "trend") === b ? `${o.primary}18` : o.headerSubtleBg || o.background,
+                    color: (f.displayMode || "trend") === b ? o.primary : o.textSec
                   },
                   children: C
                 },
-                h
+                b
               )) }),
               /* @__PURE__ */ e.jsx("div", { style: { marginTop: "5px", fontSize: "10px", color: o.textSec, lineHeight: 1.4 }, children: (f.displayMode || "trend") === "value" ? "Show the selected summary metric from the series." : "Draw the series in the cell." })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: $, children: [
               /* @__PURE__ */ e.jsx("span", { style: M, children: "Chart type" }),
-              /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: W.map(({ value: h, label: C }) => /* @__PURE__ */ e.jsx(
+              /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px" }, children: W.map(({ value: b, label: C }) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   type: "button",
-                  onClick: () => s({ type: h }),
+                  onClick: () => s({ type: b }),
                   style: {
                     flex: 1,
                     padding: "4px 0",
@@ -1690,13 +1690,13 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     fontWeight: 600,
                     borderRadius: "6px",
                     cursor: "pointer",
-                    border: `1px solid ${f.type === h ? o.primary : o.border}`,
-                    background: f.type === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
-                    color: f.type === h ? o.primary : o.textSec
+                    border: `1px solid ${f.type === b ? o.primary : o.border}`,
+                    background: f.type === b ? `${o.primary}18` : o.headerSubtleBg || o.background,
+                    color: f.type === b ? o.primary : o.textSec
                   },
                   children: C
                 },
-                h
+                b
               )) })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: $, children: [
@@ -1707,7 +1707,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                   size: "sm",
                   "aria-label": "Summary metric",
                   value: f.metric,
-                  onChange: (h) => s({ metric: h.target.value }),
+                  onChange: (b) => s({ metric: b.target.value }),
                   style: { ...P, cursor: "pointer", width: "100%" },
                   children: [
                     /* @__PURE__ */ e.jsx("option", { value: "last", children: "Last value" }),
@@ -1728,22 +1728,22 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 { key: "showDelta", label: "Delta label" },
                 { key: "compact", label: "Compact cell" },
                 { key: "hideColumns", label: "Hide source values" }
-              ].map(({ key: h, label: C }) => /* @__PURE__ */ e.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: o.text, cursor: "pointer", userSelect: "none" }, children: [
+              ].map(({ key: b, label: C }) => /* @__PURE__ */ e.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: o.text, cursor: "pointer", userSelect: "none" }, children: [
                 /* @__PURE__ */ e.jsx(
                   "input",
                   {
                     type: "checkbox",
-                    checked: !!f[h],
-                    onChange: (D) => s({ [h]: D.target.checked }),
+                    checked: !!f[b],
+                    onChange: (A) => s({ [b]: A.target.checked }),
                     style: { accentColor: o.primary, width: "13px", height: "13px", cursor: "pointer" }
                   }
                 ),
                 C
-              ] }, h)) }),
+              ] }, b)) }),
               f.hideColumns && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: `${o.primary}10`, border: `1px solid ${o.primary}30`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns are hidden; the trend column remains." }),
-              !f.hideColumns && F === "pivot" && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns stay numeric; the trend column is added beside them." })
+              !f.hideColumns && E === "pivot" && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns stay numeric; the trend column is added beside them." })
             ] }),
-            F === "pivot" && /* @__PURE__ */ e.jsxs("div", { style: $, children: [
+            E === "pivot" && /* @__PURE__ */ e.jsxs("div", { style: $, children: [
               /* @__PURE__ */ e.jsx("span", { style: M, children: "Position" }),
               /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: o.textSec, lineHeight: 1.4, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "6px 8px" }, children: "Trend columns are placed before the matching value columns." })
             ] }),
@@ -1753,15 +1753,15 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 { key: "color", label: "Line / fill color", always: !0 },
                 { key: "positiveColor", label: "Positive bar color", always: !1 },
                 { key: "negativeColor", label: "Negative bar color", always: !1 }
-              ].filter(({ always: h }) => h || f.type === "column" || f.type === "bar").map(({ key: h, label: C }) => /* @__PURE__ */ e.jsxs("div", { children: [
+              ].filter(({ always: b }) => b || f.type === "column" || f.type === "bar").map(({ key: b, label: C }) => /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: o.textSec, marginBottom: "3px", display: "block" }, children: C }),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "5px", alignItems: "center" }, children: [
                   /* @__PURE__ */ e.jsx(
                     "input",
                     {
                       type: "color",
-                      value: f[h] || (h === "negativeColor" ? "#B91C1C" : h === "positiveColor" ? "#2F855A" : "#2563EB"),
-                      onChange: (D) => s({ [h]: D.target.value }),
+                      value: f[b] || (b === "negativeColor" ? "#B91C1C" : b === "positiveColor" ? "#2F855A" : "#2563EB"),
+                      onChange: (A) => s({ [b]: A.target.value }),
                       style: { width: "28px", height: "26px", padding: "1px 2px", border: `1px solid ${o.border}`, borderRadius: "4px", cursor: "pointer", background: "none" }
                     }
                   ),
@@ -1769,24 +1769,24 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     "input",
                     {
                       type: "text",
-                      value: f[h] || "",
-                      onChange: (D) => s({ [h]: D.target.value }),
+                      value: f[b] || "",
+                      onChange: (A) => s({ [b]: A.target.value }),
                       placeholder: "Auto",
                       style: { ...P, flex: 1 }
                     }
                   ),
-                  f[h] && /* @__PURE__ */ e.jsx(
+                  f[b] && /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
-                      onClick: () => s({ [h]: "" }),
+                      onClick: () => s({ [b]: "" }),
                       style: { background: "none", border: "none", cursor: "pointer", color: o.textSec, fontSize: "14px", lineHeight: 1, padding: "2px" },
                       title: "Reset to auto",
                       children: "×"
                     }
                   )
                 ] })
-              ] }, h)) })
+              ] }, b)) })
             ] }),
             f.type === "area" && /* @__PURE__ */ e.jsxs("div", { style: $, children: [
               /* @__PURE__ */ e.jsx("span", { style: M, children: "Area fill opacity" }),
@@ -1799,7 +1799,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                     max: "0.45",
                     step: "0.01",
                     value: f.areaOpacity != null ? f.areaOpacity : 0.14,
-                    onChange: (h) => s({ areaOpacity: Number(h.target.value) }),
+                    onChange: (b) => s({ areaOpacity: Number(b.target.value) }),
                     style: { flex: 1, accentColor: o.primary }
                   }
                 ),
@@ -1816,7 +1816,7 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
                 {
                   type: "text",
                   value: f.header || "",
-                  onChange: (h) => s({ header: h.target.value }),
+                  onChange: (b) => s({ header: b.target.value }),
                   placeholder: "Auto (e.g. Sales Trend)",
                   style: P
                 }
@@ -1846,44 +1846,44 @@ function Rn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
     }
   );
 }
-function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fixedSparklineValueKeySet: x = /* @__PURE__ */ new Set(), showNotification: f }) {
-  const [j, y] = u.useState(!1), F = Rt(t && t.sparkline), s = mn(t), b = !!(s && x && x.has(s)), W = u.useMemo(
-    () => vr(t, l),
+function mr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fixedSparklineValueKeySet: x = /* @__PURE__ */ new Set(), showNotification: f }) {
+  const [j, y] = c.useState(!1), E = At(t && t.sparkline), s = jn(t), h = !!(s && x && x.has(s)), W = c.useMemo(
+    () => hr(t, l),
     [l, t]
-  ), P = !!F, M = !!(F && At(F.source || "pivot", W)), $ = u.useCallback((I) => I.stopPropagation(), []), h = u.useCallback(() => {
+  ), P = !!E, M = !!(E && $t(E.source || "pivot", W)), $ = c.useCallback((I) => I.stopPropagation(), []), b = c.useCallback(() => {
     let I = !1;
-    return Ct(
+    return Rt(
       i,
       n,
       /** @param {any} [current] @returns {any} */
       (N) => {
-        const R = Sr(
-          N.sparkline || Ee,
+        const R = br(
+          N.sparkline || Me,
           W
         );
         return R ? (I = !0, { ...N, sparkline: R }) : N;
       }
     ), I;
-  }, [W, n, i]), C = u.useCallback((I) => {
+  }, [W, n, i]), C = c.useCallback((I) => {
     if (I.stopPropagation(), P) {
-      if (b) {
+      if (h) {
         f && f("This trend is defined by the app. You can adjust its settings, but not remove it here.", "info");
         return;
       }
-      Ct(
+      Rt(
         i,
         n,
         /** @param {any} [current] @returns {any} */
         (N) => ({ ...N, sparkline: !1 })
       ), f && f("Removed trend column.", "info");
-    } else W.canUseAny && h() ? (y(!0), f && f("Trend column enabled.", "success")) : f && f("Trend needs a column field, or a Series aggregation for field data.", "warning");
-  }, [W.canUseAny, P, h, n, b, i, f]), D = u.useCallback((I) => {
+    } else W.canUseAny && b() ? (y(!0), f && f("Trend column enabled.", "success")) : f && f("Trend needs a column field, or a Series aggregation for field data.", "warning");
+  }, [W.canUseAny, P, b, n, h, i, f]), A = c.useCallback((I) => {
     if (I.stopPropagation(), !W.canUseAny) {
       f && f("Trend settings are not available for this value selection.", "warning");
       return;
     }
-    h(), y(!0);
-  }, [W.canUseAny, h, f]);
+    b(), y(!0);
+  }, [W.canUseAny, b, f]);
   return P ? /* @__PURE__ */ e.jsxs(
     "div",
     {
@@ -1899,7 +1899,7 @@ function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
           {
             type: "button",
             "data-value-sparkline-settings": "true",
-            onClick: D,
+            onClick: A,
             style: {
               border: `1px solid ${o.border}`,
               background: o.headerSubtleBg || o.background,
@@ -1916,7 +1916,7 @@ function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
             children: "Settings"
           }
         ),
-        b && /* @__PURE__ */ e.jsx(
+        h && /* @__PURE__ */ e.jsx(
           "span",
           {
             "data-value-sparkline-fixed": "true",
@@ -1925,7 +1925,7 @@ function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
             children: "App trend"
           }
         ),
-        !b && /* @__PURE__ */ e.jsx(
+        !h && /* @__PURE__ */ e.jsx(
           "button",
           {
             type: "button",
@@ -1955,7 +1955,7 @@ function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
           t.sparkline && t.sparkline.metric || "last"
         ] }),
         j && /* @__PURE__ */ e.jsx(
-          Rn,
+          $n,
           {
             item: t,
             idx: n,
@@ -1969,8 +1969,8 @@ function jr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
     }
   ) : null;
 }
-function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConfigs: x, theme: f, styles: j, dropLine: y, zoneId: F, valueSelectStyle: s, colFields: b = [], fixedSparklineValueKeySet: W = /* @__PURE__ */ new Set(), showNotification: P, serverError: M = null }) {
-  const $ = i ? `${f.primary}77` : M ? "#F59E0B88" : f.border, h = i ? f.headerBg || `${f.primary}0f` : f.background || "transparent", C = String(t.formula || "").trim() || "Empty formula";
+function ir({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConfigs: x, theme: f, styles: j, dropLine: y, zoneId: E, valueSelectStyle: s, colFields: h = [], fixedSparklineValueKeySet: W = /* @__PURE__ */ new Set(), showNotification: P, serverError: M = null }) {
+  const $ = i ? `${f.primary}77` : M ? "#F59E0B88" : f.border, b = i ? f.headerBg || `${f.primary}0f` : f.background || "transparent", C = String(t.formula || "").trim() || "Empty formula";
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
@@ -1978,7 +1978,7 @@ function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
       style: {
         ...j.chip,
         border: `1px solid ${$}`,
-        background: h,
+        background: b,
         borderLeft: i ? `3px solid ${f.primary}` : "3px solid transparent",
         boxShadow: "none",
         cursor: "pointer",
@@ -1987,9 +1987,9 @@ function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
       },
       title: "Select formula",
       children: [
-        y && y.zone === F && y.idx === n && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, top: -2 } }),
+        y && y.zone === E && y.idx === n && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, top: -2 } }),
         /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
-          /* @__PURE__ */ e.jsx(E.DragIndicator, {}),
+          /* @__PURE__ */ e.jsx(F.DragIndicator, {}),
           /* @__PURE__ */ e.jsx("span", { style: {
             fontSize: "10px",
             fontWeight: 700,
@@ -2004,7 +2004,7 @@ function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }, children: [
               /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 600, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: t.label || "Formula" }),
               /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: f.textSec, fontFamily: "monospace", flexShrink: 0 }, children: J(t) }),
-              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "9px", color: f.textSec, border: `1px solid ${f.border}`, borderRadius: "999px", padding: "1px 6px", flexShrink: 0 }, children: ze(t.formulaScope) ? "columns" : "values" })
+              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "9px", color: f.textSec, border: `1px solid ${f.border}`, borderRadius: "999px", padding: "1px 6px", flexShrink: 0 }, children: Fe(t.formulaScope) ? "columns" : "values" })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: {
               marginTop: "2px",
@@ -2021,7 +2021,7 @@ function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
             ] }),
             M && /* @__PURE__ */ e.jsxs("div", { style: { marginTop: "2px", fontSize: "9px", color: "#B45309" }, children: [
               "⚠ ",
-              Dn[M] || M
+              zn[M] || M
             ] })
           ] })
         ] }),
@@ -2037,81 +2037,81 @@ function sr({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
           /* @__PURE__ */ e.jsx(
             "span",
             {
-              onClick: (D) => {
-                D.stopPropagation(), l(n);
+              onClick: (A) => {
+                A.stopPropagation(), l(n);
               },
               style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" },
-              children: /* @__PURE__ */ e.jsx(E.Close, {})
+              children: /* @__PURE__ */ e.jsx(F.Close, {})
             }
           )
         ] }),
         /* @__PURE__ */ e.jsx(
-          jr,
+          mr,
           {
             item: t,
             idx: n,
             setValConfigs: x,
             theme: f,
             valueSelectStyle: s,
-            colFields: b,
+            colFields: h,
             fixedSparklineValueKeySet: W,
             showNotification: P
           }
         ),
-        y && y.zone === F && y.idx === n + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, bottom: -2 } })
+        y && y.zone === E && y.idx === n + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...j.dropLine, bottom: -2 } })
       ]
     }
   );
 }
-const Dn = {
+const zn = {
   self_reference: "Formula references itself (server)",
   circular_reference: "Circular dependency with another formula (server)",
   expression_error: "Expression could not be evaluated (server)",
   missing_reference: "Unknown field reference (server)"
 };
-function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: j = [], availableRawFields: y = [], serverError: F = null }) {
-  const s = u.useRef(null), [b, W] = u.useState({
+function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: j = [], availableRawFields: y = [], serverError: E = null }) {
+  const s = c.useRef(null), [h, W] = c.useState({
     label: t.label || "",
     formula: t.formula || "",
     formulaRef: J(t),
-    formulaScope: He(t.formulaScope)
-  }), P = u.useRef(t);
-  P.current = t, u.useEffect(() => {
+    formulaScope: Ue(t.formulaScope)
+  }), P = c.useRef(t);
+  P.current = t, c.useEffect(() => {
     const g = P.current;
     W({
       label: g.label || "",
       formula: g.formula || "",
       formulaRef: J(g),
-      formulaScope: He(g.formulaScope)
+      formulaScope: Ue(g.formulaScope)
     });
-  }, [t.field]), u.useEffect(() => {
+  }, [t.field]), c.useEffect(() => {
     if (!s.current) return;
     s.current.focus();
     const g = s.current.value.length;
     s.current.setSelectionRange(g, g);
   }, [t.field]);
-  const M = u.useMemo(
+  const M = c.useMemo(
     () => i.filter(
       /** @param {any} [config] @returns {any} */
       (g) => g && g.field
     ),
     [i]
-  ), $ = u.useMemo(
+  ), $ = c.useMemo(
     () => M.filter(
       /** @param {any} [config] @returns {any} */
       (g) => g.agg !== "formula"
     ),
     [M]
-  ), h = u.useMemo(
+  ), b = c.useMemo(
     () => M.filter(
       /** @param {any} [config] @returns {any} */
       (g) => g.agg === "formula" && g.field !== t.field
     ),
     [t.field, M]
-  ), C = u.useMemo(
+  ), C = c.useMemo(
     () => (Array.isArray(j) ? j : []).filter((g) => g && g.id && g.id !== t.field),
     [j, t.field]
-  ), D = u.useMemo(
+  ), A = c.useMemo(
     () => {
       const g = new Set(M.map(
         /** @param {any} [c] @returns {any} */
@@ -2120,34 +2120,34 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
       return (Array.isArray(y) ? y : []).filter((z) => !g.has(z));
     },
     [y, M]
-  ), I = u.useMemo(
-    () => jn(
-      b.formula,
+  ), I = c.useMemo(
+    () => Cn(
+      h.formula,
       M,
       t.field,
-      b.formulaRef,
-      b.formulaScope,
+      h.formulaRef,
+      h.formulaScope,
       C,
-      D
+      A
     ),
-    [C, b.formula, b.formulaRef, b.formulaScope, t.field, M, D]
-  ), N = u.useMemo(
-    () => Cn(l, I.tone),
+    [C, h.formula, h.formulaRef, h.formulaScope, t.field, M, A]
+  ), N = c.useMemo(
+    () => Dn(l, I.tone),
     [I.tone, l]
-  ), R = u.useMemo(
-    () => ze(b.formulaScope) ? wn(C) : kn($),
-    [C, b.formulaScope, $]
-  ), O = u.useMemo(
-    () => ze(b.formulaScope) ? ar(C) || "[column_id] - [other_column_id]" : Dt($) || `${Fe(b.formulaRef || t.field)} * 100`,
-    [C, b.formulaRef, b.formulaScope, t.field, $]
-  ), a = b.label !== (t.label || "") || b.formula !== (t.formula || "") || b.formulaRef !== J(t) || b.formulaScope !== He(t.formulaScope), k = u.useCallback(() => {
-    const g = Me(b.formulaRef, t.field);
+  ), R = c.useMemo(
+    () => Fe(h.formulaScope) ? An(C) : Rn($),
+    [C, h.formulaScope, $]
+  ), O = c.useMemo(
+    () => Fe(h.formulaScope) ? or(C) || "[column_id] - [other_column_id]" : Dt($) || `${Ee(h.formulaRef || t.field)} * 100`,
+    [C, h.formulaRef, h.formulaScope, t.field, $]
+  ), a = h.label !== (t.label || "") || h.formula !== (t.formula || "") || h.formulaRef !== J(t) || h.formulaScope !== Ue(t.formulaScope), k = c.useCallback(() => {
+    const g = _e(h.formulaRef, t.field);
     o(
       /** @param {any} [prev] @returns {any} */
       (z) => {
-        const V = [...z], A = V[n];
-        if (!A) return z;
-        const H = J(A);
+        const V = [...z], D = V[n];
+        if (!D) return z;
+        const H = J(D);
         let Z = g;
         const Q = new Set(
           V.filter((U, ee) => U && ee !== n).map((U) => U.agg === "formula" ? J(U) : U.field).filter(Boolean).map((U) => String(U).toLowerCase())
@@ -2159,43 +2159,43 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
           Z = ee;
         }
         if (V[n] = {
-          ...A,
-          label: b.label,
-          formula: b.formula,
+          ...D,
+          label: h.label,
+          formula: h.formula,
           formulaRef: Z,
-          formulaScope: b.formulaScope
+          formulaScope: h.formulaScope
         }, H && H !== Z)
           for (let U = 0; U < V.length; U += 1) {
             if (U === n) continue;
             const ee = V[U];
             !ee || ee.agg !== "formula" || !ee.formula || (V[U] = {
               ...ee,
-              formula: hn(ee.formula, H, Z)
+              formula: Sn(ee.formula, H, Z)
             });
           }
         return V;
       }
     );
-  }, [b.formula, b.formulaRef, b.formulaScope, b.label, n, t.field, o]), w = u.useCallback(() => {
+  }, [h.formula, h.formulaRef, h.formulaScope, h.label, n, t.field, o]), w = c.useCallback(() => {
     W({
       label: t.label || "",
       formula: t.formula || "",
       formulaRef: J(t),
-      formulaScope: He(t.formulaScope)
+      formulaScope: Ue(t.formulaScope)
     }), x();
-  }, [t.field, t.formula, t.formulaRef, t.formulaScope, t.label, x]), B = u.useCallback((g) => {
+  }, [t.field, t.formula, t.formulaRef, t.formulaScope, t.label, x]), B = c.useCallback((g) => {
     const z = s.current;
     if (!z) return;
-    const V = b.formula || "", A = z.selectionStart ?? V.length, H = z.selectionEnd ?? V.length, Z = `${V.slice(0, A)}${g}${V.slice(H)}`;
+    const V = h.formula || "", D = z.selectionStart ?? V.length, H = z.selectionEnd ?? V.length, Z = `${V.slice(0, D)}${g}${V.slice(H)}`;
     W(
       /** @param {any} [prev] @returns {any} */
       (U) => ({ ...U, formula: Z })
     );
-    const Q = A + g.length;
+    const Q = D + g.length;
     setTimeout(() => {
       s.current && (s.current.focus(), s.current.setSelectionRange(Q, Q));
     }, 0);
-  }, [b.formula]), _ = u.useCallback(() => {
+  }, [h.formula]), _ = c.useCallback(() => {
     k(), x();
   }, [k, x]), Y = {
     border: `1px solid ${l.border}`,
@@ -2279,7 +2279,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                 /* @__PURE__ */ e.jsx(
                   "input",
                   {
-                    value: b.label,
+                    value: h.label,
                     onChange: (g) => W(
                       /** @param {any} [prev] @returns {any} */
                       (z) => ({ ...z, label: g.target.value })
@@ -2303,10 +2303,10 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                 /* @__PURE__ */ e.jsx(
                   "input",
                   {
-                    value: b.formulaRef,
+                    value: h.formulaRef,
                     onChange: (g) => W(
                       /** @param {any} [prev] @returns {any} */
-                      (z) => ({ ...z, formulaRef: Me(g.target.value, t.field) })
+                      (z) => ({ ...z, formulaRef: _e(g.target.value, t.field) })
                     ),
                     placeholder: "formula1",
                     style: {
@@ -2329,15 +2329,15 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                   {
                     size: "sm",
                     "aria-label": "Formula type",
-                    value: b.formulaScope,
+                    value: h.formulaScope,
                     onChange: (g) => {
-                      const z = He(g.target.value);
+                      const z = Ue(g.target.value);
                       W(
                         /** @param {any} [prev] @returns {any} */
                         (V) => ({
                           ...V,
                           formulaScope: z,
-                          formula: V.formula || (z === "columns" ? ar(C) : Dt($))
+                          formula: V.formula || (z === "columns" ? or(C) : Dt($))
                         })
                       );
                     },
@@ -2365,7 +2365,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                 "textarea",
                 {
                   ref: s,
-                  value: b.formula,
+                  value: h.formula,
                   onChange: (g) => W(
                     /** @param {any} [prev] @returns {any} */
                     (z) => ({ ...z, formula: g.target.value })
@@ -2431,7 +2431,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
               ))
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr", gap: "12px", marginBottom: "14px" }, children: [
-              ze(b.formulaScope) ? /* @__PURE__ */ e.jsxs("div", { children: [
+              Fe(h.formulaScope) ? /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Rendered Columns" }),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: [
                   C.map(
@@ -2460,7 +2460,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                     {
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
-                      onClick: () => B(Fe(g.field)),
+                      onClick: () => B(Ee(g.field)),
                       style: Y,
                       title: `Insert ${g.field}`,
                       children: g.field
@@ -2469,16 +2469,16 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                   )
                 ) })
               ] }),
-              !ze(b.formulaScope) && h.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
+              !Fe(h.formulaScope) && b.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Formula References" }),
-                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: h.map(
+                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: b.map(
                   /** @param {any} [config] @returns {any} */
                   (g) => /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
-                      onClick: () => B(Fe(J(g))),
+                      onClick: () => B(Ee(J(g))),
                       style: Y,
                       title: `${J(g)}${g.label ? ` (${g.label})` : ""}`,
                       children: J(g)
@@ -2487,16 +2487,16 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
                   )
                 ) })
               ] }),
-              !ze(b.formulaScope) && D.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
+              !Fe(h.formulaScope) && A.length > 0 && /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: l.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }, children: "Data Fields (auto-aggregated as sum)" }),
-                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: D.map(
+                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: A.map(
                   /** @param {any} [f] @returns {any} */
                   (g) => /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
                       onMouseDown: (z) => z.preventDefault(),
-                      onClick: () => B(Fe(g)),
+                      onClick: () => B(Ee(g)),
                       style: { ...Y, borderColor: `${l.primary}66`, color: l.primary, background: `${l.primary}0d` },
                       title: `Insert: ${g}`,
                       children: ke(g)
@@ -2574,7 +2574,7 @@ function An({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
     }
   );
 }
-function dr({
+function En({
   panelId: t,
   panelLabel: n,
   size: i,
@@ -2584,29 +2584,29 @@ function dr({
   theme: f,
   outerStyle: j = {},
   contentStyle: y = {},
-  children: F
+  children: E
 }) {
-  const s = u.useRef(null), b = u.useRef(null), W = u.useRef(null), P = u.useRef(null), M = u.useRef(null), $ = u.useRef(null), h = u.useRef(null), [C, D] = u.useState(null), [I, N] = u.useState(null), R = u.useMemo(() => Qr(t), [t]), O = u.useMemo(
-    () => Jt(t, i),
+  const s = c.useRef(null), h = c.useRef(null), W = c.useRef(null), P = c.useRef(null), M = c.useRef(null), $ = c.useRef(null), b = c.useRef(null), [C, A] = c.useState(null), [I, N] = c.useState(null), R = c.useMemo(() => rn(t), [t]), O = c.useMemo(
+    () => Xt(t, i),
     [t, i]
-  ), a = u.useRef(O);
+  ), a = c.useRef(O);
   a.current = O;
-  const k = u.useMemo(() => C ? Jt(t, {
+  const k = c.useMemo(() => C ? Xt(t, {
     width: C.width !== void 0 ? C.width : O.width,
     height: C.height !== void 0 ? C.height : O.height
-  }) : O, [C, t, O]), w = u.useCallback((L = !0) => {
-    if (b.current) {
-      const g = b.current;
-      b.current = null, g(L);
+  }) : O, [C, t, O]), w = c.useCallback((L = !0) => {
+    if (h.current) {
+      const g = h.current;
+      h.current = null, g(L);
     }
   }, []);
-  u.useEffect(() => (() => w(!1)), [w]);
-  const B = u.useCallback((L, g) => {
+  c.useEffect(() => (() => w(!1)), [w]);
+  const B = c.useCallback((L, g) => {
     if (!s.current || typeof o != "function") return;
     L.preventDefault(), L.stopPropagation(), w(!1);
-    const z = s.current.getBoundingClientRect(), V = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, A = typeof l == "function" ? Number(l()) : NaN, H = Number.isFinite(A) ? Math.max(200, Math.min(600, Math.round(A))) : null, Z = H !== null ? Math.max(0, Math.round(H - V.width)) : 0, Q = typeof x == "function" && H !== null;
-    H !== null && (a.current.width === null || $.current === null) && ($.current = H, h.current = Z);
-    const U = H !== null ? $.current !== null ? Math.min(H, $.current) : H : null, ee = h.current !== null ? h.current : Z, $t = Q ? Math.max(R.minWidth, Math.min(R.maxWidth, 600 - ee)) : Math.max(R.minWidth, Math.min(R.maxWidth, Math.floor(V.width))), le = {
+    const z = s.current.getBoundingClientRect(), V = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, D = typeof l == "function" ? Number(l()) : NaN, H = Number.isFinite(D) ? Math.max(200, Math.min(600, Math.round(D))) : null, Z = H !== null ? Math.max(0, Math.round(H - V.width)) : 0, Q = typeof x == "function" && H !== null;
+    H !== null && (a.current.width === null || $.current === null) && ($.current = H, b.current = Z);
+    const U = H !== null ? $.current !== null ? Math.min(H, $.current) : H : null, ee = b.current !== null ? b.current : Z, zt = Q ? Math.max(R.minWidth, Math.min(R.maxWidth, 600 - ee)) : Math.max(R.minWidth, Math.min(R.maxWidth, Math.floor(V.width))), le = {
       startX: L.clientX,
       startY: L.clientY,
       startWidth: z.width,
@@ -2616,35 +2616,35 @@ function dr({
       baseSidebarWidth: U,
       chromeWidth: ee,
       canExpandSidebar: Q,
-      maxWidth: $t,
+      maxWidth: zt,
       initialWidthProp: a.current.width
-    }, we = document.body.style.cursor, _e = document.body.style.userSelect;
+    }, we = document.body.style.cursor, We = document.body.style.userSelect;
     document.body.style.cursor = g === "both" ? "nwse-resize" : g === "width" ? "ew-resize" : "ns-resize", document.body.style.userSelect = "none", P.current = null, M.current = null, N(g);
     const Ce = () => {
-      W.current = null, P.current && D(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
-    }, fe = (ge) => {
-      const ye = ge.clientX - le.startX, ve = ge.clientY - le.startY, Ue = {};
-      if (g === "width" || g === "both" && (le.initialWidthProp !== null || Math.abs(ye) >= 3)) {
-        const Se = Math.max(R.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ye)));
-        if (Ue.width = Se, s.current && (s.current.style.width = `${Se}px`), le.canExpandSidebar) {
-          const ut = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, pt = Math.max(
-            ut,
-            Math.min(600, Se + le.chromeWidth)
+      W.current = null, P.current && A(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
+    }, fe = (Ae) => {
+      const ge = Ae.clientX - le.startX, me = Ae.clientY - le.startY, Ve = {};
+      if (g === "width" || g === "both" && (le.initialWidthProp !== null || Math.abs(ge) >= 3)) {
+        const ve = Math.max(R.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ge)));
+        if (Ve.width = ve, s.current && (s.current.style.width = `${ve}px`), le.canExpandSidebar) {
+          const pt = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, ut = Math.max(
+            pt,
+            Math.min(600, ve + le.chromeWidth)
           );
-          M.current = pt;
+          M.current = ut;
         }
       }
       if (g === "height" || g === "both") {
-        const Se = Math.max(R.minHeight, Math.min(R.maxHeight, Math.round(le.startHeight + ve)));
-        Ue.height = Se, s.current && (s.current.style.height = `${Se}px`);
+        const ve = Math.max(R.minHeight, Math.min(R.maxHeight, Math.round(le.startHeight + me)));
+        Ve.height = ve, s.current && (s.current.style.height = `${ve}px`);
       }
-      Object.keys(Ue).length !== 0 && (P.current = Ue, typeof window < "u" && typeof window.requestAnimationFrame == "function" ? W.current === null && (W.current = window.requestAnimationFrame(Ce)) : Ce());
-    }, Re = (ge = !0) => {
-      W.current !== null && typeof window < "u" && typeof window.cancelAnimationFrame == "function" && (window.cancelAnimationFrame(W.current), W.current = null), document.body.style.cursor = we, document.body.style.userSelect = _e, window.removeEventListener("mousemove", fe), window.removeEventListener("mouseup", ce), window.removeEventListener("blur", ce);
-      const ye = P.current, ve = M.current;
-      P.current = null, M.current = null, N(null), D(null), ge ? (ve !== null && typeof x == "function" && x(ve), ye && o(t, ye)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
+      Object.keys(Ve).length !== 0 && (P.current = Ve, typeof window < "u" && typeof window.requestAnimationFrame == "function" ? W.current === null && (W.current = window.requestAnimationFrame(Ce)) : Ce());
+    }, Re = (Ae = !0) => {
+      W.current !== null && typeof window < "u" && typeof window.cancelAnimationFrame == "function" && (window.cancelAnimationFrame(W.current), W.current = null), document.body.style.cursor = we, document.body.style.userSelect = We, window.removeEventListener("mousemove", fe), window.removeEventListener("mouseup", ce), window.removeEventListener("blur", ce);
+      const ge = P.current, me = M.current;
+      P.current = null, M.current = null, N(null), A(null), Ae ? (me !== null && typeof x == "function" && x(me), ge && o(t, ge)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
     }, ce = () => w(!0);
-    b.current = Re, window.addEventListener("mousemove", fe), window.addEventListener("mouseup", ce), window.addEventListener("blur", ce);
+    h.current = Re, window.addEventListener("mousemove", fe), window.addEventListener("mouseup", ce), window.addEventListener("blur", ce);
   }, [
     l,
     R.maxHeight,
@@ -2655,8 +2655,8 @@ function dr({
     o,
     t,
     w
-  ]), _ = u.useCallback((L, g) => {
-    g && (g.preventDefault(), g.stopPropagation()), w(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, h.current = null)));
+  ]), _ = c.useCallback((L, g) => {
+    g && (g.preventDefault(), g.stopPropagation()), w(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)));
   }, [x, o, t, w]), Y = `${f.primary}55`;
   return /* @__PURE__ */ e.jsxs(
     "div",
@@ -2685,7 +2685,7 @@ function dr({
               boxSizing: "border-box",
               ...y
             },
-            children: F
+            children: E
           }
         ),
         /* @__PURE__ */ e.jsx(
@@ -2781,13 +2781,13 @@ function dr({
     }
   );
 }
-function cr({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, regularValueCount: l }) {
-  const x = u.useMemo(() => Je(t), [t]), f = u.useCallback((y) => {
+function ar({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, regularValueCount: l }) {
+  const x = c.useMemo(() => Je(t), [t]), f = c.useCallback((y) => {
     typeof n == "function" && n(
       /** @param {any} [previous] @returns {any} */
-      (F) => ({
-        ...Je(F),
-        ...typeof y == "function" ? y(Je(F)) : y
+      (E) => ({
+        ...Je(E),
+        ...typeof y == "function" ? y(Je(E)) : y
       })
     );
   }, [n]), j = {
@@ -2870,7 +2870,21 @@ function cr({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, 
     ] })
   ] });
 }
-const En = u.memo(
+const vr = "serverside-pivot:sidebar:modeling-open";
+function Mn() {
+  try {
+    return typeof window < "u" && window.localStorage ? window.localStorage.getItem(vr) === "true" : !1;
+  } catch {
+    return !1;
+  }
+}
+function _n(t) {
+  try {
+    typeof window < "u" && window.localStorage && window.localStorage.setItem(vr, t ? "true" : "false");
+  } catch {
+  }
+}
+const Bn = c.memo(
   /** @param {any} p0 @returns {any} */
   function({
     sidebarTab: n,
@@ -2881,16 +2895,16 @@ const En = u.memo(
     setColFields: f,
     valConfigs: j,
     setValConfigs: y,
-    measureAxis: F = {},
+    measureAxis: E = {},
     setMeasureAxis: s = null,
-    columnVisibility: b,
+    columnVisibility: h,
     setColumnVisibility: W,
     columnPinning: P,
     setColumnPinning: M,
     availableFields: $,
-    table: h,
+    table: b,
     pinningPresets: C,
-    showNotification: D,
+    showNotification: A,
     filterAnchorEl: I,
     setFilterAnchorEl: N,
     colSearch: R,
@@ -2905,153 +2919,161 @@ const En = u.memo(
     onDrop: g,
     onDragEnd: z,
     onKeyboardFieldDrop: V,
-    handleHeaderFilter: A,
+    handleHeaderFilter: D,
     handleFilterClick: H,
     requestFilterOptions: Z,
     handleExpandAllRows: Q,
     handlePinColumn: U,
     toggleAllColumnsPinned: ee,
-    activeFilterCol: $t,
+    activeFilterCol: zt,
     closeFilterPopover: le,
     filterOptions: we,
-    filterOptionMeta: _e = {},
+    filterOptionMeta: We = {},
     clientFilterOptionMap: Ce = {},
     data: fe,
     sidebarWidth: Re,
     setSidebarWidth: ce,
-    fieldPanelSizes: ge,
-    setFieldPanelSizes: ye,
-    fixedSparklineValueKeys: ve = [],
-    sparklineFields: Ue = null,
-    displayedColumnOptions: Se = [],
-    reportEditorSelection: ut = null,
-    showReportConfigColumn: pt = !0,
-    setShowReportConfigColumn: kr = null,
-    formulaErrors: We = {},
+    fieldPanelSizes: Ae,
+    setFieldPanelSizes: ge,
+    fixedSparklineValueKeys: me = [],
+    sparklineFields: Ve = null,
+    displayedColumnOptions: ve = [],
+    reportEditorSelection: pt = null,
+    showReportConfigColumn: ut = !0,
+    setShowReportConfigColumn: Sr = null,
+    formulaErrors: Ie = {},
     serverSide: Qe = !1
   }) {
-    Kr("SidebarPanel");
-    const { theme: d, styles: G } = Yr(), {
-      filters: ue,
+    Gr("SidebarPanel");
+    const { theme: d, styles: G } = Xr(), {
+      filters: pe,
       setFilters: xt,
-      pivotMode: wr,
-      reportDef: Cr,
-      setReportDef: Rr,
-      savedReports: Dr,
-      setSavedReports: Ar,
-      activeReportId: $r,
-      setActiveReportId: zr,
-      customDimensions: Ve,
-      setCustomDimensions: zt
-    } = Zr(), [et, Ft] = u.useState({ columnId: null, anchorEl: null }), [Ie, Te] = u.useState(null), [be, De] = u.useState(null), [Ae, ft] = u.useState("report"), tt = u.useRef(null), [Fr, rt] = u.useState(null), pe = u.useRef(null), Et = u.useRef(0), Ke = u.useRef(null), he = u.useRef(null), [q, gt] = u.useState(null), [yt, Mt] = u.useState(""), bt = u.useMemo(
-      () => new Set(Array.isArray(ve) ? ve : []),
-      [ve]
-    ), te = u.useCallback(
-      (r) => Gr(r, Ve),
-      [Ve]
-    ), _t = u.useMemo(
-      () => Je(F),
-      [F]
-    ), je = _t.labelField || "Measure Name", Be = u.useMemo(
+      pivotMode: jr,
+      reportDef: kr,
+      setReportDef: wr,
+      savedReports: Cr,
+      setSavedReports: Rr,
+      activeReportId: Ar,
+      setActiveReportId: Dr,
+      customDimensions: Se,
+      setCustomDimensions: Ft
+    } = qr(), [et, Et] = c.useState({ columnId: null, anchorEl: null }), [Te, Be] = c.useState(null), [ye, De] = c.useState(null), [$e, ft] = c.useState("report"), tt = c.useRef(null), [$r, rt] = c.useState(null), ue = c.useRef(null), Mt = c.useRef(0), Ke = c.useRef(null), he = c.useRef(null), [q, gt] = c.useState(null), [yt, _t] = c.useState(""), [ht, zr] = c.useState(() => Mn()), Fr = c.useCallback(() => {
+      zr(
+        /** @param {boolean} previous */
+        (r) => {
+          const u = !r;
+          return _n(u), u;
+        }
+      );
+    }, []), bt = c.useMemo(
+      () => new Set(Array.isArray(me) ? me : []),
+      [me]
+    ), te = c.useCallback(
+      (r) => Jr(r, Se),
+      [Se]
+    ), Wt = c.useMemo(
+      () => Je(E),
+      [E]
+    ), je = Wt.labelField || "Measure Name", Le = c.useMemo(
       () => ($ || []).filter(
         /** @param {any} [field] @returns {any} */
         (r) => r
       ),
       [$]
-    ), re = u.useMemo(
-      () => Be.filter(
+    ), re = c.useMemo(
+      () => Le.filter(
         /** @param {any} [field] @returns {any} */
-        (r) => r && !ur(r)
+        (r) => r && !sr(r)
       ),
-      [Be]
-    ), Ye = Array.isArray(j) && j.length > 0 && je && !Be.includes(je), Le = u.useMemo(
-      () => Ye ? [je, ...Be] : Be,
-      [Be, je, Ye]
-    ), Ze = yt.trim().toLowerCase(), nt = u.useCallback((r) => {
+      [Le]
+    ), Ye = Array.isArray(j) && j.length > 0 && je && !Le.includes(je), Pe = c.useMemo(
+      () => Ye ? [je, ...Le] : Le,
+      [Le, je, Ye]
+    ), Ze = yt.trim().toLowerCase(), nt = c.useCallback((r) => {
       if (!Ze) return !0;
-      const p = Ye && r === je ? "measure name measure names metric metrics value values" : "";
-      return String(r || "").toLowerCase().includes(Ze) || String(te(r) || "").toLowerCase().includes(Ze) || p.includes(Ze);
-    }, [te, je, Ze, Ye]), ht = u.useMemo(
-      () => Le.length > 8 ? Le.filter(nt) : Le,
-      [Le, nt]
-    ), mt = u.useMemo(
+      const u = Ye && r === je ? "measure name measure names metric metrics value values" : "";
+      return String(r || "").toLowerCase().includes(Ze) || String(te(r) || "").toLowerCase().includes(Ze) || u.includes(Ze);
+    }, [te, je, Ze, Ye]), mt = c.useMemo(
+      () => Pe.length > 8 ? Pe.filter(nt) : Pe,
+      [Pe, nt]
+    ), vt = c.useMemo(
       () => re.length > 8 ? re.filter(nt) : re,
       [re, nt]
-    ), Wt = u.useCallback((r) => {
+    ), It = c.useCallback((r) => {
       l(
         /** @param {any} [prev] @returns {any} */
-        (p) => (p || []).filter(
+        (u) => (u || []).filter(
           /** @param {any} [item] @returns {any} */
-          (c) => c !== r
+          (p) => p !== r
         )
       ), f(
         /** @param {any} [prev] @returns {any} */
-        (p) => (p || []).filter(
+        (u) => (u || []).filter(
           /** @param {any} [item] @returns {any} */
-          (c) => c !== r
+          (p) => p !== r
         )
       ), y(
         /** @param {any} [prev] @returns {any} */
-        (p) => (p || []).filter(
+        (u) => (u || []).filter(
           /** @param {any} [item] @returns {any} */
-          (c) => !(c && c.field === r)
+          (p) => !(p && p.field === r)
         )
       ), xt(
         /** @param {any} [prev] @returns {any} */
-        (p) => {
-          if (!p || !Object.prototype.hasOwnProperty.call(p, r)) return p;
-          const c = { ...p };
-          return delete c[r], c;
+        (u) => {
+          if (!u || !Object.prototype.hasOwnProperty.call(u, r)) return u;
+          const p = { ...u };
+          return delete p[r], p;
         }
       );
-    }, [f, xt, l, y]), Er = u.useCallback((r) => {
-      const p = pe.current;
-      if (!p) return;
-      const c = 60, m = 12, v = p.getBoundingClientRect(), T = r.clientY, X = T - v.top, S = v.bottom - T;
+    }, [f, xt, l, y]), Er = c.useCallback((r) => {
+      const u = ue.current;
+      if (!u) return;
+      const p = 60, m = 12, v = u.getBoundingClientRect(), T = r.clientY, X = T - v.top, S = v.bottom - T;
       let K = 0;
-      if (X < c && X >= 0 ? K = -1 : S < c && S >= 0 && (K = 1), K === 0) {
+      if (X < p && X >= 0 ? K = -1 : S < p && S >= 0 && (K = 1), K === 0) {
         he.current && (cancelAnimationFrame(he.current), he.current = null);
         return;
       }
       const oe = () => {
-        pe.current && (pe.current.scrollTop += K * m, he.current = requestAnimationFrame(oe));
+        ue.current && (ue.current.scrollTop += K * m, he.current = requestAnimationFrame(oe));
       };
       he.current || (he.current = requestAnimationFrame(oe));
-    }, []), It = u.useCallback(() => {
+    }, []), Tt = c.useCallback(() => {
       he.current && (cancelAnimationFrame(he.current), he.current = null);
-    }, []), xe = u.useMemo(
+    }, []), xe = c.useMemo(
       () => j.filter(
         /** @param {any} [config] @returns {any} */
         (r) => r && r.agg === "formula"
       ),
       [j]
-    ), $e = u.useMemo(
+    ), ze = c.useMemo(
       () => xe.length,
       [xe]
-    ), Pe = u.useMemo(
+    ), Oe = c.useMemo(
       () => j.filter(
         /** @param {any} [config] @returns {any} */
         (r) => r && r.agg !== "formula"
       ).length,
       [j]
-    ), Mr = u.useMemo(() => [
-      { id: "rows", label: "Rows", icon: /* @__PURE__ */ e.jsx(E.List, {}) },
-      { id: "cols", label: "Columns", icon: /* @__PURE__ */ e.jsx(E.Columns, {}) },
-      { id: "vals", label: "Values", icon: /* @__PURE__ */ e.jsx(E.Sigma, {}) },
-      { id: "filter", label: "Filters", icon: /* @__PURE__ */ e.jsx(E.Filter, {}) }
-    ], []), Ge = u.useMemo(() => ({
-      filter: Object.keys(ue || {}).filter((r) => r !== "global"),
+    ), Mr = c.useMemo(() => [
+      { id: "rows", label: "Rows", icon: /* @__PURE__ */ e.jsx(F.List, {}) },
+      { id: "cols", label: "Columns", icon: /* @__PURE__ */ e.jsx(F.Columns, {}) },
+      { id: "vals", label: "Values", icon: /* @__PURE__ */ e.jsx(F.Sigma, {}) },
+      { id: "filter", label: "Filters", icon: /* @__PURE__ */ e.jsx(F.Filter, {}) }
+    ], []), Ge = c.useMemo(() => ({
+      filter: Object.keys(pe || {}).filter((r) => r !== "global"),
       rows: o || [],
       cols: x || [],
       vals: j || []
-    }), [x, ue, o, j]), lt = u.useCallback(() => {
-      q && D && D("Keyboard move cancelled.", "info"), gt(null);
-    }, [q, D]), Tt = u.useCallback((r, p, c, m) => {
+    }), [x, pe, o, j]), lt = c.useCallback(() => {
+      q && A && A("Keyboard move cancelled.", "info"), gt(null);
+    }, [q, A]), Bt = c.useCallback((r, u, p, m) => {
       if (typeof V != "function") return;
-      gt({ field: r, zone: p, idx: c, label: m }), D && D(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
-    }, [V, D]), ot = u.useCallback((r, p = null) => {
+      gt({ field: r, zone: u, idx: p, label: m }), A && A(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
+    }, [V, A]), ot = c.useCallback((r, u = null) => {
       if (!q || typeof V != "function") return !1;
-      const c = Ge[r] || [], m = Number(p), v = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), c.length)) : c.length, T = V({
+      const p = Ge[r] || [], m = Number(u), v = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), p.length)) : p.length, T = V({
         field: q.field,
         srcZone: q.zone,
         srcIdx: q.idx,
@@ -3059,27 +3081,27 @@ const En = u.memo(
         targetIdx: v,
         source: "layout:keyboard-drop"
       });
-      return T !== !1 && (D && D(`Moved ${q.label}.`, "success"), gt(null)), T !== !1;
-    }, [q, V, D, Ge]), Bt = u.useCallback((r, p, c, m, v) => {
-      if (!ir(r.target)) {
+      return T !== !1 && (A && A(`Moved ${q.label}.`, "success"), gt(null)), T !== !1;
+    }, [q, V, A, Ge]), Lt = c.useCallback((r, u, p, m, v) => {
+      if (!lr(r.target)) {
         if (r.key === "Escape") {
           r.preventDefault(), r.stopPropagation(), lt();
           return;
         }
-        r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), q ? ot(c, m) : Tt(p, c, m, v));
+        r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), q ? ot(p, m) : Bt(u, p, m, v));
       }
-    }, [lt, ot, q, Tt]), _r = u.useCallback((r, p) => {
-      if (!ir(r.target)) {
+    }, [lt, ot, q, Bt]), _r = c.useCallback((r, u) => {
+      if (!lr(r.target)) {
         if (r.key === "Escape") {
           r.preventDefault(), r.stopPropagation(), lt();
           return;
         }
-        !q || r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), ot(p, (Ge[p] || []).length));
+        !q || r.key !== "Enter" && r.key !== " " || (r.preventDefault(), r.stopPropagation(), ot(u, (Ge[u] || []).length));
       }
-    }, [lt, ot, q, Ge]), Wr = u.useCallback((r) => {
+    }, [lt, ot, q, Ge]), Wr = c.useCallback((r) => {
       r.preventDefault();
-      const p = r.clientX, c = Re || 288;
-      Ke.current = { startX: p, startWidth: c };
+      const u = r.clientX, p = Re || 288;
+      Ke.current = { startX: u, startWidth: p };
       const m = document.body.style.cursor, v = document.body.style.userSelect;
       document.body.style.cursor = "col-resize", document.body.style.userSelect = "none";
       const T = (S) => {
@@ -3090,38 +3112,38 @@ const En = u.memo(
         Ke.current = null, document.body.style.cursor = m, document.body.style.userSelect = v, window.removeEventListener("mousemove", T), window.removeEventListener("mouseup", X), window.removeEventListener("blur", X);
       };
       window.addEventListener("mousemove", T), window.addEventListener("mouseup", X), window.addEventListener("blur", X);
-    }, [Re, ce]), Lt = u.useCallback(() => pe.current ? pe.current.getBoundingClientRect().width : Re || 288, [Re]), Pt = u.useCallback((r) => {
+    }, [Re, ce]), Ir = c.useCallback(() => ue.current ? ue.current.getBoundingClientRect().width : Re || 288, [Re]), Tr = c.useCallback((r) => {
       if (typeof ce != "function") return;
-      const p = Math.max(200, Math.min(600, Math.round(r)));
+      const u = Math.max(200, Math.min(600, Math.round(r)));
       ce(
         /** @param {any} [prev] @returns {any} */
-        (c) => c === p ? c : p
+        (p) => p === u ? p : u
       );
-    }, [ce]), Ot = u.useCallback((r, p) => {
-      typeof ye == "function" && ye(
+    }, [ce]), Br = c.useCallback((r, u) => {
+      typeof ge == "function" && ge(
         /** @param {any} [prev] @returns {any} */
-        (c) => {
-          const m = Xr(c, r, p), v = c && c[r] ? c[r] : null, T = m[r];
-          return v && v.width === T.width && v.height === T.height ? c : m;
+        (p) => {
+          const m = Qr(p, r, u), v = p && p[r] ? p[r] : null, T = m[r];
+          return v && v.width === T.width && v.height === T.height ? p : m;
         }
       );
-    }, [ye]), Nt = G.dropZone && G.dropZone.padding || "8px", Ht = u.useMemo(() => {
+    }, [ge]), Pt = G.dropZone && G.dropZone.padding || "8px", Ot = c.useMemo(() => {
       const r = { ...G.dropZone || {} };
       return delete r.minHeight, delete r.maxHeight, delete r.overflowY, delete r.padding, delete r.border, delete r.boxShadow, r;
-    }, [G.dropZone]), Ut = u.useCallback((r) => {
+    }, [G.dropZone]), Nt = c.useCallback((r) => {
       if (we && we[r]) return we[r];
       if (Ce && Ce[r]) return Ce[r];
-      if (!h || !h.getColumn) return [];
-      if (!h.getColumn(r)) return [];
-      const c = /* @__PURE__ */ new Set();
-      return (h.getCoreRowModel ? h.getCoreRowModel().rows : []).forEach(
+      if (!b || !b.getColumn) return [];
+      if (!b.getColumn(r)) return [];
+      const p = /* @__PURE__ */ new Set();
+      return (b.getCoreRowModel ? b.getCoreRowModel().rows : []).forEach(
         /** @param {any} [row] @returns {any} */
         (v) => {
           const T = v.getValue(r);
-          T != null && T !== "" && c.add(T);
+          T != null && T !== "" && p.add(T);
         }
-      ), Array.from(c).sort((v, T) => String(v).localeCompare(String(T), void 0, { numeric: !0, sensitivity: "base" }));
-    }, [Ce, we, h]), me = u.useMemo(() => ({
+      ), Array.from(p).sort((v, T) => String(v).localeCompare(String(T), void 0, { numeric: !0, sensitivity: "base" }));
+    }, [Ce, we, b]), be = c.useMemo(() => ({
       border: `1px solid ${d.border}`,
       background: d.headerSubtleBg || d.surfaceInset || d.background,
       color: d.text,
@@ -3132,112 +3154,112 @@ const En = u.memo(
       padding: "1px 4px",
       minHeight: "20px",
       outline: "none"
-    }), [d.background, d.border, d.headerSubtleBg, d.radiusSm, d.surfaceInset, d.text]), Vt = u.useCallback((r, p) => {
+    }), [d.background, d.border, d.headerSubtleBg, d.radiusSm, d.surfaceInset, d.text]), Ht = c.useCallback((r, u) => {
       y(
         /** @param {any} [prev] @returns {any} */
-        (c) => {
-          const m = [...c], v = m[r];
-          if (!v) return c;
-          if (qt(p) && !v.weightField) {
+        (p) => {
+          const m = [...p], v = m[r];
+          if (!v) return p;
+          if (Gt(u) && !v.weightField) {
             const T = Array.isArray(re) && re.length > 0 ? re.find((K) => K !== v.field) || re[0] : "", X = typeof window < "u" ? window.prompt(
               `Weight field for weighted average of ${ke(v.field)}`,
               v.weightField || T || ""
             ) : v.weightField || T || "", S = typeof X == "string" ? X.trim() : "";
-            return S ? Array.isArray(re) && re.length > 0 && !re.includes(S) ? (D && D(`Unknown weight field: ${S}`, "warning"), c) : (m[r] = { ...v, agg: p, weightField: S }, m) : (D && D("Weighted average requires a weight field.", "warning"), c);
+            return S ? Array.isArray(re) && re.length > 0 && !re.includes(S) ? (A && A(`Unknown weight field: ${S}`, "warning"), p) : (m[r] = { ...v, agg: u, weightField: S }, m) : (A && A("Weighted average requires a weight field.", "warning"), p);
           }
-          return m[r] = { ...v, agg: p }, m;
+          return m[r] = { ...v, agg: u }, m;
         }
       );
-    }, [re, y, D]), Ir = u.useCallback((r, p) => {
-      if (!p) {
-        D && D("Weighted average requires a weight field.", "warning");
+    }, [re, y, A]), Lr = c.useCallback((r, u) => {
+      if (!u) {
+        A && A("Weighted average requires a weight field.", "warning");
         return;
       }
       y(
         /** @param {any} [prev] @returns {any} */
-        (c) => {
-          const m = [...c], v = m[r];
-          return v ? (m[r] = { ...v, weightField: p }, m) : c;
+        (p) => {
+          const m = [...p], v = m[r];
+          return v ? (m[r] = { ...v, weightField: u }, m) : p;
         }
       );
-    }, [y, D]), Tr = u.useCallback((r, p) => {
+    }, [y, A]), Pr = c.useCallback((r, u) => {
       y(
         /** @param {any} [prev] @returns {any} */
-        (c) => {
-          const m = [...c], v = m[r];
+        (p) => {
+          const m = [...p], v = m[r];
           return v ? (m[r] = {
             ...v,
-            windowFn: p === "none" ? null : p
-          }, m) : c;
+            windowFn: u === "none" ? null : u
+          }, m) : p;
         }
       );
-    }, [y]), Kt = u.useCallback(() => {
-      const r = Sn(j), p = j.filter(
+    }, [y]), Ut = c.useCallback(() => {
+      const r = wn(j), u = j.filter(
         /** @param {any} [config] @returns {any} */
         (T) => T && T.agg !== "formula"
-      ), c = `Formula ${$e + 1}`, m = Dt(p), v = bn(c, j, r);
-      Te(r), De(r), y(
+      ), p = `Formula ${ze + 1}`, m = Dt(u), v = vn(p, j, r);
+      Be(r), De(r), y(
         /** @param {any} [prev] @returns {any} */
         (T) => [
           ...T,
           {
             field: r,
             agg: "formula",
-            label: c,
+            label: p,
             formula: m,
             formulaRef: v,
             formulaScope: "measures"
           }
         ]
-      ), D && (p.length === 0 ? D("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : D(`Added ${c}.`, "success"));
-    }, [$e, De, y, Te, D, j]), Br = (r, p) => {
-      r.stopPropagation(), pe.current && (Et.current = pe.current.scrollTop), Ft(
+      ), A && (u.length === 0 ? A("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : A(`Added ${p}.`, "success"));
+    }, [ze, De, y, Be, A, j]), Or = (r, u) => {
+      r.stopPropagation(), ue.current && (Mt.current = ue.current.scrollTop), Et(
         /** @param {any} [prev] @returns {any} */
-        (c) => c.columnId === p ? { columnId: null, anchorEl: null } : { columnId: p, anchorEl: r.currentTarget }
-      ), Z && Z(p);
-    }, Lr = () => Ft({ columnId: null, anchorEl: null });
-    u.useEffect(() => {
-      pe.current && et.columnId && (pe.current.scrollTop = Et.current);
-    }, [we, et.columnId]), u.useEffect(() => {
+        (p) => p.columnId === u ? { columnId: null, anchorEl: null } : { columnId: u, anchorEl: r.currentTarget }
+      ), Z && Z(u);
+    }, Nr = () => Et({ columnId: null, anchorEl: null });
+    c.useEffect(() => {
+      ue.current && et.columnId && (ue.current.scrollTop = Mt.current);
+    }, [we, et.columnId]), c.useEffect(() => {
       if (xe.length === 0) {
-        Ie !== null && Te(null), be !== null && De(null);
+        Te !== null && Be(null), ye !== null && De(null);
         return;
       }
       xe.some(
         /** @param {any} [config] @returns {any} */
-        (p) => p.field === Ie
-      ) || Te(xe[xe.length - 1].field), be && !xe.some(
+        (u) => u.field === Te
+      ) || Be(xe[xe.length - 1].field), ye && !xe.some(
         /** @param {any} [config] @returns {any} */
-        (p) => p.field === be
+        (u) => u.field === ye
       ) && De(null);
-    }, [Ie, xe, be]);
-    const vt = u.useMemo(
+    }, [Te, xe, ye]);
+    const St = c.useMemo(
       () => j.findIndex(
         /** @param {any} [config] @returns {any} */
-        (r) => r && r.agg === "formula" && r.field === be
+        (r) => r && r.agg === "formula" && r.field === ye
       ),
-      [be, j]
-    ), St = vt >= 0 ? j[vt] : null, Yt = u.useCallback((r) => {
-      Te(r), De(r);
-    }, []), Xe = u.useCallback((r) => {
-      const p = j[r] && j[r].agg === "formula" ? j[r].field : null;
+      [ye, j]
+    ), jt = St >= 0 ? j[St] : null, Vt = c.useCallback((r) => {
+      Be(r), De(r);
+    }, []), Xe = c.useCallback((r) => {
+      const u = j[r] && j[r].agg === "formula" ? j[r].field : null;
       if (y(
         /** @param {any} [prev] @returns {any} */
-        (c) => c.filter(
+        (p) => p.filter(
           /** @param {any} [_] @param {any} [index] @returns {any} */
           (m, v) => v !== r
         )
-      ), p && p === Ie) {
-        const c = xe.find(
+      ), u && u === Te) {
+        const p = xe.find(
           /** @param {any} [config] @returns {any} */
-          (m) => m.field !== p
+          (m) => m.field !== u
         );
-        Te(c ? c.field : null);
+        Be(p ? p.field : null);
       }
-      p && p === be && De(null);
-    }, [Ie, xe, be, y, j]), Oe = wr === "report", Zt = Math.max(Re || 288, Oe ? 380 : 0), Gt = (r, p) => {
+      u && u === ye && De(null);
+    }, [Te, xe, ye, y, j]), Ne = jr === "report", Kt = Math.max(Re || 288, Ne ? 380 : 0), Yt = (r, u) => {
       if (r <= 8) return null;
-      const c = yt.trim().length > 0;
+      const p = yt.trim().length > 0;
       return /* @__PURE__ */ e.jsxs("div", { style: {
         display: "flex",
         alignItems: "center",
@@ -3248,7 +3270,7 @@ const En = u.memo(
         borderRadius: d.radiusSm || "8px",
         background: d.headerSubtleBg || d.surfaceInset || d.background
       }, children: [
-        /* @__PURE__ */ e.jsx(E.Search, { style: { flexShrink: 0, color: d.textSec } }),
+        /* @__PURE__ */ e.jsx(F.Search, { style: { flexShrink: 0, color: d.textSec } }),
         /* @__PURE__ */ e.jsx(
           "input",
           {
@@ -3256,7 +3278,7 @@ const En = u.memo(
             "aria-label": "Search available fields",
             placeholder: `Search ${r} fields...`,
             value: yt,
-            onChange: (m) => Mt(m.target.value),
+            onChange: (m) => _t(m.target.value),
             style: {
               flex: 1,
               minWidth: 0,
@@ -3268,13 +3290,13 @@ const En = u.memo(
             }
           }
         ),
-        c && /* @__PURE__ */ e.jsx(
+        p && /* @__PURE__ */ e.jsx(
           "button",
           {
             type: "button",
             "aria-label": "Clear available field search",
             title: "Clear search",
-            onClick: () => Mt(""),
+            onClick: () => _t(""),
             style: {
               border: "none",
               background: "transparent",
@@ -3284,18 +3306,18 @@ const En = u.memo(
               display: "flex",
               alignItems: "center"
             },
-            children: /* @__PURE__ */ e.jsx(E.Close, {})
+            children: /* @__PURE__ */ e.jsx(F.Close, {})
           }
         ),
-        c && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec, whiteSpace: "nowrap" }, children: [
-          p,
+        p && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec, whiteSpace: "nowrap" }, children: [
+          u,
           "/",
           r
         ] })
       ] });
     };
     return /* @__PURE__ */ e.jsxs("div", { style: { position: "relative", display: "flex", flexShrink: 0 }, children: [
-      /* @__PURE__ */ e.jsxs("div", { ref: pe, style: { ...G.sidebar, width: `${Zt}px`, minWidth: `${Zt}px` }, role: "complementary", "aria-label": "Tool Panel", onDragOver: Er, onDragLeave: It, onDrop: It, children: [
+      /* @__PURE__ */ e.jsxs("div", { ref: ue, style: { ...G.sidebar, width: `${Kt}px`, minWidth: `${Kt}px` }, role: "complementary", "aria-label": "Tool Panel", onDragOver: Er, onDragLeave: Tt, onDrop: Tt, children: [
         /* @__PURE__ */ e.jsx(
           "div",
           {
@@ -3304,17 +3326,17 @@ const En = u.memo(
             children: "Press Enter or Space on a field to pick it up. Focus a target field or zone and press Enter or Space to drop it. Press Escape to cancel."
           }
         ),
-        Oe ? /* @__PURE__ */ e.jsxs("div", { role: "tablist", "aria-label": "Report Panel Tabs", style: { position: "relative", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", borderBottom: `1px solid ${d.border}`, marginBottom: "16px" }, children: [
+        Ne ? /* @__PURE__ */ e.jsxs("div", { role: "tablist", "aria-label": "Report Panel Tabs", style: { position: "relative", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", borderBottom: `1px solid ${d.border}`, marginBottom: "16px" }, children: [
           [
-            { id: "report", label: "Builder", icon: /* @__PURE__ */ e.jsx(E.Report, {}) },
-            { id: "fields", label: "Fields", icon: /* @__PURE__ */ e.jsx(E.Sigma, {}) },
-            { id: "columns", label: "Columns", icon: /* @__PURE__ */ e.jsx(E.Columns, {}) }
-          ].map((r, p, c) => /* @__PURE__ */ e.jsxs(
+            { id: "report", label: "Builder", icon: /* @__PURE__ */ e.jsx(F.Report, {}) },
+            { id: "fields", label: "Fields", icon: /* @__PURE__ */ e.jsx(F.Sigma, {}) },
+            { id: "columns", label: "Columns", icon: /* @__PURE__ */ e.jsx(F.Columns, {}) }
+          ].map((r, u, p) => /* @__PURE__ */ e.jsxs(
             "div",
             {
               role: "tab",
               tabIndex: 0,
-              "aria-selected": Ae === r.id,
+              "aria-selected": $e === r.id,
               className: "sp-tab",
               onClick: () => ft(r.id),
               onKeyDown: (m) => {
@@ -3322,7 +3344,7 @@ const En = u.memo(
                   m.preventDefault(), ft(r.id);
                 else if (m.key === "ArrowRight" || m.key === "ArrowLeft") {
                   m.preventDefault();
-                  const v = m.key === "ArrowRight" ? 1 : -1, T = c[(p + v + c.length) % c.length];
+                  const v = m.key === "ArrowRight" ? 1 : -1, T = p[(u + v + p.length) % p.length];
                   T && ft(T.id);
                 }
               },
@@ -3330,8 +3352,8 @@ const En = u.memo(
                 padding: "8px 10px",
                 cursor: "pointer",
                 justifyContent: "center",
-                fontWeight: Ae === r.id ? 600 : 400,
-                color: Ae === r.id ? d.primary : d.textSec,
+                fontWeight: $e === r.id ? 600 : 400,
+                color: $e === r.id ? d.primary : d.textSec,
                 display: "flex",
                 alignItems: "center",
                 gap: "5px",
@@ -3356,7 +3378,7 @@ const En = u.memo(
                 height: "2px",
                 borderRadius: "2px 2px 0 0",
                 background: d.primary,
-                transform: `translateX(${Math.max(0, ["report", "fields", "columns"].indexOf(Ae)) * 100}%)`,
+                transform: `translateX(${Math.max(0, ["report", "fields", "columns"].indexOf($e)) * 100}%)`,
                 transition: "transform 200ms var(--sp-ease-apple, cubic-bezier(0.22, 1, 0.36, 1))",
                 pointerEvents: "none"
               }
@@ -3407,7 +3429,7 @@ const En = u.memo(
               },
               children: [
                 "Filters",
-                Object.keys(ue).length > 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "6px", height: "6px", borderRadius: "50%", background: "#d32f2f" } })
+                Object.keys(pe).length > 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "6px", height: "6px", borderRadius: "50%", background: "#d32f2f" } })
               ]
             }
           ),
@@ -3451,13 +3473,13 @@ const En = u.memo(
             }
           )
         ] }),
-        Oe && Ae === "report" ? /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "0 12px 12px" }, children: /* @__PURE__ */ e.jsx(
-          yn,
+        Ne && $e === "report" ? /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "0 12px 12px" }, children: /* @__PURE__ */ e.jsx(
+          mn,
           {
-            reportDef: Cr,
-            setReportDef: Rr,
+            reportDef: kr,
+            setReportDef: wr,
             availableFields: $,
-            customDimensions: Ve,
+            customDimensions: Se,
             theme: d,
             styles: G,
             data: fe,
@@ -3465,49 +3487,49 @@ const En = u.memo(
             colFields: x,
             setColFields: f,
             setValConfigs: y,
-            savedReports: Dr,
-            setSavedReports: Ar,
-            activeReportId: $r,
-            setActiveReportId: zr,
-            showNotification: D,
-            requestedSelection: ut,
-            showReportConfigColumn: pt,
-            setShowReportConfigColumn: kr
+            savedReports: Cr,
+            setSavedReports: Rr,
+            activeReportId: Ar,
+            setActiveReportId: Dr,
+            showNotification: A,
+            requestedSelection: pt,
+            showReportConfigColumn: ut,
+            setShowReportConfigColumn: Sr
           }
-        ) }) : Oe && Ae === "fields" ? /* @__PURE__ */ e.jsxs("div", { style: { padding: "0 4px" }, children: [
+        ) }) : Ne && $e === "fields" ? /* @__PURE__ */ e.jsxs("div", { style: { padding: "0 4px" }, children: [
           /* @__PURE__ */ e.jsx(
-            lr,
+            rr,
             {
               availableFields: $,
-              customDimensions: Ve,
-              setCustomDimensions: zt,
+              customDimensions: Se,
+              setCustomDimensions: Ft,
               data: fe,
               theme: d,
-              showNotification: D,
+              showNotification: A,
               getFieldLabel: te,
-              onDeleteField: Wt
+              onDeleteField: It
             }
           ),
           /* @__PURE__ */ e.jsxs("div", { style: { fontSize: "10px", color: d.textSec, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px", padding: "0 2px" }, children: [
-            /* @__PURE__ */ e.jsx(E.Database, { style: { verticalAlign: "middle", marginRight: "4px" } }),
+            /* @__PURE__ */ e.jsx(F.Database, { style: { verticalAlign: "middle", marginRight: "4px" } }),
             "Available Fields — click to add"
           ] }),
-          Gt(re.length, mt.length),
+          Yt(re.length, vt.length),
           /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "14px" }, children: [
-            mt.map(
+            vt.map(
               /** @param {any} [f] @returns {any} */
               (r) => {
-                const p = j.some(
+                const u = j.some(
                   /** @param {any} [c] @returns {any} */
-                  (c) => c && c.field === r && c.agg !== "formula"
+                  (p) => p && p.field === r && p.agg !== "formula"
                 );
                 return /* @__PURE__ */ e.jsxs(
                   "div",
                   {
                     onClick: () => {
-                      p || y(
+                      u || y(
                         /** @param {any} [prev] @returns {any} */
-                        (c) => [...c, { field: r, agg: "sum", label: te(r) }]
+                        (p) => [...p, { field: r, agg: "sum", label: te(r) }]
                       );
                     },
                     style: {
@@ -3516,74 +3538,74 @@ const En = u.memo(
                       lineHeight: 1.4,
                       fontWeight: 500,
                       borderRadius: "999px",
-                      border: `1px solid ${p || d.isDark ? d.border : "#D7DDEA"}`,
-                      background: p ? d.select || d.headerBg : d.isDark ? d.background : "#ffffff",
-                      color: p ? d.primary : d.text,
-                      cursor: p ? "default" : "pointer",
-                      opacity: p ? 0.6 : 1,
+                      border: `1px solid ${u || d.isDark ? d.border : "#D7DDEA"}`,
+                      background: u ? d.select || d.headerBg : d.isDark ? d.background : "#ffffff",
+                      color: u ? d.primary : d.text,
+                      cursor: u ? "default" : "pointer",
+                      opacity: u ? 0.6 : 1,
                       userSelect: "none"
                     },
-                    title: p ? `${te(r)} already in values` : `Add ${te(r)} to values`,
+                    title: u ? `${te(r)} already in values` : `Add ${te(r)} to values`,
                     children: [
                       te(r),
-                      p ? " ✓" : ""
+                      u ? " ✓" : ""
                     ]
                   },
                   r
                 );
               }
             ),
-            re.length > 8 && mt.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
+            re.length > 8 && vt.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
           ] }),
           /* @__PURE__ */ e.jsxs("div", { style: { borderTop: `1px solid ${d.border}`, paddingTop: "10px", marginBottom: "8px" }, children: [
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "0 2px 8px 2px", flexWrap: "wrap" }, children: [
-              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: Kt, style: { border: `1px solid ${d.primary}66`, background: `${d.primary}12`, color: d.primary, borderRadius: "999px", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }, children: "+ Add Formula" }),
+              /* @__PURE__ */ e.jsx("button", { type: "button", onClick: Ut, style: { border: `1px solid ${d.primary}66`, background: `${d.primary}12`, color: d.primary, borderRadius: "999px", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }, children: "+ Add Formula" }),
               /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec }, children: [
-                Pe,
+                Oe,
                 " value",
-                Pe === 1 ? "" : "s",
+                Oe === 1 ? "" : "s",
                 " · ",
-                $e,
+                ze,
                 " formula",
-                $e === 1 ? "" : "s"
+                ze === 1 ? "" : "s"
               ] })
             ] }),
             /* @__PURE__ */ e.jsx(
-              cr,
+              ar,
               {
-                measureAxis: F,
+                measureAxis: E,
                 setMeasureAxis: s,
                 theme: d,
-                valueSelectStyle: me,
-                regularValueCount: Pe
+                valueSelectStyle: be,
+                regularValueCount: Oe
               }
             )
           ] }),
           j.map(
             /** @param {any} [item] @param {any} [idx] @returns {any} */
-            (r, p) => {
-              const c = r && r.agg === "formula";
+            (r, u) => {
+              const p = r && r.agg === "formula";
               if (!r) return null;
-              const m = Fr === p;
+              const m = $r === u;
               return /* @__PURE__ */ e.jsx(
                 "div",
                 {
                   draggable: !0,
                   onDragStart: () => {
-                    tt.current = p;
+                    tt.current = u;
                   },
                   onDragOver: (v) => {
-                    v.preventDefault(), rt(p);
+                    v.preventDefault(), rt(u);
                   },
                   onDragLeave: () => rt(null),
                   onDrop: (v) => {
                     v.preventDefault();
                     const T = tt.current;
-                    rt(null), tt.current = null, !(T === null || T === p) && y(
+                    rt(null), tt.current = null, !(T === null || T === u) && y(
                       /** @param {any} [prev] @returns {any} */
                       (X) => {
                         const S = [...X], [K] = S.splice(T, 1);
-                        return S.splice(p, 0, K), S;
+                        return S.splice(u, 0, K), S;
                       }
                     );
                   },
@@ -3591,13 +3613,13 @@ const En = u.memo(
                     tt.current = null, rt(null);
                   },
                   style: { marginBottom: "6px", borderTop: m ? `2px solid ${d.primary}` : "2px solid transparent", cursor: "grab" },
-                  children: c ? /* @__PURE__ */ e.jsx(sr, { item: r, idx: p, selected: r.field === be, onSelect: Yt, onRemove: Xe, setValConfigs: y, theme: d, styles: G, dropLine: null, zoneId: "vals", valueSelectStyle: me, colFields: x, fixedSparklineValueKeySet: bt, showNotification: D, serverError: We && We[r.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...G.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
+                  children: p ? /* @__PURE__ */ e.jsx(ir, { item: r, idx: u, selected: r.field === ye, onSelect: Vt, onRemove: Xe, setValConfigs: y, theme: d, styles: G, dropLine: null, zoneId: "vals", valueSelectStyle: be, colFields: x, fixedSparklineValueKeySet: bt, showNotification: A, serverError: Ie && Ie[r.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...G.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
                     /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
-                      /* @__PURE__ */ e.jsx(E.DragIndicator, { style: { flexShrink: 0, opacity: 0.4 } }),
+                      /* @__PURE__ */ e.jsx(F.DragIndicator, { style: { flexShrink: 0, opacity: 0.4 } }),
                       /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: te(r.field) })
                     ] }),
                     /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexWrap: "nowrap", flexShrink: 0 }, children: [
-                      /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Aggregation", value: r.agg, onClick: (v) => v.stopPropagation(), onChange: (v) => Vt(p, v.target.value), style: { ...me, width: "78px" }, children: [
+                      /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Aggregation", value: r.agg, onClick: (v) => v.stopPropagation(), onChange: (v) => Ht(u, v.target.value), style: { ...be, width: "78px" }, children: [
                         /* @__PURE__ */ e.jsx("option", { value: "sum", children: "Sum" }),
                         /* @__PURE__ */ e.jsx("option", { value: "avg", children: "Avg" }),
                         /* @__PURE__ */ e.jsx("option", { value: "count", children: "Cnt" }),
@@ -3605,18 +3627,18 @@ const En = u.memo(
                         /* @__PURE__ */ e.jsx("option", { value: "max", children: "Max" }),
                         /* @__PURE__ */ e.jsx("option", { value: "weighted_avg", children: "WAvg" })
                       ] }),
-                      /* @__PURE__ */ e.jsx("span", { onClick: () => Xe(p), style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(E.Close, {}) })
+                      /* @__PURE__ */ e.jsx("span", { onClick: () => Xe(u), style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(F.Close, {}) })
                     ] })
                   ] })
                 },
-                r.field || p
+                r.field || u
               );
             }
           ),
           j.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "12px", textAlign: "center" }, children: "No value fields. Click a field above or add a formula." })
-        ] }) : !Oe && n === "filters" ? /* @__PURE__ */ e.jsxs("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", padding: "8px" }, children: [
+        ] }) : !Ne && n === "filters" ? /* @__PURE__ */ e.jsxs("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", padding: "8px" }, children: [
           /* @__PURE__ */ e.jsxs("div", { style: { marginBottom: "10px", display: "flex", alignItems: "center", background: d.background, borderRadius: "6px", padding: "4px 8px", border: `1px solid ${d.border}` }, children: [
-            /* @__PURE__ */ e.jsx(E.Search, {}),
+            /* @__PURE__ */ e.jsx(F.Search, {}),
             /* @__PURE__ */ e.jsx(
               "input",
               {
@@ -3628,10 +3650,10 @@ const En = u.memo(
             )
           ] }),
           (() => {
-            const c = $.map(
+            const p = $.map(
               /** @param {any} [field] @returns {any} */
               (m) => {
-                const v = h.getColumn(m);
+                const v = b.getColumn(m);
                 return v || { id: m, header: te(m), columnDef: { header: te(m) } };
               }
             ).filter(
@@ -3641,21 +3663,21 @@ const En = u.memo(
                 return String(v).toLowerCase().includes(R.toLowerCase()) || m.id.toLowerCase().includes(R.toLowerCase());
               }
             );
-            return /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: c.map(
+            return /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: p.map(
               /** @param {any} [col] @returns {any} */
               (m) => /* @__PURE__ */ e.jsx(
-                rn,
+                on,
                 {
                   column: m,
                   theme: d,
                   styles: G,
                   onFilter: (
                     /** @param {any} [val] @returns {any} */
-                    ((v) => A(m.id, v))
+                    ((v) => D(m.id, v))
                   ),
-                  currentFilter: ue[m.id],
-                  options: Ut(m.id),
-                  optionMeta: _e && _e[m.id],
+                  currentFilter: pe[m.id],
+                  options: Nt(m.id),
+                  optionMeta: We && We[m.id],
                   onSearchOptions: Qe ? (
                     /** @param {any} [search] @returns {any} */
                     ((v) => Z && Z(m.id, { search: v, offset: 0 }))
@@ -3670,91 +3692,78 @@ const En = u.memo(
               )
             ) });
           })()
-        ] }) : (Oe ? Ae !== "columns" : n !== "columns") ? /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
-          n === "fields" && /* @__PURE__ */ e.jsxs("div", { style: { flexShrink: 0 }, children: [
-            /* @__PURE__ */ e.jsx(
-              lr,
-              {
-                availableFields: $,
-                customDimensions: Ve,
-                setCustomDimensions: zt,
-                data: fe,
-                theme: d,
-                showNotification: D,
-                getFieldLabel: te,
-                onDeleteField: Wt
-              }
-            ),
+        ] }) : (Ne ? $e !== "columns" : n !== "columns") ? /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
+          n === "fields" && /* @__PURE__ */ e.jsxs("div", { style: { flexShrink: 0, marginBottom: "16px" }, children: [
             /* @__PURE__ */ e.jsxs("div", { style: G.sectionTitleSm, children: [
-              /* @__PURE__ */ e.jsx(E.Database, {}),
+              /* @__PURE__ */ e.jsx(F.Database, {}),
               " Available Fields"
             ] }),
-            Gt(Le.length, ht.length),
+            Yt(Pe.length, mt.length),
             /* @__PURE__ */ e.jsxs(
-              dr,
+              En,
               {
                 panelId: "availableFields",
                 panelLabel: "Available Fields",
-                size: ge && ge.availableFields,
-                onSizeChange: Ot,
-                getSidebarWidth: Lt,
-                onSidebarWidthChange: Pt,
+                size: Ae && Ae.availableFields,
+                onSizeChange: Br,
+                getSidebarWidth: Ir,
+                onSidebarWidthChange: Tr,
                 theme: d,
-                outerStyle: Ht,
+                outerStyle: Ot,
                 contentStyle: {
                   display: "flex",
-                  flexWrap: "wrap",
-                  gap: "4px",
-                  alignContent: "flex-start",
+                  flexDirection: "column",
+                  gap: "1px",
                   padding: "2px 12px 12px 2px"
                 },
                 children: [
-                  ht.map(
+                  mt.map(
                     /** @param {any} [f] @returns {any} */
                     (r) => {
-                      const p = Ye && r === je, c = p ? "Measure Names" : te(r), m = p ? "measureAxis" : "pool";
+                      const u = Ye && r === je, p = u ? "Measure Names" : te(r), m = u ? "measureAxis" : "pool";
                       return /* @__PURE__ */ e.jsxs(
                         "div",
                         {
                           draggable: !0,
-                          "data-sidebar-field-chip": p ? "measure-axis-label" : "available",
+                          "data-sidebar-field-chip": u ? "measure-axis-label" : "available",
                           role: "button",
                           tabIndex: 0,
                           "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                           "aria-grabbed": q && q.zone === m && q.field === r ? "true" : "false",
-                          "aria-label": `Move ${c}`,
+                          "aria-label": `Move ${p}`,
                           onDragStart: (v) => Y(v, r, m),
                           onDragEnd: z,
-                          onKeyDown: (v) => Bt(v, r, m, -1, c),
-                          title: p ? "Drag to Rows or Columns to show measure names" : `Move ${te(r)}`,
+                          onKeyDown: (v) => Lt(v, r, m, -1, p),
+                          title: u ? "Drag to Rows or Columns to show measure names" : `Move ${te(r)}`,
+                          className: "sp-field-row",
                           style: {
                             padding: "4px 8px",
-                            fontSize: "11px",
-                            lineHeight: 1.2,
-                            fontWeight: p ? 700 : 500,
-                            fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
-                            borderRadius: d.radiusSm || d.radius || "10px",
-                            border: p ? `1px dashed ${d.primary}` : `1px solid ${d.isDark ? d.border : "#D7DDEA"}`,
-                            background: p ? `${d.primary}12` : d.isDark ? d.background : d.surfaceInset || "#ffffff",
-                            color: p ? d.primary : d.isDark ? d.text : "#334155",
-                            display: "inline-flex",
+                            fontSize: "12px",
+                            lineHeight: 1.3,
+                            fontWeight: u ? 700 : 500,
+                            borderRadius: "6px",
+                            border: u ? `1px dashed ${d.primary}` : "1px solid transparent",
+                            background: u ? `${d.primary}12` : "transparent",
+                            color: u ? d.primary : d.text,
+                            display: "flex",
                             alignItems: "center",
-                            gap: "4px",
-                            boxShadow: d.isDark ? "none" : d.shadowInset || "0 1px 2px rgba(0,0,0,0.04)",
+                            gap: "8px",
                             cursor: "grab",
                             userSelect: "none",
-                            minHeight: "24px"
+                            minHeight: "26px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden"
                           },
                           children: [
-                            p && /* @__PURE__ */ e.jsx(E.Sigma, {}),
-                            c
+                            /* @__PURE__ */ e.jsx("span", { "aria-hidden": "true", style: { display: "inline-flex", width: "14px", justifyContent: "center", color: u ? d.primary : d.textSec, flexShrink: 0 }, children: u ? /* @__PURE__ */ e.jsx(F.Sigma, {}) : /* @__PURE__ */ e.jsx(F.DragIndicator, {}) }),
+                            /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis" }, children: p })
                           ]
                         },
-                        p ? `__measure_axis__${r}` : r
+                        u ? `__measure_axis__${r}` : r
                       );
                     }
                   ),
-                  Le.length > 8 && ht.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
+                  Pe.length > 8 && mt.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { width: "100%", padding: "8px 2px", fontSize: "11px", color: d.textSec }, children: "No fields match the current search." })
                 ]
               }
             )
@@ -3762,7 +3771,7 @@ const En = u.memo(
           Mr.map(
             /** @param {any} [zone] @returns {any} */
             (r) => {
-              const p = Ge[r.id] || [];
+              const u = Ge[r.id] || [];
               return /* @__PURE__ */ e.jsxs("div", { style: { marginBottom: "20px", flexShrink: 0 }, children: [
                 /* @__PURE__ */ e.jsxs("div", { style: G.sectionTitle, children: [
                   r.icon,
@@ -3773,7 +3782,7 @@ const En = u.memo(
                     "button",
                     {
                       type: "button",
-                      onClick: Kt,
+                      onClick: Ut,
                       style: {
                         border: `1px solid ${d.primary}66`,
                         background: `${d.primary}12`,
@@ -3788,24 +3797,24 @@ const En = u.memo(
                     }
                   ),
                   /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec }, children: [
-                    Pe,
+                    Oe,
                     " value measure",
-                    Pe === 1 ? "" : "s",
+                    Oe === 1 ? "" : "s",
                     " available"
                   ] }),
-                  $e > 0 && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec }, children: [
-                    $e,
+                  ze > 0 && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec }, children: [
+                    ze,
                     " formula",
-                    $e === 1 ? "" : "s"
+                    ze === 1 ? "" : "s"
                   ] }),
                   /* @__PURE__ */ e.jsx(
-                    cr,
+                    ar,
                     {
-                      measureAxis: F,
+                      measureAxis: E,
                       setMeasureAxis: s,
                       theme: d,
-                      valueSelectStyle: me,
-                      regularValueCount: Pe
+                      valueSelectStyle: be,
+                      regularValueCount: Oe
                     }
                   )
                 ] }),
@@ -3830,17 +3839,16 @@ const En = u.memo(
                   )
                 ] }),
                 /* @__PURE__ */ e.jsx(
-                  dr,
+                  "div",
                   {
-                    panelId: r.id,
-                    panelLabel: r.label,
-                    size: ge && ge[r.id],
-                    onSizeChange: Ot,
-                    getSidebarWidth: Lt,
-                    onSidebarWidthChange: Pt,
-                    theme: d,
-                    outerStyle: Ht,
-                    contentStyle: { padding: `${Nt} 12px 12px ${Nt}` },
+                    "data-sidebar-zone-panel": r.id,
+                    style: {
+                      ...Ot,
+                      boxSizing: "border-box",
+                      maxHeight: "280px",
+                      overflow: "auto",
+                      padding: `${Pt} 12px 4px ${Pt}`
+                    },
                     children: /* @__PURE__ */ e.jsxs(
                       "div",
                       {
@@ -3849,16 +3857,16 @@ const En = u.memo(
                         tabIndex: 0,
                         "aria-label": `${r.label} drop zone`,
                         "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
-                        onKeyDown: (c) => _r(c, r.id),
-                        onDragOver: (c) => {
-                          c.target === c.currentTarget ? L(c, r.id, p.length) : (c.preventDefault(), c.dataTransfer && (c.dataTransfer.dropEffect = "move"));
+                        onKeyDown: (p) => _r(p, r.id),
+                        onDragOver: (p) => {
+                          p.target === p.currentTarget ? L(p, r.id, u.length) : (p.preventDefault(), p.dataTransfer && (p.dataTransfer.dropEffect = "move"));
                         },
-                        onDrop: (c) => g(c, r.id),
+                        onDrop: (p) => g(p, r.id),
                         children: [
-                          p.map(
+                          u.map(
                             /** @param {any} [item] @param {any} [idx] @returns {any} */
-                            (c, m) => {
-                              const v = r.id === "vals" ? c.field : c, T = r.id === "vals" ? c.agg === "formula" ? c.label || "Formula" : te(c.field) : te(c), X = (r.id === "rows" || r.id === "cols") && v === je && _t.placement !== "none";
+                            (p, m) => {
+                              const v = r.id === "vals" ? p.field : p, T = r.id === "vals" ? p.agg === "formula" ? p.label || "Formula" : te(p.field) : te(p), X = (r.id === "rows" || r.id === "cols") && v === je && Wt.placement !== "none";
                               return /* @__PURE__ */ e.jsxs(
                                 "div",
                                 {
@@ -3869,29 +3877,29 @@ const En = u.memo(
                                   "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                                   "aria-grabbed": q && q.zone === r.id && q.idx === m ? "true" : "false",
                                   "aria-label": `Move ${T}`,
-                                  onKeyDown: (S) => Bt(S, c, r.id, m, T),
-                                  onDragStart: (S) => Y(S, c, r.id, m),
+                                  onKeyDown: (S) => Lt(S, p, r.id, m, T),
+                                  onDragStart: (S) => Y(S, p, r.id, m),
                                   onDragOver: (S) => L(S, r.id, m),
                                   onDragEnd: z,
                                   children: [
-                                    r.id === "vals" && c.agg === "formula" ? /* @__PURE__ */ e.jsx(
-                                      sr,
+                                    r.id === "vals" && p.agg === "formula" ? /* @__PURE__ */ e.jsx(
+                                      ir,
                                       {
-                                        item: c,
+                                        item: p,
                                         idx: m,
-                                        selected: c.field === Ie,
-                                        onSelect: Yt,
+                                        selected: p.field === Te,
+                                        onSelect: Vt,
                                         onRemove: Xe,
                                         setValConfigs: y,
                                         theme: d,
                                         styles: G,
                                         dropLine: _,
                                         zoneId: r.id,
-                                        valueSelectStyle: me,
+                                        valueSelectStyle: be,
                                         colFields: x,
                                         fixedSparklineValueKeySet: bt,
-                                        showNotification: D,
-                                        serverError: We && We[c.field] || null
+                                        showNotification: A,
+                                        serverError: Ie && Ie[p.field] || null
                                       }
                                     ) : /* @__PURE__ */ e.jsxs("div", { style: {
                                       ...G.chip,
@@ -3899,11 +3907,11 @@ const En = u.memo(
                                     }, children: [
                                       _ && _.zone === r.id && _.idx === m && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...G.dropLine, top: -2 } }),
                                       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
-                                        /* @__PURE__ */ e.jsx(E.DragIndicator, {}),
+                                        /* @__PURE__ */ e.jsx(F.DragIndicator, {}),
                                         /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: T })
                                       ] }),
                                       r.id === "vals" && /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexWrap: "nowrap", flexShrink: 0 }, children: [
-                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.agg, onClick: (S) => S.stopPropagation(), onChange: (S) => Vt(m, S.target.value), style: { ...me, width: "78px" }, title: "Aggregation", children: [
+                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: p.agg, onClick: (S) => S.stopPropagation(), onChange: (S) => Ht(m, S.target.value), style: { ...be, width: "78px" }, title: "Aggregation", children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "sum", children: "Sum" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "avg", children: "Avg" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "count", children: "Cnt" }),
@@ -3912,22 +3920,22 @@ const En = u.memo(
                                           /* @__PURE__ */ e.jsx("option", { value: "weighted_avg", children: "WAvg" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "array_agg", children: "Series" })
                                         ] }),
-                                        qt(c.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: c.weightField || "", onClick: (S) => S.stopPropagation(), onChange: (S) => Ir(m, S.target.value), style: { ...me, width: "96px" }, title: "Weight field", children: [
+                                        Gt(p.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: p.weightField || "", onClick: (S) => S.stopPropagation(), onChange: (S) => Lr(m, S.target.value), style: { ...be, width: "96px" }, title: "Weight field", children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "", disabled: !0, children: "Weight" }),
                                           re.map(
                                             /** @param {any} [fieldName] @returns {any} */
                                             (S) => /* @__PURE__ */ e.jsx("option", { value: S, children: te(S) }, S)
                                           )
                                         ] }),
-                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Window calculation", value: c.windowFn || "none", onClick: (S) => S.stopPropagation(), onChange: (S) => Tr(m, S.target.value), style: { ...me, width: "68px" }, children: [
-                                          /* @__PURE__ */ e.jsx("option", { value: "none", children: "Norm" }),
+                                        /* @__PURE__ */ e.jsxs(ne, { size: "sm", "aria-label": "Window calculation", value: p.windowFn || "none", onClick: (S) => S.stopPropagation(), onChange: (S) => Pr(m, S.target.value), style: { ...be, width: "68px" }, children: [
+                                          /* @__PURE__ */ e.jsx("option", { value: "none", children: "Value" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "percent_of_row", children: "%Row" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "percent_of_col", children: "%Col" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "percent_of_grand_total", children: "%Tot" })
                                         ] })
                                       ] }),
                                       /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "4px", marginLeft: "auto", alignItems: "center" }, children: [
-                                        r.id === "filter" && /* @__PURE__ */ e.jsx("div", { onClick: (S) => Br(S, v), style: { cursor: "pointer", display: "flex", alignItems: "center", padding: "2px", borderRadius: "4px" }, children: /* @__PURE__ */ e.jsx(E.Filter, {}) }),
+                                        r.id === "filter" && /* @__PURE__ */ e.jsx("div", { onClick: (S) => Or(S, v), style: { cursor: "pointer", display: "flex", alignItems: "center", padding: "2px", borderRadius: "4px" }, children: /* @__PURE__ */ e.jsx(F.Filter, {}) }),
                                         /* @__PURE__ */ e.jsx("span", { onClick: () => {
                                           if (X && typeof s == "function") {
                                             s(
@@ -3952,7 +3960,7 @@ const En = u.memo(
                                             return;
                                           }
                                           if (r.id === "filter") {
-                                            const S = { ...ue };
+                                            const S = { ...pe };
                                             delete S[v], xt(S);
                                           }
                                           r.id === "rows" && l(
@@ -3968,21 +3976,21 @@ const En = u.memo(
                                               (K) => K !== v
                                             )
                                           ), r.id === "vals" && Xe(m);
-                                        }, className: "sp-chip-remove", style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(E.Close, {}) })
+                                        }, className: "sp-chip-remove", style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(F.Close, {}) })
                                       ] }),
                                       r.id === "filter" && et.columnId === v && /* @__PURE__ */ e.jsx(
-                                        qr,
+                                        en,
                                         {
                                           column: { header: T, id: v },
                                           anchorEl: et.anchorEl,
-                                          onClose: Lr,
+                                          onClose: Nr,
                                           onFilter: (
                                             /** @param {any} [filterValue] @returns {any} */
-                                            ((S) => A(v, S))
+                                            ((S) => D(v, S))
                                           ),
-                                          currentFilter: ue[v],
-                                          options: Ut(v),
-                                          optionMeta: _e && _e[v],
+                                          currentFilter: pe[v],
+                                          options: Nt(v),
+                                          optionMeta: We && We[v],
                                           onSearchOptions: Qe ? (
                                             /** @param {any} [search] @returns {any} */
                                             ((S) => Z && Z(v, { search: S, offset: 0 }))
@@ -3995,32 +4003,32 @@ const En = u.memo(
                                         }
                                       ),
                                       r.id === "vals" && /* @__PURE__ */ e.jsx(
-                                        jr,
+                                        mr,
                                         {
-                                          item: c,
+                                          item: p,
                                           idx: m,
                                           setValConfigs: y,
                                           theme: d,
-                                          valueSelectStyle: me,
+                                          valueSelectStyle: be,
                                           colFields: x,
                                           fixedSparklineValueKeySet: bt,
-                                          showNotification: D
+                                          showNotification: A
                                         }
                                       ),
                                       _ && _.zone === r.id && _.idx === m + 1 && /* @__PURE__ */ e.jsx("div", { className: "sp-drop-line", style: { ...G.dropLine, bottom: -2 } })
                                     ] }),
-                                    r.id === "filter" && ue[v] && ue[v].conditions && /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: d.primary, padding: "0 8px 4px 8px", marginTop: "-4px" }, children: ue[v].conditions.map(
+                                    r.id === "filter" && pe[v] && pe[v].conditions && /* @__PURE__ */ e.jsx("div", { style: { fontSize: "10px", color: d.primary, padding: "0 8px 4px 8px", marginTop: "-4px" }, children: pe[v].conditions.map(
                                       /** @param {any} [c] @returns {any} */
                                       (S) => `${S.type}: ${S.value}${S.caseSensitive ? " (Match Case)" : ""}`
-                                    ).join(` ${ue[v].operator} `) })
+                                    ).join(` ${pe[v].operator} `) })
                                   ]
                                 },
                                 m
                               );
                             }
                           ),
-                          p.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "8px", textAlign: "center", pointerEvents: "none" }, children: "Drag fields here" }),
-                          /* @__PURE__ */ e.jsx("div", { style: { height: 20 }, onDragOver: (c) => L(c, r.id, p.length), onDrop: (c) => g(c, r.id) })
+                          u.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "8px", textAlign: "center", pointerEvents: "none" }, children: "Drag fields here" }),
+                          /* @__PURE__ */ e.jsx("div", { style: { height: 20 }, onDragOver: (p) => L(p, r.id, u.length), onDrop: (p) => g(p, r.id) })
                         ]
                       }
                     )
@@ -4028,11 +4036,44 @@ const En = u.memo(
                 )
               ] }, r.id);
             }
-          )
+          ),
+          n === "fields" && /* @__PURE__ */ e.jsxs("div", { "data-sidebar-modeling": "true", style: { flexShrink: 0, marginBottom: "16px", borderTop: `1px solid ${d.border}`, paddingTop: "8px" }, children: [
+            /* @__PURE__ */ e.jsxs(
+              "button",
+              {
+                type: "button",
+                "aria-expanded": ht,
+                "aria-controls": "pivot-sidebar-modeling",
+                onClick: Fr,
+                style: { ...G.sectionTitleSm, display: "flex", alignItems: "center", width: "100%", border: "none", background: "transparent", cursor: "pointer", justifyContent: "space-between", padding: "4px 2px", color: d.textSec },
+                children: [
+                  /* @__PURE__ */ e.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px" }, children: [
+                    /* @__PURE__ */ e.jsx(F.Settings, {}),
+                    " Modeling",
+                    Array.isArray(Se) && Se.length > 0 ? /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", fontWeight: 700, color: d.primary, background: d.select, borderRadius: "999px", padding: "0 6px" }, children: Se.length }) : null
+                  ] }),
+                  /* @__PURE__ */ e.jsx("span", { "aria-hidden": "true", style: { display: "inline-flex", transform: ht ? "rotate(180deg)" : "none" }, children: /* @__PURE__ */ e.jsx(F.ChevronDown, {}) })
+                ]
+              }
+            ),
+            ht ? /* @__PURE__ */ e.jsx("div", { id: "pivot-sidebar-modeling", children: /* @__PURE__ */ e.jsx(
+              rr,
+              {
+                availableFields: $,
+                customDimensions: Se,
+                setCustomDimensions: Ft,
+                data: fe,
+                theme: d,
+                showNotification: A,
+                getFieldLabel: te,
+                onDeleteField: It
+              }
+            ) }) : null
+          ] })
         ] }) : /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "16px", height: "100%", overflow: "hidden" }, children: [
           /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "10px", padding: "10px", background: d.headerSubtleBg || d.headerBg, border: `1px solid ${d.border}`, borderRadius: "10px" }, children: [
             /* @__PURE__ */ e.jsxs("div", { className: "sp-search-shell", style: { display: "flex", alignItems: "center", background: d.surfaceBg || d.background, borderRadius: "8px", padding: "7px 10px", border: `1px solid ${d.border}` }, children: [
-              /* @__PURE__ */ e.jsx(E.Search, {}),
+              /* @__PURE__ */ e.jsx(F.Search, {}),
               /* @__PURE__ */ e.jsx(
                 "input",
                 {
@@ -4069,39 +4110,39 @@ const En = u.memo(
                     borderRadius: "6px",
                     background: d.hover
                   },
-                  children: /* @__PURE__ */ e.jsx(E.Close, {})
+                  children: /* @__PURE__ */ e.jsx(F.Close, {})
                 }
               )
             ] }),
             /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }, children: [
-              { value: "all", label: "All", Icon: E.TypeAll },
-              { value: "number", label: "Numbers", Icon: E.TypeNumber },
-              { value: "string", label: "Text", Icon: E.TypeText },
-              { value: "date", label: "Dates", Icon: E.TypeDate }
+              { value: "all", label: "All", Icon: F.TypeAll },
+              { value: "number", label: "Numbers", Icon: F.TypeNumber },
+              { value: "string", label: "Text", Icon: F.TypeText },
+              { value: "date", label: "Dates", Icon: F.TypeDate }
             ].map((r) => {
-              const p = a === r.value, c = r.Icon;
+              const u = a === r.value, p = r.Icon;
               return /* @__PURE__ */ e.jsxs(
                 "button",
                 {
                   type: "button",
-                  className: `sp-btn ${p ? "sp-btn-primary" : "sp-btn-subtle"}`,
+                  className: `sp-btn ${u ? "sp-btn-primary" : "sp-btn-subtle"}`,
                   onClick: () => k(r.value),
                   style: {
                     padding: "6px 10px",
                     borderRadius: "8px",
-                    border: `1px solid ${p ? d.primary : d.border}`,
-                    background: p ? d.primary : d.surfaceBg || d.background,
-                    color: p ? "#fff" : d.text,
+                    border: `1px solid ${u ? d.primary : d.border}`,
+                    background: u ? d.primary : d.surfaceBg || d.background,
+                    color: u ? "#fff" : d.text,
                     cursor: "pointer",
                     fontSize: "11px",
                     fontWeight: 600,
                     display: "inline-flex",
                     alignItems: "center",
                     gap: "5px",
-                    boxShadow: p ? "0 2px 6px rgba(0,0,0,0.12)" : "none"
+                    boxShadow: u ? "0 2px 6px rgba(0,0,0,0.12)" : "none"
                   },
                   children: [
-                    /* @__PURE__ */ e.jsx(c, {}),
+                    /* @__PURE__ */ e.jsx(p, {}),
                     /* @__PURE__ */ e.jsx("span", { children: r.label })
                   ]
                 },
@@ -4115,7 +4156,7 @@ const En = u.memo(
               {
                 type: "button",
                 className: "sp-btn sp-btn-subtle",
-                onClick: () => h.toggleAllColumnsVisible(!0),
+                onClick: () => b.toggleAllColumnsVisible(!0),
                 title: "Show All Columns",
                 style: {
                   ...G.btn,
@@ -4129,7 +4170,7 @@ const En = u.memo(
                   boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
                 children: [
-                  /* @__PURE__ */ e.jsx(E.Visibility, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx(F.Visibility, { style: { fontSize: "13px", flexShrink: 0 } }),
                   /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Show" })
                 ]
               }
@@ -4139,7 +4180,7 @@ const En = u.memo(
               {
                 type: "button",
                 className: "sp-btn sp-btn-subtle",
-                onClick: () => h.toggleAllColumnsVisible(!1),
+                onClick: () => b.toggleAllColumnsVisible(!1),
                 title: "Hide All Columns",
                 style: {
                   ...G.btn,
@@ -4153,7 +4194,7 @@ const En = u.memo(
                   boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
                 children: [
-                  /* @__PURE__ */ e.jsx(E.VisibilityOff, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx(F.VisibilityOff, { style: { fontSize: "13px", flexShrink: 0 } }),
                   /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Hide" })
                 ]
               }
@@ -4177,7 +4218,7 @@ const En = u.memo(
                   boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                 },
                 children: [
-                  /* @__PURE__ */ e.jsx(E.Unpin, { style: { fontSize: "13px", flexShrink: 0 } }),
+                  /* @__PURE__ */ e.jsx(F.Unpin, { style: { fontSize: "13px", flexShrink: 0 } }),
                   /* @__PURE__ */ e.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: "Unpin" })
                 ]
               }
@@ -4224,7 +4265,7 @@ const En = u.memo(
                     padding: "4px",
                     borderRadius: "4px"
                   },
-                  children: /* @__PURE__ */ e.jsx(E.Close, {})
+                  children: /* @__PURE__ */ e.jsx(F.Close, {})
                 }
               )
             ] }),
@@ -4248,7 +4289,7 @@ const En = u.memo(
                     boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
                   children: [
-                    /* @__PURE__ */ e.jsx(E.PinLeft, {}),
+                    /* @__PURE__ */ e.jsx(F.PinLeft, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Pin Left" })
                   ]
                 }
@@ -4272,7 +4313,7 @@ const En = u.memo(
                     boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
                   children: [
-                    /* @__PURE__ */ e.jsx(E.Unpin, {}),
+                    /* @__PURE__ */ e.jsx(F.Unpin, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Unpin" })
                   ]
                 }
@@ -4296,7 +4337,7 @@ const En = u.memo(
                     boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   },
                   children: [
-                    /* @__PURE__ */ e.jsx(E.PinRight, {}),
+                    /* @__PURE__ */ e.jsx(F.PinRight, {}),
                     /* @__PURE__ */ e.jsx("span", { children: "Pin Right" })
                   ]
                 }
@@ -4304,7 +4345,7 @@ const En = u.memo(
             ] })
           ] }),
           /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }, children: (() => {
-            const p = h.getAllColumns().filter(
+            const u = b.getAllColumns().filter(
               /** @param {any} [c] @returns {any} */
               (S) => !S.parent && S.id !== "no_data"
             ).filter(
@@ -4329,19 +4370,19 @@ const En = u.memo(
                 }
                 return K === a;
               }
-            ), c = p.filter(
+            ), p = u.filter(
               /** @param {any} [c] @returns {any} */
               (S) => it(S, "left")
-            ), m = p.filter(
+            ), m = u.filter(
               /** @param {any} [c] @returns {any} */
               (S) => it(S, "right")
-            ), v = p.filter(
+            ), v = u.filter(
               /** @param {any} [c] @returns {any} */
               (S) => it(S, "unpinned")
             ), T = (S, K) => S.map(
               /** @param {any} [column] @returns {any} */
               (oe) => /* @__PURE__ */ e.jsx(
-                pr,
+                dr,
                 {
                   column: oe,
                   level: 0,
@@ -4363,13 +4404,13 @@ const En = u.memo(
                 const qe = K === "left" ? ae.left : K === "right" ? ae.right : null;
                 if (qe) {
                   if (ie = qe.indexOf(oe), ie === -1) {
-                    const jt = h.getColumn(oe);
-                    if (jt && en(jt)) {
-                      const Xt = wt(jt).find(
+                    const kt = b.getColumn(oe);
+                    if (kt && nn(kt)) {
+                      const Zt = Ct(kt).find(
                         /** @param {any} [id] @returns {any} */
-                        (Pr) => qe.includes(Pr)
+                        (Hr) => qe.includes(Hr)
                       );
-                      Xt && (ie = qe.indexOf(Xt));
+                      Zt && (ie = qe.indexOf(Zt));
                     }
                   }
                   ie === -1 && (ie = void 0);
@@ -4378,20 +4419,20 @@ const En = u.memo(
               K === "left" ? U(S, "left", ie) : K === "right" ? U(S, "right", ie) : U(S, !1);
             };
             return /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
-              c.length > 0 && /* @__PURE__ */ e.jsx(
-                kt,
+              p.length > 0 && /* @__PURE__ */ e.jsx(
+                wt,
                 {
                   title: "Pinned Left",
-                  count: c.length,
+                  count: p.length,
                   theme: d,
                   styles: G,
                   sectionId: "left",
                   onDrop: X,
-                  children: T(c, "left")
+                  children: T(p, "left")
                 }
               ),
               m.length > 0 && /* @__PURE__ */ e.jsx(
-                kt,
+                wt,
                 {
                   title: "Pinned Right",
                   count: m.length,
@@ -4403,7 +4444,7 @@ const En = u.memo(
                 }
               ),
               /* @__PURE__ */ e.jsx(
-                kt,
+                wt,
                 {
                   title: "Columns",
                   count: v.length,
@@ -4420,38 +4461,38 @@ const En = u.memo(
             /* @__PURE__ */ e.jsx("div", { style: G.sectionTitle, children: "Pinning Presets" }),
             /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" }, children: C.map(
               /** @param {any} [preset] @param {any} [i] @returns {any} */
-              (r, p) => /* @__PURE__ */ e.jsx(
+              (r, u) => /* @__PURE__ */ e.jsx(
                 "button",
                 {
                   onClick: () => {
-                    M(r.config), D(`Applied preset: ${r.name}`);
+                    M(r.config), A(`Applied preset: ${r.name}`);
                   },
                   style: { ...G.btn, fontSize: "11px", background: d.headerBg },
                   children: r.name
                 },
-                p
+                u
               )
             ) })
           ] }),
           /* @__PURE__ */ e.jsxs("div", { style: { fontSize: "11px", color: d.textSec, fontStyle: "italic", padding: "8px", background: d.headerBg, borderTop: `1px solid ${d.border}44` }, children: [
-            /* @__PURE__ */ e.jsx(E.Lock, { style: { verticalAlign: "middle", marginRight: "4px", opacity: 0.5 } }),
+            /* @__PURE__ */ e.jsx(F.Lock, { style: { verticalAlign: "middle", marginRight: "4px", opacity: 0.5 } }),
             "Drag columns or use pin icons to freeze areas."
           ] })
         ] })
       ] }),
-      St && /* @__PURE__ */ e.jsx(
-        An,
+      jt && /* @__PURE__ */ e.jsx(
+        Fn,
         {
-          item: St,
-          idx: vt,
+          item: jt,
+          idx: St,
           valConfigs: j,
           setValConfigs: y,
           theme: d,
           onClose: () => De(null),
           onRemove: Xe,
-          displayedColumnOptions: Se,
+          displayedColumnOptions: ve,
           availableRawFields: re,
-          serverError: We && We[St.field] || null
+          serverError: Ie && Ie[jt.field] || null
         }
       ),
       /* @__PURE__ */ e.jsx(
@@ -4468,5 +4509,5 @@ const En = u.memo(
   }
 );
 export {
-  En as SidebarPanel
+  Bn as SidebarPanel
 };

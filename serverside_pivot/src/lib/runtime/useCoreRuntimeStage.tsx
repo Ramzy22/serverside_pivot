@@ -8,7 +8,7 @@ import { normalizeColumnOrderValue, areStringArraysEqual } from '../utils/column
 import { buildMeasureAxisRuntimeConfig, normalizeMeasureAxisValue } from '../utils/measureAxis';
 import { buildClientFilterOptionMap, collectDataFieldIds, isAutoDataFieldId } from '../utils/filterOptions';
 import { buildReportEditorSelectionFromRow } from '../utils/reportEditorSelection';
-import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, DEFAULT_CHART_GRAPH_HEIGHT, DEFAULT_FLOATING_CHART_PANEL_HEIGHT, DEFAULT_TABLE_CANVAS_SIZE, VALID_CHART_TYPES, VALID_CHART_SORT_MODES, VALID_CHART_INTERACTION_MODES, VALID_CHART_SERVER_SCOPES, GRAND_TOTAL_ROW_ID, MISSING_PERSISTED_VALUE, normalizeCustomDimensionsValue, applyCustomDimensionsToRows, decorateAvailableFieldsWithCustomDimensions, getPreferredChartOrientation, cloneSerializable, normalizeViewModeValue, normalizeDetailModeValue, normalizeTreeConfigValue, normalizeDetailConfigValue, normalizeLegacyPivotModeValue, normalizeReportDefValue, collectReportFields, normalizeSavedReportsValue, normalizeActiveReportIdValue, clampFloatingChartRect, normalizeChartDefinition, sanitizeChartDefinitions, normalizeLockedChartRequest, sanitizeChartCanvasPanes, normalizeChartServerWindowConfig, coerceTransportNumber, normalizeRuntimeDataEnvelope, clampSidebarWidth, clampDecimalPlaces, normalizeDefaultValueFormat, mergeSparseColSchema, isSparseSchemaRangeLoaded, normalizePerformanceConfigValue, buildLargeColumnAdvisory, normalizeRowPinningState, getPinnedSideForRow, sanitizeGrandTotalPinOverride, resolveGrandTotalPinState } from '../hooks/usePivotNormalization';
+import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, DEFAULT_CHART_GRAPH_HEIGHT, DEFAULT_FLOATING_CHART_PANEL_HEIGHT, DEFAULT_TABLE_CANVAS_SIZE, VALID_CHART_TYPES, VALID_CHART_SORT_MODES, isValidChartMeasureIds, VALID_CHART_INTERACTION_MODES, VALID_CHART_SERVER_SCOPES, GRAND_TOTAL_ROW_ID, MISSING_PERSISTED_VALUE, normalizeCustomDimensionsValue, applyCustomDimensionsToRows, decorateAvailableFieldsWithCustomDimensions, getPreferredChartOrientation, cloneSerializable, normalizeViewModeValue, normalizeDetailModeValue, normalizeTreeConfigValue, normalizeDetailConfigValue, normalizeLegacyPivotModeValue, normalizeReportDefValue, collectReportFields, normalizeSavedReportsValue, normalizeActiveReportIdValue, clampFloatingChartRect, normalizeChartDefinition, sanitizeChartDefinitions, normalizeLockedChartRequest, sanitizeChartCanvasPanes, normalizeChartServerWindowConfig, coerceTransportNumber, normalizeRuntimeDataEnvelope, clampSidebarWidth, clampDecimalPlaces, normalizeDefaultValueFormat, mergeSparseColSchema, isSparseSchemaRangeLoaded, normalizePerformanceConfigValue, buildLargeColumnAdvisory, normalizeRowPinningState, getPinnedSideForRow, sanitizeGrandTotalPinOverride, resolveGrandTotalPinState } from '../hooks/usePivotNormalization';
 const EXPAND_ALL_STATE_KEY = '__ALL__';
 // One stable empty dataset: a fresh `[]` default per render invalidated the client caches and DuckDB registration.
 const EMPTY_DATA = [];
@@ -215,7 +215,8 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     barLayout: 'grouped',
     axisMode: 'vertical',
     orientation: getPreferredChartOrientation(stage.initialColFields),
-    hierarchyLevel: 'all',
+    hierarchyLevel: 1,
+    measureIds: 'auto',
     rowLimit: DEFAULT_CHART_PANEL_ROW_LIMIT,
     columnLimit: DEFAULT_CHART_PANEL_COLUMN_LIMIT,
     width: 430,
@@ -796,6 +797,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
         top: 24
       }, null));
       stage.setChartPanelSortMode(stage.initialChartDefinition.sortMode);
+      stage.setChartPanelMeasureIds(stage.initialChartDefinition.measureIds);
       stage.setChartPanelInteractionMode(stage.initialChartDefinition.interactionMode);
       stage.setChartPanelServerScope(stage.initialChartDefinition.serverScope);
       stage.setChartPanelLocked(false);
@@ -1267,9 +1269,10 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     width: stage.chartPanelWidth,
     chartHeight: stage.chartPanelGraphHeight,
     sortMode: stage.chartPanelSortMode,
+    measureIds: stage.chartPanelMeasureIds,
     interactionMode: stage.chartPanelInteractionMode,
     serverScope: stage.chartPanelServerScope
-  }, stage.initialChartDefinition), [stage.activeChartDefinitionId, stage.managedChartDefinitions, stage.chartPanelTitle, stage.chartPanelSource, stage.chartPanelType, stage.chartPanelBarLayout, stage.chartPanelAxisMode, stage.chartPanelOrientation, stage.chartPanelHierarchyLevel, stage.chartPanelLayers, stage.chartPanelRowLimit, stage.chartPanelColumnLimit, stage.chartPanelWidth, stage.chartPanelGraphHeight, stage.chartPanelSortMode, stage.chartPanelInteractionMode, stage.chartPanelServerScope, stage.initialChartDefinition]);
+  }, stage.initialChartDefinition), [stage.chartPanelMeasureIds, stage.activeChartDefinitionId, stage.managedChartDefinitions, stage.chartPanelTitle, stage.chartPanelSource, stage.chartPanelType, stage.chartPanelBarLayout, stage.chartPanelAxisMode, stage.chartPanelOrientation, stage.chartPanelHierarchyLevel, stage.chartPanelLayers, stage.chartPanelRowLimit, stage.chartPanelColumnLimit, stage.chartPanelWidth, stage.chartPanelGraphHeight, stage.chartPanelSortMode, stage.chartPanelInteractionMode, stage.chartPanelServerScope, stage.initialChartDefinition]);
   useEffect(() => {
     const serializedExternal = JSON.stringify(stage.chartDefinitions || null);
     if (serializedExternal === stage.lastChartDefinitionsPropRef.current) return;
@@ -1316,6 +1319,7 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     stage.setChartPanelWidth(activeDefinition.width);
     stage.setChartPanelGraphHeight(activeDefinition.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT);
     stage.setChartPanelSortMode(activeDefinition.sortMode || 'natural');
+    stage.setChartPanelMeasureIds(activeDefinition.measureIds);
     stage.setChartPanelInteractionMode(activeDefinition.interactionMode || 'focus');
     stage.setChartPanelServerScope(activeDefinition.serverScope || stage.initialChartDefinition.serverScope);
     requestAnimationFrame(() => {
@@ -1654,6 +1658,10 @@ export function useCoreRuntimeStage(props: any, payloadTransport?: any) {
     const restoredChartSortMode = restored.chartPanelSortMode !== undefined ? restored.chartPanelSortMode : restoredChartDefinition && restoredChartDefinition.sortMode;
     if (VALID_CHART_SORT_MODES.has(restoredChartSortMode)) {
       stage.setChartPanelSortMode(restoredChartSortMode);
+    }
+    const restoredChartMeasureIds = restored.chartPanelMeasureIds !== undefined ? restored.chartPanelMeasureIds : restoredChartDefinition && restoredChartDefinition.measureIds;
+    if (isValidChartMeasureIds(restoredChartMeasureIds)) {
+      stage.setChartPanelMeasureIds(restoredChartMeasureIds);
     }
     const restoredChartInteractionMode = restored.chartPanelInteractionMode !== undefined ? restored.chartPanelInteractionMode : restoredChartDefinition && restoredChartDefinition.interactionMode;
     if (VALID_CHART_INTERACTION_MODES.has(restoredChartInteractionMode)) {

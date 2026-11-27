@@ -2179,6 +2179,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             requested_center_ids,
         )
         cached_response = self._get_cached_window_response(response_cache_key)
+        if cached_response is None and not needs_col_schema:
+            schema_key = self._response_window_cache_key(
+                request, start_row, end_row, expanded_paths, col_start, col_end,
+                True, include_grand_total, requested_center_ids,
+            )
+            cached_response = self._get_cached_window_response(schema_key)
+            if cached_response is not None:
+                cached_response.col_schema = None
         cache_lookup_finished_at = time.perf_counter()
         if cached_response is not None:
             if _allow_prefetch:

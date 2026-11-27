@@ -62,18 +62,21 @@ function PivotWorkspaceFrame({ zoomLevel, showToolbar, sidebarEnabled, sidebarOp
         const observer = new ResizeObserver((entries) => {
             const entry = entries && entries[0];
             const width = entry && entry.contentRect ? entry.contentRect.width : frameEl.clientWidth;
-            if (width > 0) setCompactLayout(width < COMPACT_LAYOUT_MAX_WIDTH_PX);
+            if (width > 0) {
+                setCompactLayout(width < COMPACT_LAYOUT_MAX_WIDTH_PX);
+                canvas?.onWorkspaceResize?.(width);
+            }
         });
         observer.observe(frameEl);
         return () => observer.disconnect();
-    }, []);
+    }, [canvas?.onWorkspaceResize]);
     React.useEffect(() => {
         setCompactDrawerOpen(false);
     }, [compactLayout]);
     const toolbar = controls && controls.toolbar;
     const toolbarControls = compactLayout && toolbar
-        ? { ...toolbar, sidebarOpen: compactDrawerOpen, setSidebarOpen: setCompactDrawerOpen }
-        : toolbar;
+        ? { ...toolbar, compact: true, sidebarOpen: compactDrawerOpen, setSidebarOpen: setCompactDrawerOpen }
+        : toolbar ? { ...toolbar, compact: false } : toolbar;
     const sidebarVisible = Boolean(sidebarEnabled) && (compactLayout ? compactDrawerOpen : Boolean(sidebarOpen));
     const sidebar = controls && controls.sidebar;
     return (
@@ -90,7 +93,7 @@ function PivotWorkspaceFrame({ zoomLevel, showToolbar, sidebarEnabled, sidebarOp
                     {sidebarVisible && !compactLayout && (
                         <PivotWorkspaceSidebar sidebar={sidebar} />
                     )}
-                    <PivotWorkspaceCanvas canvas={canvas} />
+                    <PivotWorkspaceCanvas canvas={canvas} compact={compactLayout} />
                     {sidebarVisible && compactLayout && (
                         <>
                             <div
@@ -117,6 +120,12 @@ const baseAnimationStyles = `
     background-image: linear-gradient(var(--sp-row-hover-tint, rgba(15,23,42,0.032)), var(--sp-row-hover-tint, rgba(15,23,42,0.032)));
 }
 [data-pivot-workspace-root] [data-pivot-scroll-container] { overscroll-behavior: contain; }
+[data-pivot-workspace-root] .sp-report-row-settings { opacity: 0; }
+[data-pivot-workspace-root] [role="row"]:hover .sp-report-row-settings,
+[data-pivot-workspace-root] [role="row"]:focus-within .sp-report-row-settings,
+[data-pivot-workspace-root] [role="row"]:has([aria-selected="true"]) .sp-report-row-settings,
+[data-pivot-workspace-root] [data-report-row-selected="true"] .sp-report-row-settings,
+[data-pivot-workspace-root] .sp-report-row-settings[data-row-selected="true"] { opacity: 1; }
 [data-pivot-workspace-root] .sp-compact-drawer-scrim {
     position: absolute;
     inset: 0;
@@ -617,7 +626,7 @@ return (
         <div
             id={id}
             data-pivot-workspace-root="true"
-            data-header-controls={(theme && theme.headerControls) || 'always'}
+            data-header-controls={(theme && theme.headerControls) || 'hover'}
             style={{ colorScheme: theme && theme.isDark ? 'dark' : 'light', ...styles.root, fontFamily: resolvedFontFamily, fontSize: resolvedFontSize, ...resolvedThemeCssVars, ...loadingCssVars, position: 'relative', ...style }}
             onMouseEnter={() => setImmersiveModeHovering(true)}
             onMouseLeave={() => setImmersiveModeHovering(false)}
@@ -707,12 +716,13 @@ return (
                                 <span style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>New Chart Pane</span>
                                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                     <button onClick={handleCancelPreviewChartPane} className="sp-btn sp-btn-subtle" style={{ ...btnBase, background: theme.headerSubtleBg || theme.hover, color: theme.text, border: `1px solid ${theme.border}` }}>Cancel</button>
-                                    <button onClick={handleConfirmPreviewChartPane} className="sp-btn sp-btn-primary" style={{ ...btnBase, background: theme.primary, color: '#fff' }}>Open in Panel</button>
+                                    <button onClick={handleConfirmPreviewChartPane} className="sp-btn sp-btn-primary" style={{ ...btnBase, background: theme.primary, color: '#fff' }}>Add to workspace</button>
                                 </div>
                             </div>
                             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
                                 <PivotChartPanel
                                     open
+                                    variant="preview"
                                     onClose={handleCancelPreviewChartPane}
                                     source={previewPane.source}
                                     onSourceChange={/** @param {any} [value] @returns {any} */ (value) => updateChartCanvasPane(previewPane.id, { source: value })}
@@ -745,6 +755,7 @@ return (
                                     }}
                                     sortMode={previewPane.sortMode}
                                     onSortModeChange={/** @param {any} [value] @returns {any} */ (value) => updateChartCanvasPane(previewPane.id, { sortMode: value })}
+                                    onMeasureIdsChange={/** @param {any} [value] @returns {any} */ (value) => updateChartCanvasPane(previewPane.id, { measureIds: value })}
                                     interactionMode={previewPane.interactionMode}
                                     onInteractionModeChange={/** @param {any} [value] @returns {any} */ (value) => updateChartCanvasPane(previewPane.id, { interactionMode: value })}
                                     serverScope={previewPane.serverScope}
