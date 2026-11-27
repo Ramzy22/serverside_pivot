@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.99] - 2026-11-27
+
+### Added
+- Native DuckDB direct-aggregate level-table tier (`core/physical/level_tables.py`, `long_form.py`, `native_view.py`, `parameters.py`, `core/catalog.py`) with bound interaction parameters, long-form pivot storage, and per-grant scope binding (`core/authority/level_binding.py`).
+
+### Changed
+- Optimized level-table query compilation and execution: direct DuckDB `GROUPING SETS` with two-stage additive rollups, Top-N pre-order paging with `list_contains`, equi-key Hash Joins for hierarchical sorts, filtered depth-1 reuse, Arrow widening/window slicing, and leaner response edge mapping.
+- Updated workspace UI controls, toolbar menus, filter popovers, charts, and Dash/React/Streamlit frontend bundles.
+
 ## [0.0.98] - 2026-11-26
 
 0.0.97 was tagged but never published (its release qualification failed); 0.0.98 supersedes it.
