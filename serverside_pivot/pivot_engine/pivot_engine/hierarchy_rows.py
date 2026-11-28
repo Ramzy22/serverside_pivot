@@ -59,7 +59,7 @@ def is_unbalanced_missing_value(value: Any, unbalanced_values: Any = None) -> bo
 
 
 def is_hierarchy_grand_total(row: Any) -> bool:
-    if not isinstance(row, dict):
+    if type(row) is not dict and not isinstance(row, dict):
         return False
     return bool(
         row.get("_isTotal")
@@ -276,17 +276,22 @@ def iter_visible_hierarchy_rows(
     yield from traverse("")
 
 
-def _split_grand_total(rows: Any) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+def _split_grand_total(
+    rows: Any, *, copy_rows: bool = True
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     regular_rows: List[Dict[str, Any]] = []
     grand_total_row: Optional[Dict[str, Any]] = None
+    gt_path = GRAND_TOTAL_PATH
+    gt_id = GRAND_TOTAL_ID
+    append = regular_rows.append
     for row in rows or []:
-        if not isinstance(row, dict):
+        if type(row) is not dict and not isinstance(row, dict):
             continue
-        if is_hierarchy_grand_total(row):
+        if row.get("_isTotal") or row.get("_path") == gt_path or row.get("_id") == gt_id:
             if grand_total_row is None:
-                grand_total_row = dict(row)
+                grand_total_row = dict(row) if copy_rows else row
             continue
-        regular_rows.append(dict(row))
+        append(dict(row) if copy_rows else row)
     return regular_rows, grand_total_row
 
 
@@ -356,7 +361,9 @@ def order_hierarchy_rows(rows: Any) -> List[Dict[str, Any]]:
     return ordered_rows
 
 
-def finalize_hierarchy_rows(rows: Any, *, preserve_window_order: bool = False) -> List[Dict[str, Any]]:
+def finalize_hierarchy_rows(
+    rows: Any, *, preserve_window_order: bool = False, copy_rows: bool = True
+) -> List[Dict[str, Any]]:
     """Deduplicate totals and place grand total consistently.
 
     Full materializations can be tree-ordered. Already-windowed result sets must
@@ -364,8 +371,10 @@ def finalize_hierarchy_rows(rows: Any, *, preserve_window_order: bool = False) -
     before/after unrelated rows.
     """
     if preserve_window_order:
-        regular_rows, grand_total_row = _split_grand_total(rows)
-        return [*regular_rows, grand_total_row] if grand_total_row is not None else regular_rows
+        regular_rows, grand_total_row = _split_grand_total(rows, copy_rows=copy_rows)
+        if grand_total_row is not None:
+            regular_rows.append(grand_total_row)
+        return regular_rows
     return order_hierarchy_rows(rows)
 
 

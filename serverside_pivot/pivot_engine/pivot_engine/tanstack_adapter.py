@@ -22,6 +22,8 @@ from .security import User, apply_rls_to_spec
 from .core.authority.scope import row_scoped
 from .formula_mixin import FormulaEngineMixin
 from .hierarchy_rows import (
+    GRAND_TOTAL_ID,
+    GRAND_TOTAL_PATH,
     finalize_hierarchy_rows,
     is_hierarchy_grand_total,
 )
@@ -388,20 +390,25 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         col_start: int,
         col_end: Optional[int],
         requested_center_ids: Optional[List[str]],
+        *,
+        _already_cloned: bool = False,
     ) -> None:
         if response is None or not isinstance(response.data, list):
             return
 
         grand_total_row = None
         regular_rows = []
+        gt_path = GRAND_TOTAL_PATH
+        gt_id = GRAND_TOTAL_ID
+        append = regular_rows.append
         for _row in response.data:
-            if not isinstance(_row, dict):
+            if type(_row) is not dict and not isinstance(_row, dict):
                 continue
-            if _is_grand_total_row(_row):
+            if _row.get("_isTotal") or _row.get("_path") == gt_path or _row.get("_id") == gt_id:
                 if grand_total_row is None:
-                    grand_total_row = dict(_row)
+                    grand_total_row = _row if _already_cloned else dict(_row)
             else:
-                regular_rows.append(dict(_row))
+                append(_row if _already_cloned else dict(_row))
 
         if grand_total_row is not None:
             self._locked_cache_store(
@@ -424,6 +431,33 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         )
         start_block = response_start // _ROW_BLOCK_SIZE
         end_block = response_end // _ROW_BLOCK_SIZE
+
+        cached_columns = (
+            list(response.columns or [])
+            if _already_cloned
+            else [dict(column) for column in (response.columns or [])]
+        )
+        cached_pagination = (
+            response.pagination
+            if _already_cloned
+            else (
+                dict(response.pagination)
+                if isinstance(response.pagination, dict)
+                else response.pagination
+            )
+        )
+        cached_grouping = (
+            response.grouping
+            if _already_cloned
+            else (
+                [
+                    dict(item) if isinstance(item, dict) else item
+                    for item in (response.grouping or [])
+                ]
+                if response.grouping
+                else response.grouping
+            )
+        )
 
         for block_index in range(start_block, end_block + 1):
             block_start = block_index * _ROW_BLOCK_SIZE
@@ -452,24 +486,13 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     requested_center_ids,
                 ),
                 {
-                    "rows": [dict(row) for row in block_rows[:expected_rows]],
+                    "rows": block_rows[:expected_rows],
                     "total_rows": response.total_rows,
                     "version": response.version,
                     "layout_revision": response.layout_revision,
-                    "pagination": (
-                        dict(response.pagination)
-                        if isinstance(response.pagination, dict)
-                        else response.pagination
-                    ),
-                    "grouping": (
-                        [
-                            dict(item) if isinstance(item, dict) else item
-                            for item in (response.grouping or [])
-                        ]
-                        if response.grouping
-                        else response.grouping
-                    ),
-                    "columns": [dict(column) for column in (response.columns or [])],
+                    "pagination": cached_pagination,
+                    "grouping": cached_grouping,
+                    "columns": cached_columns,
                 },
                 max_size=_ROW_BLOCK_CACHE_SIZE,
                 ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
@@ -643,16 +666,19 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         return self._clone_response(cached_response)
 
     def _store_window_response(
-        self, cache_key: str, response: "TanStackResponse"
-    ) -> "TanStackResponse":
+        self, cache_key: str, response: "TanStackResponse", *, _return_cloned: bool = False
+    ) -> Any:
         finalized = self._finalize_windowed_response(response)
+        cloned = self._clone_response(finalized)
         self._locked_cache_store(
             self._response_window_cache,
             cache_key,
-            self._clone_response(finalized),
+            cloned,
             max_size=_RESPONSE_WINDOW_CACHE_SIZE,
             ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
         )
+        if _return_cloned:
+            return finalized, cloned
         return finalized
 
     def _schedule_viewport_prefetch(
@@ -777,17 +803,20 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         allow_prefetch: bool,
         requested_center_ids: Optional[List[str]] = None,
     ) -> "TanStackResponse":
+        stored_response, cloned_response = self._store_window_response(
+            response_cache_key, response, _return_cloned=True
+        )
         self._store_row_block_window(
             request,
-            response,
+            cloned_response,
             start_row,
             end_row,
             expanded_paths,
             col_start,
             col_end,
             requested_center_ids,
+            _already_cloned=True,
         )
-        stored_response = self._store_window_response(response_cache_key, response)
         if allow_prefetch:
             total_center_cols = None
             if isinstance(stored_response.col_schema, dict):
@@ -810,16 +839,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     ) -> list:
         """Return an ordered list of center (non-pinned, non-meta) column IDs from result rows."""
         seen = []
-        seen_set = set()
+        all_known = set(row_meta_keys) | set(pinned_ids)
         for row in rows:
+            if row.keys() <= all_known:
+                continue
             for col_id in row:
-                if (
-                    col_id not in seen_set
-                    and col_id not in row_meta_keys
-                    and col_id not in pinned_ids
-                ):
+                if col_id not in all_known:
                     seen.append(col_id)
-                    seen_set.add(col_id)
+                    all_known.add(col_id)
         return seen
 
     def _get_center_col_ids_from_columns(
@@ -1436,9 +1463,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             ]
             requested_ids = set(requested_order)
             keep_ids = requested_ids | pinned_ids
+            keep_all = row_meta_keys | keep_ids
 
             tanstack_result.data = [
-                {k: v for k, v in row.items() if k in row_meta_keys or k in keep_ids}
+                row if row.keys() <= keep_all else {k: v for k, v in row.items() if k in keep_all}
                 for row in tanstack_result.data
             ]
 
@@ -1469,9 +1497,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if effective_window_ids:
             window_ids = set(effective_window_ids)
             keep_ids = window_ids | pinned_ids
+            keep_all = row_meta_keys | keep_ids
 
             tanstack_result.data = [
-                {k: v for k, v in row.items() if k in row_meta_keys or k in keep_ids}
+                row if row.keys() <= keep_all else {k: v for k, v in row.items() if k in keep_all}
                 for row in tanstack_result.data
             ]
 
@@ -1608,12 +1637,15 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         pivot_result: Any,
         tanstack_request: TanStackRequest,
         version: Optional[int] = None,
+        *,
+        _core_normalized: bool = False,
     ) -> TanStackResponse:
         """Convert pivot engine result to TanStack format"""
         return self._response_mapper.convert_pivot_result_to_tanstack_format(
             pivot_result,
             tanstack_request,
             version,
+            _core_normalized=_core_normalized,
         )
 
         # Convert from pivot format to TanStack row format
@@ -2546,56 +2578,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 pivot_spec, user, row_scope=row_scope
             )
 
-        discovered_center_ids: Optional[List[str]] = None
-        discovered_layout: Optional[dict[str, PivotColumnIdentity]] = None
-        pinned_center_ids: list[str] = []
-        resolved_layout_revision: Optional[str] = None
-        catalog_members: Optional[Tuple[Tuple[Any, ...], ...]] = None
-        if (
-            pivot_spec.columns
-            and pivot_spec.pivot_config
-            and pivot_spec.pivot_config.enabled
-        ):
-            column_catalog_started_at = time.perf_counter()
-            discovered_values, catalog_members = await self._discover_pivot_columns(pivot_spec)
-            column_catalog_finished_at = time.perf_counter()
-            if discovered_values:
-                resolved_layout = self._resolve_pivot_column_layout(
-                    discovered_values, pivot_spec, request, user,
-                )
-                discovered_center_ids = [column.cell_id for column in resolved_layout.columns]
-                discovered_layout = {column.cell_id: column for column in resolved_layout.columns}
-                resolved_layout_revision = resolved_layout.revision
-                pinned_ids = set(request.pinned_column_ids)
-                pinned_center_ids = [
-                    column.cell_id for column in resolved_layout.columns
-                    if column.layout_id in pinned_ids
-                ]
-                window_center_ids = self._resolve_center_window_ids(
-                    discovered_center_ids,
-                    request,
-                    col_start,
-                    col_end,
-                    needs_col_schema,
-                    requested_center_ids=requested_center_ids,
-                )
-                if window_center_ids is not None:
-                    window_center_ids = list(dict.fromkeys(
-                        [*window_center_ids, *pinned_center_ids]
-                    ))
-                pivot_spec = pivot_spec.copy()
-                if pivot_spec.pivot_config:
-                    pivot_spec.pivot_config.materialized_column_values = (
-                        self._materialized_pivot_values_for_window(
-                            window_center_ids,
-                            request,
-                            discovered_center_ids,
-                        )
-                    )
-        else:
-            column_catalog_started_at = None
-            column_catalog_finished_at = None
-
         # Handle "Expand All" case
         target_paths = expanded_paths or []
         if expanded_paths is True:
@@ -2617,11 +2599,6 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             (_request_layout_mode == "tabular" and not _show_subtotal_footers)
             or (not _request_layout_mode and request.include_subtotals is False)
         )
-        # REQ-LAYOUT-002: the flat tabular layout is served by the core when it can
-        # express the request; the hierarchy branch below builds the response from its view.
-        _core_flat_view = await self._core_flat_view(
-            pivot_spec, start_row, end_row, include_grand_total, column_members=catalog_members,
-        ) if _use_flat_path else None
         _hier_show_subtotal_footers = (
             _show_subtotal_footers and _request_layout_mode != "tabular"
         )
@@ -2635,22 +2612,187 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             # when the incoming expansion map is empty or contains overrides.
             target_paths = [["__ALL__"]]
 
+        def _apply_discovered_layout(
+            values: list[dict[str, Any]],
+            spec_in: PivotSpec,
+        ) -> Tuple[
+            Optional[List[str]],
+            Optional[dict[str, PivotColumnIdentity]],
+            list[str],
+            Optional[str],
+            PivotSpec,
+        ]:
+            if not values:
+                return None, None, [], None, spec_in
+            resolved_layout = self._resolve_pivot_column_layout(
+                values, spec_in, request, user,
+            )
+            center_ids = [column.cell_id for column in resolved_layout.columns]
+            layout_map = {column.cell_id: column for column in resolved_layout.columns}
+            layout_rev = resolved_layout.revision
+            pinned_id_set = set(request.pinned_column_ids)
+            pinned_cids = [
+                column.cell_id for column in resolved_layout.columns
+                if column.layout_id in pinned_id_set
+            ]
+            window_center_ids = self._resolve_center_window_ids(
+                center_ids,
+                request,
+                col_start,
+                col_end,
+                needs_col_schema,
+                requested_center_ids=requested_center_ids,
+            )
+            if window_center_ids is not None:
+                window_center_ids = list(dict.fromkeys(
+                    [*window_center_ids, *pinned_cids]
+                ))
+            spec_out = spec_in
+            if spec_in.pivot_config is not None:
+                mat_vals = self._materialized_pivot_values_for_window(
+                    window_center_ids,
+                    request,
+                    center_ids,
+                )
+                spec_out = replace(
+                    spec_in,
+                    pivot_config=replace(
+                        spec_in.pivot_config,
+                        materialized_column_values=mat_vals,
+                    ),
+                )
+            return center_ids, layout_map, pinned_cids, layout_rev, spec_out
 
-        hierarchy_view_started_at = time.perf_counter()
-        hierarchy_view = _core_flat_view if _core_flat_view is not None else await self._hierarchy_view_routed(
-            pivot_spec,
-            target_paths,
-            start_row,
-            end_row,
-            include_grand_total=include_grand_total,
-            # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
-            tabular_subtotals=_hier_tabular_subtotals,
-            column_members=catalog_members,
-        )
-        hierarchy_view_finished_at = time.perf_counter()
+        discovered_center_ids: Optional[List[str]] = None
+        discovered_layout: Optional[dict[str, PivotColumnIdentity]] = None
+        pinned_center_ids: list[str] = []
+        resolved_layout_revision: Optional[str] = None
+        catalog_members: Optional[Tuple[Tuple[Any, ...], ...]] = None
+        hierarchy_view: Optional[Dict[str, Any]] = None
+        column_catalog_started_at = None
+        column_catalog_finished_at = None
+        hierarchy_view_started_at = None
+        hierarchy_view_finished_at = None
+
+        if (
+            pivot_spec.columns
+            and pivot_spec.pivot_config
+            and pivot_spec.pivot_config.enabled
+        ):
+            column_catalog_started_at = time.perf_counter()
+            local_cat_key = self._pivot_column_catalog_cache_key(pivot_spec)
+            cached_catalog = self._locked_cache_lookup(
+                self._pivot_column_catalog_cache, local_cat_key
+            )
+            _can_fuse_core = (
+                cached_catalog is None
+                and not _use_flat_path
+                and type(self)._discover_pivot_columns is TanStackPivotAdapter._discover_pivot_columns
+                and type(self)._hierarchy_view_routed is TanStackPivotAdapter._hierarchy_view_routed
+                and "_discover_pivot_columns" not in self.__dict__
+                and "_hierarchy_view_routed" not in self.__dict__
+            )
+            if _can_fuse_core:
+                from .transport.core_bridge import (
+                    core_column_catalog_members,
+                    core_hierarchy_view,
+                    run_core_read,
+                )
+
+                def _fused_discover_and_view(resolve: Any) -> Tuple[
+                    list[dict[str, Any]],
+                    Tuple[Tuple[Any, ...], ...],
+                    Optional[List[str]],
+                    Optional[dict[str, PivotColumnIdentity]],
+                    list[str],
+                    Optional[str],
+                    Dict[str, Any],
+                    float,
+                ]:
+                    d_vals, d_members = core_column_catalog_members(resolve, pivot_spec)
+                    self._locked_cache_store(
+                        self._pivot_column_catalog_cache,
+                        local_cat_key,
+                        {"values": list(d_vals), "members": tuple(d_members)},
+                        max_size=_PIVOT_CATALOG_CACHE_SIZE,
+                        ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+                    )
+                    cat_done = time.perf_counter()
+                    c_ids, l_map, p_cids, l_rev, eff_spec = _apply_discovered_layout(
+                        d_vals, pivot_spec
+                    )
+                    h_view = core_hierarchy_view(
+                        resolve,
+                        eff_spec,
+                        target_paths,
+                        start_row,
+                        end_row,
+                        include_grand_total_row=include_grand_total,
+                        tabular_subtotals=_hier_tabular_subtotals,
+                        column_members=tuple(d_members),
+                    )
+                    return d_vals, tuple(d_members), c_ids, l_map, p_cids, l_rev, h_view, cat_done
+
+                (
+                    _d_vals,
+                    catalog_members,
+                    discovered_center_ids,
+                    discovered_layout,
+                    pinned_center_ids,
+                    resolved_layout_revision,
+                    hierarchy_view,
+                    column_catalog_finished_at,
+                ) = await run_core_read(self.controller, pivot_spec.table, _fused_discover_and_view)
+                hierarchy_view_started_at = column_catalog_finished_at
+                hierarchy_view_finished_at = time.perf_counter()
+            else:
+                if (
+                    isinstance(cached_catalog, dict)
+                    and isinstance(cached_catalog.get("values"), list)
+                    and isinstance(cached_catalog.get("members"), tuple)
+                ):
+                    discovered_values = list(cached_catalog["values"])
+                    catalog_members = cached_catalog["members"]
+                else:
+                    discovered_values, catalog_members = await self._discover_pivot_columns(pivot_spec)
+                column_catalog_finished_at = time.perf_counter()
+                (
+                    discovered_center_ids,
+                    discovered_layout,
+                    pinned_center_ids,
+                    resolved_layout_revision,
+                    pivot_spec,
+                ) = _apply_discovered_layout(discovered_values, pivot_spec)
+
+        if hierarchy_view is None:
+            # REQ-LAYOUT-002: the flat tabular layout is served by the core when it can
+            # express the request; the hierarchy branch below builds the response from its view.
+            _core_flat_view = await self._core_flat_view(
+                pivot_spec, start_row, end_row, include_grand_total, column_members=catalog_members,
+            ) if _use_flat_path else None
+            hierarchy_view_started_at = time.perf_counter()
+            hierarchy_view = _core_flat_view if _core_flat_view is not None else await self._hierarchy_view_routed(
+                pivot_spec,
+                target_paths,
+                start_row,
+                end_row,
+                include_grand_total=include_grand_total,
+                # Hierarchy/outline subtotal footers add no rows (REQ-LAYOUT-001): served as the plain tree.
+                tabular_subtotals=_hier_tabular_subtotals,
+                column_members=catalog_members,
+            )
+            hierarchy_view_finished_at = time.perf_counter()
         convert_started_at = time.perf_counter()
+        _core_fast_meta = (
+            hierarchy_view.get("_core_fast_meta")
+            if isinstance(hierarchy_view, dict)
+            else None
+        )
         tanstack_result = self.convert_pivot_result_to_tanstack_format(
-            hierarchy_view.get("rows", []), request, version=request.version
+            hierarchy_view.get("rows", []),
+            request,
+            version=request.version,
+            _core_normalized=bool(_core_fast_meta and _core_fast_meta.get("normalized")),
         )
         convert_finished_at = time.perf_counter()
         if hierarchy_view.get("total_rows") is not None:
@@ -2659,22 +2801,36 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         if include_grand_total and request.totals:
             grand_total_row = hierarchy_view.get("grand_total_row")
             if isinstance(grand_total_row, dict):
-                normalized_total = self.convert_pivot_result_to_tanstack_format(
-                    [grand_total_row], request, version=request.version
-                ).data
-                if normalized_total:
-                    grand_total_row = normalized_total[0]
+                _req_cols = request.columns or []
+                _gt_needs_convert = not (_core_fast_meta and _core_fast_meta.get("gt_normalized")) or any(
+                    isinstance(c, dict)
+                    and (
+                        c.get("isFormula")
+                        or c.get("windowFn")
+                        or c.get("window_fn")
+                        or c.get("pivotWindowFn")
+                        or FormulaEngineMixin._is_measure_formula_column(c)
+                    )
+                    for c in _req_cols
+                )
+                if _gt_needs_convert:
+                    normalized_total = self.convert_pivot_result_to_tanstack_format(
+                        [grand_total_row], request, version=request.version
+                    ).data
+                    if normalized_total:
+                        grand_total_row = normalized_total[0]
             if isinstance(grand_total_row, dict):
                 existing_rows = tanstack_result.data or []
                 if not any(_is_grand_total_row(row) for row in existing_rows):
-                    tanstack_result.data = [*existing_rows, grand_total_row]
+                    existing_rows.append(grand_total_row)
+                    tanstack_result.data = existing_rows
                 if not request.totals and tanstack_result.total_rows is not None:
                     tanstack_result.total_rows = max(
                         int(tanstack_result.total_rows) - 1, 0
                     )
 
         tanstack_result.data = finalize_hierarchy_rows(
-            tanstack_result.data, preserve_window_order=True
+            tanstack_result.data, preserve_window_order=True, copy_rows=False
         )
         if hierarchy_view.get("color_scale_stats"):
             tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]

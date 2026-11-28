@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import ibis
 import pyarrow as pa
 import sqlglot as sg
-from ibis.backends.sql.datatypes import DuckDBType
 
 from ..frame import DEPTH, ORD, TOTAL
 from ..ir import PivotQuery
@@ -25,7 +24,7 @@ from . import union_all as ua
 
 
 def dtype(t: Any) -> str:
-    return str(DuckDBType.from_ibis(t).sql(dialect="duckdb"))
+    return lf.duck_type(t)
 
 
 def path_type(keys: Sequence[str], schema: Any) -> str:
@@ -361,7 +360,7 @@ def sql(
             node_sources.append('SELECT ' + ', '.join(empty_parts))
         tot_cte = f'tot AS (SELECT count(*) AS {quote(TOTAL)} FROM nodes)'  # nosec B608
         page_body_cte = (
-            f'page_body AS (SELECT n.*, (row_number() OVER ({order_sql}) - 1 + $offset)::BIGINT AS {quote(ORD)} '  # nosec B608
+            f'page_body AS (SELECT n.*, (row_number() OVER () - 1 + $offset)::BIGINT AS {quote(ORD)} '  # nosec B608
             f'FROM (SELECT * FROM nodes n {order_sql} '
             f'LIMIT COALESCE($limit, 9223372036854775807) OFFSET $offset) n)'
         )
@@ -385,17 +384,15 @@ def sql(
             win = _column_window_sql(q.columns, 'b', schema)
             cell_sources: List[str] = []
             seen_c = set()
-            for depth, table in tables.items():
+            for _depth, table in tables.items():
                 if table.op() in seen_c:
                     continue
                 seen_c.add(table.op())
                 op = table.op()
                 parts = (op.namespace.catalog, op.namespace.database, op.name)
                 name = '.'.join(quote(n) for n in parts if n is not None)
-                conds = [f'b.{quote(lf.CELL)}', win]
-                if depth > 1:
-                    conds.append(_parent_filter_sql(q.rows[:depth - 1], 'b', depth, schema))
-                cell_src = f'SELECT {cell_cols_b} FROM {name} b WHERE ' + ' AND '.join(conds)  # nosec B608
+                # `page` already enforces every parent restriction and LEFT JOIN matches exact (depth, *dims).
+                cell_src = f'SELECT {cell_cols_b} FROM {name} b WHERE b.{quote(lf.CELL)} AND {win}'  # nosec B608
                 cell_sources.append(cell_src)
             topn_ctes.append('cells AS (' + ' UNION ALL '.join(cell_sources) + ')')
             match = ' AND '.join([f'p.{quote(DEPTH)} = c.{quote(DEPTH)}',

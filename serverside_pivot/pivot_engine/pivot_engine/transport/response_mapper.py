@@ -191,6 +191,8 @@ class TanStackResponseMapper(FormulaEngineMixin):
         pivot_result: Any,
         tanstack_request: TanStackRequest,
         version: Optional[int] = None,
+        *,
+        _core_normalized: bool = False,
     ) -> TanStackResponse:
         """Convert pivot engine result to TanStack format"""
         import pyarrow as pa
@@ -230,8 +232,8 @@ class TanStackResponseMapper(FormulaEngineMixin):
 
         # Hidden sort-key fields are transport-only helpers.
         # Keep them available for backend ORDER BY, but never expose them to the frontend.
-        # Also sanitize NaN floats ??? None so JSON serialization produces valid null.
-        if rows:
+        # Also sanitize NaN floats → None so JSON serialization produces valid null.
+        if rows and not _core_normalized:
             for row in rows:
                 if type(row) is not dict and not isinstance(row, dict):
                     continue
@@ -250,7 +252,7 @@ class TanStackResponseMapper(FormulaEngineMixin):
 
         # Enrich rows for TanStack Hierarchy display
         hierarchy_cols = tanstack_request.grouping or []
-        if hierarchy_cols:
+        if hierarchy_cols and not _core_normalized:
             max_depth = max(len(hierarchy_cols) - 1, 0)
             for row in rows:
                 # Normalize depth (support both depth and _depth).

@@ -230,10 +230,16 @@ class IbisBackend:
         backend_name = str(getattr(self.con, "name", "") or "").lower()
         is_duckdb = backend_name == "duckdb" and raw_connection is not None
         if is_duckdb:
-            _validate_duckdb_memory_envelope(resolved_memory_limit, self.resource_limits)
+            allocated_bytes = _validate_duckdb_memory_envelope(resolved_memory_limit, self.resource_limits)
             configure = getattr(raw_connection, "execute", None)
             if callable(configure):
                 configure(f"SET memory_limit='{resolved_memory_limit}'")
+                if "threads" not in connection_kwargs:
+                    cpu_count = os.cpu_count() or 4
+                    mem_budget_threads = max(4, allocated_bytes // (128 * 1024 * 1024))
+                    auto_threads = min(cpu_count, mem_budget_threads)
+                    if auto_threads < cpu_count:
+                        configure(f"SET threads={auto_threads}")
         self.memory_limit = resolved_memory_limit
 
         # Track query stats — lock guards counters updated from executor threads.
@@ -429,10 +435,12 @@ class IbisBackend:
             for name, data in memtables:
                 lease.register(name, data)
                 registered.append(name)
-            if params:
-                raw_table = _fetch_arrow_table(lease.execute(sql, params))
+            stmt_kind = query.get("kind") if isinstance(query, dict) else None
+            cursor_res = lease.execute(sql, params) if params else lease.execute(sql)
+            if stmt_kind in {"create", "drop"}:
+                raw_table = pa.table({})
             else:
-                raw_table = _fetch_arrow_table(lease.execute(sql))
+                raw_table = _fetch_arrow_table(cursor_res)
             if execution.cancellation_requested:
                 raise QueryCancelledError()
 
@@ -598,7 +606,7 @@ class IbisBackend:
             try:
                 if isinstance(expr, BoundStatement):
                     return self._execute_duckdb_ibis_with_lease(
-                        {"sql": expr.sql}, expr.params or None, True, execution)
+                        {"sql": expr.sql, "kind": expr.kind}, expr.params or None, True, execution)
                 return self._execute_duckdb_ibis_with_lease({"ibis_expr": expr}, None, True, execution)
             finally:
                 request.end(execution)

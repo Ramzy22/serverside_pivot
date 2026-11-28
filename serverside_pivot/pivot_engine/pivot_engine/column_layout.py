@@ -30,6 +30,15 @@ _REVISION = re.compile(r"^[0-9a-f]{64}$")
 
 def _canonical_json(value: Any) -> bytes:
     def encode(item: Any) -> Any:
+        t = type(item)
+        if t is str or item is None or t is int or t is bool:
+            return item
+        if t is float:
+            return {"$type": "float", "$value": str(item)} if not math.isfinite(item) else item
+        if t is tuple or t is list:
+            return [encode(child) for child in item]
+        if t is dict:
+            return {key: encode(child) for key, child in item.items()}
         if isinstance(item, (datetime, date, datetime_time)):
             return {"$type": type(item).__name__, "$value": item.isoformat()}
         if isinstance(item, Decimal):
@@ -102,6 +111,26 @@ class PivotColumnIdentity:
             return f"{'t' if self.is_row_total else 'p'}:{digest}"
 
 
+_SIMPLE_PATH_TYPES = (str, int, bool, type(None))
+
+
+@lru_cache(maxsize=16384)
+def _cached_column_identity(
+    pivot_path: tuple[tuple[str, Any], ...],
+    measure_key: str,
+    cell_id: str,
+    is_row_total: bool,
+    layout_measure_key: str | None,
+) -> PivotColumnIdentity:
+    return PivotColumnIdentity(
+        pivot_path,
+        measure_key,
+        cell_id,
+        is_row_total=is_row_total,
+        layout_measure_key=layout_measure_key,
+    )
+
+
 def catalog_from_pivot_values(
     values: Iterable[dict[str, Any]], column_fields: Sequence[str],
     measure_keys: Sequence[str], *, row_totals: bool = False,
@@ -109,25 +138,46 @@ def catalog_from_pivot_values(
 ) -> tuple[PivotColumnIdentity, ...]:
     """Build stable identities from the actual typed planner values."""
     columns: list[PivotColumnIdentity] = []
-    seen_cell_paths: dict[str, bytes] = {}
+    seen_cell_paths: dict[str, tuple[Any, tuple[tuple[str, Any], ...]]] = {}
+    measure_specs = tuple(
+        (measure, layout_measure_keys.get(measure) if layout_measure_keys else None)
+        for measure in measure_keys
+    )
+    single_field = column_fields[0] if len(column_fields) == 1 else None
+    append = columns.append
+    make_id = _cached_column_identity
     for entry in values:
         cell_key = str(entry["_col_key"])
-        path = tuple((field, entry[field]) for field in column_fields)
-        encoded_path = _canonical_json(path)
-        previous = seen_cell_paths.setdefault(cell_key, encoded_path)
-        if previous != encoded_path:
-            raise ValueError("ambiguous planner pivot cell key")
-        for measure in measure_keys:
-            columns.append(PivotColumnIdentity(
-                path, measure, f"{cell_key}_{measure}",
-                layout_measure_key=(layout_measure_keys or {}).get(measure),
-            ))
+        if single_field is not None:
+            v = entry[single_field]
+            path = ((single_field, v),)
+            tv = type(v)
+            fast_key: Any = (tv, v) if tv in _SIMPLE_PATH_TYPES else None
+        else:
+            path = tuple((field, entry[field]) for field in column_fields)
+            fast_key = (
+                tuple((field, type(val), val) for field, val in path)
+                if all(type(val) in _SIMPLE_PATH_TYPES for _, val in path)
+                else None
+            )
+        previous = seen_cell_paths.get(cell_key)
+        if previous is None:
+            seen_cell_paths[cell_key] = (fast_key, path)
+        elif previous[0] is None or fast_key is None or previous[0] != fast_key:
+            if _canonical_json(previous[1]) != _canonical_json(path):
+                raise ValueError("ambiguous planner pivot cell key")
+        if fast_key is not None:
+            for measure, lmk in measure_specs:
+                append(make_id(path, measure, f"{cell_key}_{measure}", False, lmk))
+        else:
+            for measure, lmk in measure_specs:
+                append(PivotColumnIdentity(
+                    path, measure, f"{cell_key}_{measure}",
+                    layout_measure_key=lmk,
+                ))
     if row_totals:
-        for measure in measure_keys:
-            columns.append(PivotColumnIdentity(
-                (), measure, f"__RowTotal__{measure}", is_row_total=True,
-                layout_measure_key=(layout_measure_keys or {}).get(measure),
-            ))
+        for measure, lmk in measure_specs:
+            append(make_id((), measure, f"__RowTotal__{measure}", True, lmk))
     return tuple(columns)
 
 
@@ -199,6 +249,8 @@ class LayoutRevisionStore:
 
 
 def _normalize_manifest(saved_ids: Sequence[str]) -> tuple[str, ...]:
+    if not saved_ids:
+        return ()
     if len(saved_ids) > MAX_LAYOUT_MANIFEST_IDS:
         raise ValueError("layout manifest count exceeds limit")
     if any(not isinstance(identity, str) or not identity for identity in saved_ids):
@@ -256,6 +308,49 @@ def resolve_column_layout(
     occupy output slots. Totals always follow ordinary pivot groups.
     """
     manifest = _normalize_manifest(saved_ids)
+    if not manifest and allowed_ids is None:
+        # Fast path when no saved reorder or allowlist filter is active: check uniqueness and
+        # whether groups are already contiguous with any total group at the end.
+        cols_list = list(default_columns)
+        seen_ids: set[str] = set()
+        seen_groups: set[str] = set()
+        last_group: str | None = None
+        saw_total = False
+        already_ordered = True
+        for column in cols_list:
+            identity = column.layout_id
+            if identity in seen_ids:
+                raise ValueError("duplicate current pivot column identity")
+            seen_ids.add(identity)
+            if already_ordered:
+                group = column.group_id
+                if group != last_group:
+                    if group in seen_groups or (saw_total and group != "total"):
+                        already_ordered = False
+                    else:
+                        seen_groups.add(group)
+                        if group == "total":
+                            saw_total = True
+                        last_group = group
+        if already_ordered:
+            columns = tuple(cols_list)
+            revision = hashlib.sha256(
+                json.dumps(
+                    {
+                        "contract": "pivot-layout-v1",
+                        "resolved": [[column.layout_id, column.cell_id] for column in columns],
+                        "saved": [],
+                        "structural": structural_key,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            return ResolvedColumnLayout(columns, revision)
+        default_columns = cols_list
+
     available: dict[str, PivotColumnIdentity] = {}
     default_group_order: list[str] = []
     default_leaves: dict[str, list[str]] = {}
@@ -299,13 +394,20 @@ def resolve_column_layout(
         for group in ordered_groups
         for identity in ordered_leaves[group]
     )
-    revision = hashlib.sha256(_canonical_json({
-        "contract": "pivot-layout-v1",
-        "structural": structural_key,
-        "saved": manifest,
-        # Saved positions survive aggregation changes, but the corresponding
-        # cell keys can change. Bind both to prevent sparse schemas retaining
-        # keys from an earlier aggregation under an identical revision.
-        "resolved": [(column.layout_id, column.cell_id) for column in columns],
-    })).hexdigest()
+    # All fields in the revision payload are verified plain strings, so direct
+    # json.dumps produces the exact canonical JSON byte sequence without recursive encoding.
+    revision = hashlib.sha256(
+        json.dumps(
+            {
+                "contract": "pivot-layout-v1",
+                "resolved": [[column.layout_id, column.cell_id] for column in columns],
+                "saved": list(manifest),
+                "structural": structural_key,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
     return ResolvedColumnLayout(columns, revision)

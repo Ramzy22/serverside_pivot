@@ -7,6 +7,7 @@ measure is ever computed from another aggregate.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import ibis
@@ -28,8 +29,13 @@ CELL = "__is_cell"
 _DIRECT_CMP_OPS = frozenset({"=", "!=", ">", ">=", "<", "<="})
 
 
-def _duck_type(t: Any) -> str:
+@lru_cache(maxsize=256)
+def duck_type(t: Any) -> str:
     return str(DuckDBType.from_ibis(t).sql(dialect="duckdb"))
+
+
+def _duck_type(t: Any) -> str:
+    return duck_type(t)
 
 
 def direct_filter_sql(predicates: Sequence[Any], schema: Any, params: Dict[str, Any]) -> Optional[str]:
@@ -156,6 +162,8 @@ def _try_direct_grouping_block(
     depth: int,
     parents: Any,
     include_total: bool,
+    *,
+    single_parent: bool = False,
 ) -> Optional[LongBlock]:
     """Zero-compile DuckDB GROUPING SETS SQL for plain DatabaseTable queries."""
     op = relation.op()
@@ -186,13 +194,16 @@ def _try_direct_grouping_block(
         if len(pkeys) == 1:
             pcol = quote(pkeys[0])
             pt = _duck_type(schema[pkeys[0]])
-            keep = (f'($parents_{parents.depth} IS NULL OR '
-                    f'{pcol} IN (SELECT UNNEST(CAST($parents_{parents.depth} AS {pt}[]))) OR '  # noqa: S608
-                    f'($parents_{parents.depth}_null AND {pcol} IS NULL))')
-            if parents.exclude:
-                excl = (f'COALESCE({pcol} IN (SELECT UNNEST(CAST($exclude_{parents.depth} AS {pt}[]))), FALSE) '  # noqa: S608
-                        f'OR ($exclude_{parents.depth}_null AND {pcol} IS NULL)')
-                keep = f'({keep} AND NOT ({excl}))'
+            if single_parent and not parents.exclude:
+                keep = f'({pcol} IS NOT DISTINCT FROM CAST($parent_{parents.depth} AS {pt}))'
+            else:
+                keep = (f'($parents_{parents.depth} IS NULL OR '
+                        f'{pcol} IN (SELECT UNNEST(CAST($parents_{parents.depth} AS {pt}[]))) OR '  # noqa: S608
+                        f'($parents_{parents.depth}_null AND {pcol} IS NULL))')
+                if parents.exclude:
+                    excl = (f'COALESCE({pcol} IN (SELECT UNNEST(CAST($exclude_{parents.depth} AS {pt}[]))), FALSE) '  # noqa: S608
+                            f'OR ($exclude_{parents.depth}_null AND {pcol} IS NULL)')
+                    keep = f'({keep} AND NOT ({excl}))'
         else:
             ptyp = 'STRUCT(' + ', '.join(f'k{i} {_duck_type(schema[k])}' for i, k in enumerate(pkeys)) + ')'
             ppath = 'struct_pack(' + ', '.join(f'k{i} := {quote(k)}' for i, k in enumerate(pkeys)) + ')'
@@ -233,8 +244,10 @@ def _try_direct_grouping_block(
     ]
 
     # For full-table / depth-1 scans with strictly additive measures and multiple grouping sets,
-    # compute the finest grain ONCE over facts and roll up all grouping sets from that tiny CTE.
+    # compute the finest grain ONCE over facts into a materialized CTE, emit the finest grain
+    # directly without re-hashing, and roll up the remaining grouping sets from that tiny CTE.
     finest = [*keys, *q.columns]
+    finest_tuple = tuple(finest)
     additive = all(m.agg in {"sum", "min", "max", "count"} for m in q.measures)
     if depth <= 1 and len(sets) > 1 and finest and additive:
         rollup_fn = {"sum": "SUM", "min": "MIN", "max": "MAX"}
@@ -246,6 +259,111 @@ def _try_direct_grouping_block(
             else f'{rollup_fn[m.agg]}({quote(m.alias)}) AS {quote(m.alias)}'
             for m, _agg_sql, _ in agg_specs
         ]
+        remaining_sets = [s for s in sets if s != finest_tuple]
+        if finest_tuple in sets and remaining_sets:
+            finest_set = set(finest_tuple)
+            finest_dims = [
+                quote(k) if k in finest_set else f'CAST(NULL AS {_duck_type(schema[k])}) AS {quote(k)}'
+                for k in (*q.rows, *q.columns)
+            ]
+            finest_aggs = [quote(m.alias) for m, _agg_sql, _ in agg_specs]
+            finest_depth = f'CAST({depth} AS SMALLINT) AS {quote(DEPTH)}'
+            finest_cell = f'{"TRUE" if q.columns else "FALSE"} AS {quote(CELL)}'
+            branch1 = f'SELECT {", ".join([*finest_dims, *finest_aggs, finest_depth, finest_cell])} FROM __g'  # noqa: S608  # nosec B608
+
+            # When depth=1 with both columns and grand total, separate the high-cardinality
+            # depth-1 row rollup from the tiny depth-0 GROUPING SETS so DuckDB avoids building
+            # three concurrent hash tables in one multi-set GROUPING SETS operator.
+            key_tuple = tuple(keys)
+            if depth == 1 and q.columns and include_total and key_tuple in remaining_sets:
+                rem_total_sets = [rs for rs in remaining_sets if rs != key_tuple]
+                key_set = set(key_tuple)
+                row_dims = [
+                    quote(k) if k in key_set else f'CAST(NULL AS {_duck_type(schema[k])}) AS {quote(k)}'
+                    for k in (*q.rows, *q.columns)
+                ]
+                row_gb = ", ".join(quote(k) for k in keys)
+                row_cols_sql = ", ".join([
+                    *row_dims,
+                    *rollup_aggs,
+                    f"CAST(1 AS SMALLINT) AS {quote(DEPTH)}",
+                    f"FALSE AS {quote(CELL)}",
+                ])
+                branch_rows = (
+                    f'SELECT {row_cols_sql} '  # noqa: S608  # nosec B608
+                    f'FROM __g GROUP BY {row_gb}'
+                )
+                tot_cols: set[str] = set()
+                for rs in rem_total_sets:
+                    tot_cols.update(rs)
+                tot_dims = [
+                    quote(k) if k in tot_cols else f'CAST(NULL AS {_duck_type(schema[k])}) AS {quote(k)}'
+                    for k in (*q.rows, *q.columns)
+                ]
+                tot_has_cell = any(q.columns[0] in rs for rs in rem_total_sets)
+                tot_has_node = any(q.columns[0] not in rs for rs in rem_total_sets)
+                if tot_has_cell and tot_has_node:
+                    tot_cell = f'(GROUPING({quote(q.columns[0])}) = 0) AS {quote(CELL)}'
+                elif tot_has_cell:
+                    tot_cell = f'TRUE AS {quote(CELL)}'
+                else:
+                    tot_cell = f'FALSE AS {quote(CELL)}'
+                tot_gs_sql = ", ".join("(" + ", ".join(quote(k) for k in rs) + ")" for rs in rem_total_sets)
+                tot_cols_sql = ", ".join([
+                    *tot_dims,
+                    *rollup_aggs,
+                    f"CAST(0 AS SMALLINT) AS {quote(DEPTH)}",
+                    tot_cell,
+                ])
+                branch_tot = (
+                    f'SELECT {tot_cols_sql} '  # noqa: S608  # nosec B608
+                    f'FROM __g GROUP BY GROUPING SETS ({tot_gs_sql})'
+                )
+                cte_body = (
+                    f'SELECT {cte_dims}, {cte_aggs} '  # noqa: S608  # nosec B608
+                    f'FROM {table_ref}{where_sql} GROUP BY {cte_dims}'
+                )
+                sql = f'WITH __g AS MATERIALIZED ({cte_body}) {branch1} UNION ALL {branch_rows} UNION ALL {branch_tot}'
+                return LongBlock(relation, sql, depth, params, ibis.schema(block_fields))
+
+            rem_cols: set[str] = set()
+            for rs in remaining_sets:
+                rem_cols.update(rs)
+            rem_dims = [
+                quote(k) if k in rem_cols else f'CAST(NULL AS {_duck_type(schema[k])}) AS {quote(k)}'
+                for k in (*q.rows, *q.columns)
+            ]
+            rem_has_depth = bool(keys) and any(keys[0] in rs for rs in remaining_sets)
+            rem_has_total = not keys or any(keys[0] not in rs for rs in remaining_sets)
+            if rem_has_depth and rem_has_total:
+                rem_depth = (
+                    f'CAST(CASE WHEN (GROUPING({quote(keys[0])}) = 1) THEN 0 ELSE {depth} END '
+                    f'AS SMALLINT) AS {quote(DEPTH)}'
+                )
+            elif rem_has_depth:
+                rem_depth = f'CAST({depth} AS SMALLINT) AS {quote(DEPTH)}'
+            else:
+                rem_depth = f'CAST(0 AS SMALLINT) AS {quote(DEPTH)}'
+            rem_has_cell = bool(q.columns) and any(q.columns[0] in rs for rs in remaining_sets)
+            rem_has_node = not q.columns or any(q.columns[0] not in rs for rs in remaining_sets)
+            if rem_has_cell and rem_has_node:
+                rem_cell = f'(GROUPING({quote(q.columns[0])}) = 0) AS {quote(CELL)}'
+            elif rem_has_cell:
+                rem_cell = f'TRUE AS {quote(CELL)}'
+            else:
+                rem_cell = f'FALSE AS {quote(CELL)}'
+            rem_gs_sql = ", ".join("(" + ", ".join(quote(k) for k in rs) + ")" for rs in remaining_sets)
+            branch2 = (
+                f'SELECT {", ".join([*rem_dims, *rollup_aggs, rem_depth, rem_cell])} '  # noqa: S608  # nosec B608
+                f'FROM __g GROUP BY GROUPING SETS ({rem_gs_sql})'
+            )
+            cte_body = (
+                f'SELECT {cte_dims}, {cte_aggs} '  # noqa: S608  # nosec B608
+                f'FROM {table_ref}{where_sql} GROUP BY {cte_dims}'
+            )
+            sql = f'WITH __g AS MATERIALIZED ({cte_body}) {branch1} UNION ALL {branch2}'
+            return LongBlock(relation, sql, depth, params, ibis.schema(block_fields))
+
         outer_select = ", ".join([*dim_selects, *rollup_aggs, depth_expr, f'{is_cell} AS {quote(CELL)}'])
         sql = (
             f'WITH __g AS (SELECT {cte_dims}, {cte_aggs} FROM {table_ref}{where_sql} GROUP BY {cte_dims}) '  # noqa: S608  # nosec B608
@@ -294,14 +412,16 @@ class LongBlock:
 
 
 def block(query: PivotQuery, relation: Any, depth: int, *, native: bool,
-          parents: Any = None, include_total: bool = True) -> LongBlock:
+          parents: Any = None, include_total: bool = True, single_parent: bool = False) -> LongBlock:
     """One sibling block, plus (at depth 1) the grand-total rows and cells."""
     q = meaning(query)
     if native:
         from ..catalog import store_for
 
         q = store_for(relation._find_backend()).lower_filters(q, relation, allow_scan=False)
-        direct = _try_direct_grouping_block(q, relation, depth, parents, include_total)
+        direct = _try_direct_grouping_block(
+            q, relation, depth, parents, include_total, single_parent=single_parent
+        )
         if direct is not None:
             return direct
     plan = logical_plan(q)

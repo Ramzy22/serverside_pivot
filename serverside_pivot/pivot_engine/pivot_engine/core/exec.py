@@ -234,7 +234,7 @@ def _tree(query: PivotQuery, resolve: Resolver, strategy: Optional[str]) -> Any:
 
 
 def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = None,
-            grand_total: bool = False, prune_total: bool = False) -> ResultFrame:
+            grand_total: bool = False, prune_total: bool = False, _need_arrow: bool = True) -> ResultFrame:
     """The window's rows, with ``total`` and (``grand_total``) the grand total: one statement on a backend
     with window functions, else the window, the count and the grand total read from the same tree."""
     from .physical.union_all import windowed
@@ -247,8 +247,10 @@ def execute(query: PivotQuery, resolve: Resolver, *, strategy: Optional[str] = N
         query.validate({name: type_family(dtype) for name, dtype in relation.schema().items()})
         backend = relation._find_backend()
         if level_tables(backend):
-            table, col_data = store_for(backend).read(query, relation, grand_total, prune_total=prune_total)
-            return _frame([table], query, grand_total, col_data=col_data)
+            table, col_data = store_for(backend).read(
+                query, relation, grand_total, prune_total=prune_total, build_table=_need_arrow
+            )
+            return _frame([table], query, grand_total, col_data=col_data, build_table=_need_arrow)
         if query.columns:
             from .physical.long_form import read
 
@@ -300,9 +302,12 @@ def _frame(
     grand_total: bool,
     *,
     col_data: Optional[Dict[str, List[Any]]] = None,
+    build_table: bool = True,
 ) -> ResultFrame:
     window = (query.window.offset, query.window.limit)
-    body, total, grand, body_data, gt_data = split_window_with_data(results[0], col_data, window)
+    body, total, grand, body_data, gt_data = split_window_with_data(
+        results[0], col_data, window, build_table=build_table
+    )
     if len(results) > 1:  # the count and grand total statements of a backend without window functions
         body, total = results[0], int(results[1].as_py())
         grand = results[2] if len(results) > 2 else grand

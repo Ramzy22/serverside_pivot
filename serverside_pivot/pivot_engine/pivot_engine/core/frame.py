@@ -30,11 +30,13 @@ def _col_to_pylist(chunked: Any) -> List[Any]:
     if nc == 0:
         if (pa.types.is_integer(t) or pa.types.is_floating(t) or pa.types.is_boolean(t)
                 or pa.types.is_string(t) or pa.types.is_large_string(t)):
-            return list(arr.to_numpy(zero_copy_only=False).tolist())
+            res_np: List[Any] = arr.to_numpy(zero_copy_only=False).tolist()
+            return res_np
     elif pa.types.is_string(t) or pa.types.is_large_string(t):
-        return list(arr.to_numpy(zero_copy_only=False).tolist())
+        res_str: List[Any] = arr.to_numpy(zero_copy_only=False).tolist()
+        return res_str
     elif pa.types.is_floating(t):
-        out: List[Any] = list(arr.to_numpy(zero_copy_only=False).tolist())
+        out: List[Any] = arr.to_numpy(zero_copy_only=False).tolist()
         valid = arr.is_valid().to_numpy(zero_copy_only=False)
         for idx in np.flatnonzero(~valid):
             out[int(idx)] = None
@@ -42,7 +44,7 @@ def _col_to_pylist(chunked: Any) -> List[Any]:
     elif pa.types.is_integer(t) or pa.types.is_boolean(t):
         fill_val = pa.scalar(False if pa.types.is_boolean(t) else 0, type=t)
         filled = pc.fill_null(arr, fill_val)
-        out = list(filled.to_numpy(zero_copy_only=False).tolist())
+        out = filled.to_numpy(zero_copy_only=False).tolist()
         valid = arr.is_valid().to_numpy(zero_copy_only=False)
         for idx in np.flatnonzero(~valid):
             out[int(idx)] = None
@@ -94,10 +96,10 @@ class ResultFrame:
 
     def grand_total_record(self) -> Optional[Dict[str, Any]]:
         """The grand total as a record, when the read asked for it and the tree has one."""
+        if self._gt_data is not None:
+            return _records_from_dict(self._gt_data, self.rows, self.measures)[0] if self._gt_data.get(DEPTH) else None
         if self.grand_total is None or not self.grand_total.num_rows:
             return None
-        if self._gt_data is not None:
-            return _records_from_dict(self._gt_data, self.rows, self.measures)[0]
         return _records(self.grand_total, self.rows, self.measures)[0]
 
 
@@ -111,8 +113,42 @@ def split_window_with_data(
     table: pa.Table,
     col_data: Optional[Dict[str, List[Any]]],
     window: Tuple[int, Optional[int]],
+    *,
+    build_table: bool = True,
 ) -> Tuple[pa.Table, int, pa.Table, Optional[Dict[str, List[Any]]], Optional[Dict[str, List[Any]]]]:
     """Fast slice-based window split preserving optional pre-extracted column lists."""
+    if not build_table and col_data is not None:
+        empty_tbl = table.slice(0, 0)
+        if TOTAL not in col_data:
+            depths_list = col_data.get(DEPTH, [])
+            if not depths_list:
+                empty_col: Dict[str, List[Any]] = {k: [] for k in col_data if k != ORD}
+                return empty_tbl, 0, empty_tbl, empty_col, empty_col
+            gt_hits_list = [i for i, d in enumerate(depths_list) if d == 0]
+            clean = {k: v for k, v in col_data.items() if k != ORD}
+            return empty_tbl, len(depths_list), empty_tbl, clean, _slice_dict(clean, gt_hits_list)
+        total_list = col_data[TOTAL]
+        if not total_list:
+            empty_col = {k: [] for k in col_data if k not in {ORD, TOTAL}}
+            return empty_tbl, 0, empty_tbl, empty_col, empty_col
+        total = int(total_list[0])
+        ords_list = col_data[ORD]
+        depths_list = col_data[DEPTH]
+        offset, limit = window
+        if limit is not None:
+            upper = offset + limit
+            body_hits_list = [i for i, o in enumerate(ords_list) if offset <= o < upper]
+        else:
+            body_hits_list = [i for i, o in enumerate(ords_list) if o >= offset]
+        gt_hits_list = [i for i, d in enumerate(depths_list) if d == 0]
+        clean = {k: v for k, v in col_data.items() if k not in {ORD, TOTAL}}
+        return (
+            empty_tbl,
+            total,
+            empty_tbl,
+            _slice_dict(clean, body_hits_list),
+            _slice_dict(clean, gt_hits_list),
+        )
     if TOTAL not in table.column_names:  # the whole ordered tree
         drop = [c for c in (ORD,) if c in table.column_names]
         body = table.drop_columns(drop) if drop else table
@@ -162,6 +198,8 @@ def pivot_long_with_data(
     table: pa.Table,
     query: Any,
     defaults: Optional[Dict[Any, Any]] = None,
+    *,
+    build_table: bool = True,
 ) -> Tuple[pa.Table, Optional[Dict[str, List[Any]]]]:
     """Widen a page's cells and return `(Arrow table, optional column-list dict)` in one pass."""
     if "__is_cell" not in table.column_names:
@@ -173,8 +211,9 @@ def pivot_long_with_data(
     base += [c for c in (ORD, TOTAL) if c in col_names]
     num_rows = table.num_rows
 
+    selected_indices: List[int] = []
     if num_rows == 0:
-        selected_arr = pa.array([], type=pa.int64())
+        selected_arr = pa.array([], type=pa.int64()) if build_table else None
         row_indexes: List[int] = []
         n_sel = 0
     elif ORD in col_names:
@@ -185,11 +224,13 @@ def pivot_long_with_data(
             if num_rows > 1:
                 change[1:] = ord_np[1:] != ord_np[:-1]
             selected_np = np.flatnonzero(change)
-            selected_arr = pa.array(selected_np, type=pa.int64())
-            row_indexes = list((np.cumsum(change) - 1).tolist())
+            selected_arr = pa.array(selected_np, type=pa.int64()) if build_table else None
+            if not build_table:
+                selected_indices = selected_np.tolist()
+            row_indexes = (np.cumsum(change) - 1).tolist()
             n_sel = len(selected_np)
         else:
-            ords = list(ord_np.tolist())
+            ords: List[Any] = ord_np.tolist()
             indexes: Dict[Any, int] = {}
             selected_list: List[int] = []
             row_indexes = []
@@ -201,7 +242,8 @@ def pivot_long_with_data(
                     indexes[key] = idx
                     selected_list.append(i)
                 row_indexes.append(idx)
-            selected_arr = pa.array(selected_list, type=pa.int64())
+            selected_arr = pa.array(selected_list, type=pa.int64()) if build_table else None
+            selected_indices = selected_list
             n_sel = len(selected_list)
     else:
         depths = _col_to_pylist(table[DEPTH])
@@ -217,10 +259,25 @@ def pivot_long_with_data(
                 indexes[key] = idx
                 selected_list.append(i)
             row_indexes.append(idx)
-        selected_arr = pa.array(selected_list, type=pa.int64())
+        selected_arr = pa.array(selected_list, type=pa.int64()) if build_table else None
+        selected_indices = selected_list
         n_sel = len(selected_list)
 
-    base_tbl = table.select(base).take(selected_arr)
+    base_tbl: Optional[pa.Table] = None
+    base_dict: Optional[Dict[str, List[Any]]] = None
+    if build_table and selected_arr is not None:
+        base_tbl = table.select(base).take(selected_arr)
+    else:
+        if n_sel == 0:
+            base_dict = {c: [] for c in base}
+        elif n_sel == num_rows:
+            base_dict = {c: _col_to_pylist(table[c]) for c in base}
+        else:
+            base_dict = {}
+            for c in base:
+                raw_c = _col_to_pylist(table[c])
+                base_dict[c] = [raw_c[idx] for idx in selected_indices]
+
     members = {tuple(m): j for j, m in enumerate(query.column_members)}
     cell_specs = list(query.cells())
     cells: Dict[str, List[Any]] = {}
@@ -235,8 +292,19 @@ def pivot_long_with_data(
             cells[name] = [empty] * n_sel
     else:
         axis_in_rows = axis is not None and axis.label in query.rows
-        base_axis_vals = _col_to_pylist(base_tbl[axis.label]) if axis_in_rows and axis is not None else None
-        base_depth_vals = _col_to_pylist(base_tbl[DEPTH]) if base_axis_vals is not None else None
+        if axis_in_rows and axis is not None:
+            if base_dict is not None:
+                base_axis_vals: Optional[List[Any]] = base_dict[axis.label]
+                base_depth_vals: Optional[List[Any]] = base_dict[DEPTH]
+            elif base_tbl is not None:
+                base_axis_vals = _col_to_pylist(base_tbl[axis.label])
+                base_depth_vals = _col_to_pylist(base_tbl[DEPTH])
+            else:
+                base_axis_vals = None
+                base_depth_vals = None
+        else:
+            base_axis_vals = None
+            base_depth_vals = None
         axis_level = query.rows.index(axis.label) if axis_in_rows and axis is not None else -1
         for _j, member, m, name in cell_specs:
             empty = REGISTRY.get(m.agg).empty if m.agg not in {"formula", "member"} else None
@@ -256,29 +324,41 @@ def pivot_long_with_data(
     # Fast columnar fill of present cell rows (only touch __is_cell, query.columns, __value_*).
     if num_rows > 0:
         is_cells = _col_to_pylist(table["__is_cell"])
-        meas_lists = [(m.alias, _col_to_pylist(table[f"__value_{m.alias}"])) for m in query.measures]
-        names_by_jm = {(j, m.alias): cells[name] for j, _member, m, name in cell_specs}
+        meas_by_alias = {m.alias: _col_to_pylist(table[f"__value_{m.alias}"]) for m in query.measures}
+        targets_by_j: List[List[Tuple[List[Any], List[Any]]]] = [[] for _ in range(len(query.column_members))]
+        for j, _member, m, name in cell_specs:
+            targets_by_j[j].append((cells[name], meas_by_alias[m.alias]))
         if len(query.columns) == 1:
             col_vals = _col_to_pylist(table[query.columns[0]])
-            members_1 = {m[0]: j for m, j in members.items()}
+            members_1: Dict[Any, List[Tuple[List[Any], List[Any]]]] = {
+                m[0]: targets_by_j[j] for m, j in members.items()
+            }
             for i in range(num_rows):
                 if is_cells[i] is not True:
                     continue
-                j = members_1.get(col_vals[i])
-                if j is not None:
+                tlist = members_1.get(col_vals[i])
+                if tlist is not None:
                     target = row_indexes[i]
-                    for alias, mvals in meas_lists:
-                        names_by_jm[(j, alias)][target] = mvals[i]
+                    for dst, src in tlist:
+                        dst[target] = src[i]
         else:
             col_lists = [_col_to_pylist(table[k]) for k in query.columns]
+            members_n: Dict[Tuple[Any, ...], List[Tuple[List[Any], List[Any]]]] = {
+                m: targets_by_j[j] for m, j in members.items()
+            }
             for i in range(num_rows):
                 if is_cells[i] is not True:
                     continue
-                j = members.get(tuple(cl[i] for cl in col_lists))
-                if j is not None:
+                tlist = members_n.get(tuple(cl[i] for cl in col_lists))
+                if tlist is not None:
                     target = row_indexes[i]
-                    for alias, mvals in meas_lists:
-                        names_by_jm[(j, alias)][target] = mvals[i]
+                    for dst, src in tlist:
+                        dst[target] = src[i]
+
+    if not build_table or base_tbl is None:
+        out_dict = base_dict if base_dict is not None else {}
+        out_dict.update(cells)
+        return table.slice(0, 0), out_dict
 
     # Build the widened Arrow table in one O(N) pass matching union_all's exact column order:
     # (*rows, *measures, *derived, *cells, __depth[, __ord, __total]).

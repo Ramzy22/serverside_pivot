@@ -40,9 +40,11 @@ class Block:
     depth: int
     include_total: bool
     insert_excluding: Optional[BoundStatement] = None
+    insert_single: Optional[BoundStatement] = None
     parents: Set[Tuple[Any, ...]] = field(default_factory=set)
     complete: bool = False
     nbytes: int = 4096
+    tried_unfiltered: bool = False
 
 
 @dataclass
@@ -78,6 +80,14 @@ def _proof_expr(tables: Dict[int, Any], mk_relations: Sequence[Any] = ()) -> Any
         if t.op() not in seen:
             seen.add(t.op())
             unique.append(t)
+    if len(unique) == 1:
+        return unique[0]
+    if not mk_relations:
+        # Level blocks for the same query share an identical schema; union directly without select/cast overhead.
+        out = unique[0]
+        for t in unique[1:]:
+            out = out.union(t, distinct=False)
+        return out
     first_col = unique[0].columns[0]
     out = unique[0].select(**{"__p": unique[0][first_col].cast("string")})
     for t in unique[1:]:
@@ -297,23 +307,25 @@ class LevelTableStore:
         return True
 
     def _block(self, query: PivotQuery, relation: Any, depth: int, include_total: bool = True) -> Block:
-        from ibis.backends.sql.datatypes import DuckDBType
         from ibis.expr.operations import DatabaseTable, Namespace
 
         from ..exec import canonical, materialize
 
         meaning = self._meaning(query)
+        canon_meaning = canonical(meaning)
+        rel_hash = hash(relation.op())
         identity = hashlib.sha256(
-            f"{canonical(meaning)}|{hash(relation.op())}|{depth}|{include_total}".encode()).hexdigest()
+            f"{canon_meaning}|{rel_hash}|{depth}|{include_total}".encode()).hexdigest()
         key = key_for("level", query.dataset, identity, str(self.revisions.get(query.dataset, 0)))
         block = self.blocks.get(key)
         if block is not None and block.source == relation.op():
             self.cache.get(key)
             return block
         base_identity = hashlib.sha256(
-            f"{canonical(meaning)}|{hash(relation.op())}|1|{include_total}".encode()).hexdigest()
+            f"{canon_meaning}|{rel_hash}|1|{include_total}".encode()).hexdigest()
         base = self.blocks.get(key_for("level", query.dataset, base_identity, key.revision)) if depth > 1 else None
         lowered = None
+        unfiltered_base = None
         if depth > 1 and base is not None:
             block_schema = base.relation.schema()
             proof = base.relation
@@ -329,15 +341,66 @@ class LevelTableStore:
                 proof = lowered.expr
         self._ensure_schema(proof)
         name = "l_" + uuid.uuid4().hex
-        columns = ", ".join(f'{lf.quote(k)} {DuckDBType.from_ibis(t).sql(dialect="duckdb")}'
-                            for k, t in block_schema.items())
         target = self._table_ref(name)
-        materialize(BoundStatement(proof, f'CREATE TABLE {target} ({columns})', kind="create",
-                                   verified_capabilities=True))
+
+        # Single-statement CTAS fast path when populating a filtered additive depth-1 block
+        # from an already-complete unfiltered depth-1 block (saves separate CREATE TABLE + INSERT).
+        ctas_complete = False
+        ctas_tried = False
+        ctas_nbytes = 4096
+        if (depth == 1 and unfiltered_base is not None and include_total
+                and all(m.agg in _ADDITIVE_AGGS for m in meaning.measures)):
+            params: Dict[str, Any] = {}
+            where_sql = lf.direct_filter_sql(meaning.filters, unfiltered_base.relation.schema(), params)
+            if where_sql is not None:
+                ctas_tried = True
+                base_ref = self._table_ref(unfiltered_base.name)
+                extra_where = f' AND ({where_sql})' if where_sql else ''
+                select_sql = f'SELECT * FROM {base_ref} WHERE {lf.quote(DEPTH)} = 1{extra_where}'  # noqa: S608  # nosec B608
+                agg_map = {"sum": "SUM", "min": "MIN", "max": "MAX", "count": "SUM"}
+                col_exprs = []
+                for c in unfiltered_base.relation.columns:
+                    if c in meaning.rows:
+                        col_exprs.append(f'CAST(NULL AS {lf.duck_type(block_schema[c])})')
+                    elif c in meaning.columns:
+                        col_exprs.append(lf.quote(c))
+                    elif c == DEPTH:
+                        col_exprs.append('0::SMALLINT')
+                    elif c == lf.CELL:
+                        col_exprs.append(lf.quote(lf.CELL))
+                    else:
+                        m = next(x for x in meaning.measures if x.alias == c)
+                        col_exprs.append(f'CAST({agg_map[m.agg]}({lf.quote(c)}) AS {lf.duck_type(block_schema[c])})')
+                gb = ', '.join([*(lf.quote(c) for c in meaning.columns), lf.quote(lf.CELL)])
+                ctas_sql = (
+                    f'CREATE TABLE {target} AS WITH __m AS MATERIALIZED ({select_sql}) '  # noqa: S608  # nosec B608
+                    f'SELECT * FROM __m UNION ALL '
+                    f'SELECT {", ".join(col_exprs)} FROM __m GROUP BY {gb}'
+                )
+                ctas_res = materialize(BoundStatement(
+                    unfiltered_base.relation, ctas_sql, used_parameters(ctas_sql, params),
+                    kind="insert", verified_capabilities=True,
+                ))
+                inserted = int(ctas_res.column(0)[0].as_py()) if ctas_res.num_rows else 0
+                if inserted > 0:
+                    ctas_complete = True
+                    ctas_nbytes = max(64, inserted * max(64, len(block_schema) * 16))
+            else:
+                columns = ", ".join(f'{lf.quote(k)} {lf.duck_type(t)}'
+                                    for k, t in block_schema.items())
+                materialize(BoundStatement(proof, f'CREATE TABLE {target} ({columns})', kind="create",
+                                           verified_capabilities=True))
+        else:
+            columns = ", ".join(f'{lf.quote(k)} {lf.duck_type(t)}'
+                                for k, t in block_schema.items())
+            materialize(BoundStatement(proof, f'CREATE TABLE {target} ({columns})', kind="create",
+                                       verified_capabilities=True))
+
         table = DatabaseTable(name, block_schema, self.backend,
                               Namespace(catalog=self.catalog, database=self.schema)).to_expr()
         register(table, query.dataset)
-        block = Block(key, name, table, None, relation.op(), meaning, depth, include_total)
+        block = Block(key, name, table, None, relation.op(), meaning, depth, include_total,
+                      complete=ctas_complete, nbytes=ctas_nbytes, tried_unfiltered=ctas_tried)
         if lowered is not None:
             block.insert = self._insert(block, lowered)
         self.blocks[key] = block
@@ -357,15 +420,23 @@ class LevelTableStore:
         missing = None if parents is None else parents - block.parents
         if missing == frozenset():
             return
-        if depth == 1 and missing is None and self._try_fill_from_unfiltered_lv1(block, query, relation):
+        if (depth == 1 and missing is None and not block.tried_unfiltered
+                and self._try_fill_from_unfiltered_lv1(block, query, relation)):
             return
         need_exclude = depth > 1 and missing is None and bool(block.parents)
+        use_single = depth == 2 and missing is not None and len(missing) == 1
         if need_exclude:
             if block.insert_excluding is None:
                 lowered = lf.block(query, relation, depth, native=True, parents=ParentPaths(depth, exclude=True),
                                    include_total=block.include_total)
                 block.insert_excluding = self._insert(block, lowered)
             stmt = block.insert_excluding
+        elif use_single:
+            if block.insert_single is None:
+                lowered = lf.block(query, relation, depth, native=True, parents=ParentPaths(depth, exclude=False),
+                                   include_total=block.include_total, single_parent=True)
+                block.insert_single = self._insert(block, lowered)
+            stmt = block.insert_single
         else:
             if block.insert is None:
                 parent_spec = ParentPaths(depth, exclude=False) if depth > 1 else None
@@ -376,6 +447,8 @@ class LevelTableStore:
         raw_params: Dict[str, Any] = dict(stmt.params)
         if depth > 1:
             raw_params.update(parent_bindings("parents", depth, missing, depth - 1))
+            if use_single and missing is not None:
+                raw_params[f"parent_{depth}"] = next(iter(missing))[0]
             if need_exclude:
                 raw_params.update(parent_bindings("exclude", depth, block.parents, depth - 1))
         params = used_parameters(stmt.sql, raw_params)
@@ -393,7 +466,6 @@ class LevelTableStore:
                          for s in query.sort if s.by and s.field in query.rows})
         if not needed:
             return {}, []
-        from ibis.backends.sql.datatypes import DuckDBType
         from ibis.expr.operations import DatabaseTable, Namespace
 
         from ..exec import canonical, materialize
@@ -428,7 +500,7 @@ class LevelTableStore:
             mk_schema = agg.schema()
             self._ensure_schema(agg)
             name = "mk_" + uuid.uuid4().hex
-            columns = ", ".join(f'{lf.quote(k)} {DuckDBType.from_ibis(t).sql(dialect="duckdb")}'
+            columns = ", ".join(f'{lf.quote(k)} {lf.duck_type(t)}'
                                 for k, t in mk_schema.items())
             target = self._table_ref(name)
             materialize(BoundStatement(agg, f'CREATE TABLE {target} ({columns})', kind="create",
@@ -515,7 +587,8 @@ class LevelTableStore:
                 if block.key in self.blocks:
                     self.cache.put(block.key, block)
 
-    def read(self, query: PivotQuery, relation: Any, grand_total: bool, *, prune_total: bool = False) -> Any:
+    def read(self, query: PivotQuery, relation: Any, grand_total: bool, *,
+             prune_total: bool = False, build_table: bool = True) -> Any:
         from ..exec import canonical, materialize
         from ..frame import pivot_long_with_data
         from . import native_view
@@ -576,7 +649,9 @@ class LevelTableStore:
                 result = materialize(BoundStatement(
                     proof, sql, params, kind="read", schema=out_schema, verified_capabilities=True,
                 ))
-                return pivot_long_with_data(result, query, lf.empty_cells(query, relation))
+                return pivot_long_with_data(
+                    result, query, lf.empty_cells(query, relation), build_table=build_table
+                )
             finally:
                 # Tables stay pinned through the whole read; eviction drops
                 # complete tables only after the statement relinquishes them.

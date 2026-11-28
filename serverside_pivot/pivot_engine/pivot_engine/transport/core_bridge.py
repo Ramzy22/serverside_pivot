@@ -1159,6 +1159,202 @@ def _legacy_row(record: Mapping[str, Any], query: PivotQuery, projection: Sequen
     return out
 
 
+def _legacy_rows_and_color_stats(
+    data: Dict[str, List[Any]],
+    query: PivotQuery,
+    projection: Sequence[Tuple[str, str]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], bool]:
+    """Single-pass columnar build of legacy rows and color-scale stats directly from `frame._data`."""
+    import math
+
+    from ..core.frame import DEPTH, _token
+    from ..hierarchy_rows import _hierarchy_color_meta_keys, _hierarchy_color_stats_result
+
+    depths = data[DEPTH]
+    n = len(depths)
+    if n == 0:
+        return [], {"byCol": {}, "table": None}, False
+
+    row_fields = query.rows
+    dims = [data[k] for k in row_fields]
+    proj_cols = [(out, data[src]) for out, src in projection]
+    tokens: List[Dict[Any, str]] = [{} for _ in row_fields]
+    tok = _token
+    r0 = row_fields[0] if row_fields else ""
+    d0 = dims[0] if dims else None
+    t0 = tokens[0] if tokens else None
+    r1 = row_fields[1] if len(row_fields) > 1 else ""
+    d1 = dims[1] if len(dims) > 1 else None
+    t1 = tokens[1] if len(tokens) > 1 else None
+    pf_templates = [list(row_fields[:d]) for d in range(len(row_fields) + 1)]
+    gt_path = GRAND_TOTAL_DISPLAY_PATH
+    gt_id = GRAND_TOTAL_ID
+
+    rows: List[Dict[str, Any]] = []
+    append = rows.append
+    skip_color: Optional[set[int]] = None
+    has_nan = False
+
+    for i, raw_depth in enumerate(depths):
+        depth = int(raw_depth)
+        if depth == 1 and d0 is not None and t0 is not None:
+            v0 = d0[i]
+            if type(v0) is float and v0 != v0:
+                has_nan = True
+            v0_str = "" if v0 is None else (v0 if type(v0) is str else str(v0))
+            out: Dict[str, Any] = {r0: v0}
+            for col_out, col_vals in proj_cols:
+                out[col_out] = col_vals[i]
+            out["_id"] = v0_str
+            out["_path"] = v0_str
+            out["_pathFields"] = [r0]
+            out["depth"] = 0
+            out["_rowKey"] = "[" + tok(t0, v0) + "]"
+            append(out)
+            if v0_str == gt_id or v0_str == gt_path:
+                if skip_color is None:
+                    skip_color = {i}
+                else:
+                    skip_color.add(i)
+        elif depth == 2 and d0 is not None and d1 is not None and t0 is not None and t1 is not None:
+            v0 = d0[i]
+            v1 = d1[i]
+            if (type(v0) is float and v0 != v0) or (type(v1) is float and v1 != v1):
+                has_nan = True
+            v0_str = "" if v0 is None else (v0 if type(v0) is str else str(v0))
+            v1_str = "" if v1 is None else (v1 if type(v1) is str else str(v1))
+            path_str = v0_str + "|||" + v1_str
+            out = {r0: v0, r1: v1}
+            for col_out, col_vals in proj_cols:
+                out[col_out] = col_vals[i]
+            out["_id"] = v1_str
+            out["_path"] = path_str
+            out["_pathFields"] = [r0, r1]
+            out["depth"] = 1
+            out["_rowKey"] = "[" + tok(t0, v0) + "," + tok(t1, v1) + "]"
+            append(out)
+            if v1_str == gt_id or path_str == gt_path:
+                if skip_color is None:
+                    skip_color = {i}
+                else:
+                    skip_color.add(i)
+        elif depth == 0:
+            out = {f: None for f in row_fields[:1]}
+            for col_out, col_vals in proj_cols:
+                out[col_out] = col_vals[i]
+            out["_id"] = gt_id
+            out["_isTotal"] = True
+            out["_path"] = gt_path
+            out["depth"] = 0
+            out["_rowKey"] = "[]"
+            append(out)
+            if skip_color is None:
+                skip_color = {i}
+            else:
+                skip_color.add(i)
+        else:
+            out = {}
+            parts: List[str] = []
+            key_parts: List[str] = []
+            for j in range(depth):
+                vj = dims[j][i]
+                if type(vj) is float and vj != vj:
+                    has_nan = True
+                out[row_fields[j]] = vj
+                parts.append("" if vj is None else (vj if type(vj) is str else str(vj)))
+                key_parts.append(tok(tokens[j], vj))
+            for col_out, col_vals in proj_cols:
+                out[col_out] = col_vals[i]
+            last_str = parts[-1]
+            path_str = "|||".join(parts)
+            out["_id"] = last_str
+            out["_path"] = path_str
+            out["_pathFields"] = pf_templates[depth].copy()
+            out["depth"] = depth - 1
+            out["_rowKey"] = "[" + ",".join(key_parts) + "]"
+            append(out)
+            if last_str == gt_id or path_str == gt_path:
+                if skip_color is None:
+                    skip_color = {i}
+                else:
+                    skip_color.add(i)
+
+    # Columnar color-scale stats over projected measure columns (exact match with compute_hierarchy_color_scale_stats).
+    meta_keys = _hierarchy_color_meta_keys(list(row_fields), list(query.columns))
+    effective_proj: Dict[str, List[Any]] = {}
+    for col_out, col_vals in proj_cols:
+        effective_proj[col_out] = col_vals
+    by_col: Dict[str, Dict[str, float]] = {}
+    table_min = float("inf")
+    table_max = float("-inf")
+    for col_out, col_vals in effective_proj.items():
+        in_meta = col_out in meta_keys
+        cmin: Any = None
+        cmax: Any = None
+        if skip_color is None:
+            for v in col_vals:
+                vt = type(v)
+                if vt is int:
+                    if in_meta:
+                        continue
+                elif vt is float:
+                    if v != v:
+                        has_nan = True
+                        continue
+                    if in_meta:
+                        continue
+                elif v is None:
+                    continue
+                elif isinstance(v, (int, float)):
+                    if isinstance(v, float) and math.isnan(v):
+                        has_nan = True
+                        continue
+                    if in_meta:
+                        continue
+                else:
+                    continue
+                if cmin is None:
+                    cmin = v
+                    cmax = v
+                else:
+                    if v < cmin:
+                        cmin = v
+                    if v > cmax:
+                        cmax = v
+        else:
+            for i, v in enumerate(col_vals):
+                vt = type(v)
+                if vt is float and v != v:
+                    has_nan = True
+                    continue
+                if i in skip_color or in_meta or v is None:
+                    continue
+                if vt is int or vt is float:
+                    pass
+                elif isinstance(v, (int, float)):
+                    if isinstance(v, float) and math.isnan(v):
+                        has_nan = True
+                        continue
+                else:
+                    continue
+                if cmin is None:
+                    cmin = v
+                    cmax = v
+                else:
+                    if v < cmin:
+                        cmin = v
+                    if v > cmax:
+                        cmax = v
+        if cmin is not None:
+            by_col[col_out] = {"min": cmin, "max": cmax}
+            if cmin < table_min:
+                table_min = cmin
+            if cmax > table_max:
+                table_max = cmax
+
+    return rows, _hierarchy_color_stats_result(by_col, table_min, table_max), has_nan
+
+
 def core_hierarchy_view(
     resolve: Callable[[str], Any],
     spec: Any,
@@ -1210,7 +1406,7 @@ def core_hierarchy_view(
         return _legacy_row(record, query, projection)
 
     # One statement: the window, the tree's row count and the grand total.
-    frame = execute(query, resolver, grand_total=totals, prune_total=not totals)
+    frame = execute(query, resolver, grand_total=totals, prune_total=not totals, _need_arrow=False)
     nodes = int(frame.total or 0) - 1  # the tree's rows, less its grand total
     if end_row is None:  # the whole flattened list
         end_row = nodes
@@ -1219,6 +1415,29 @@ def core_hierarchy_view(
     if tabular_subtotals or flat:
         return _post_order_view(query, frame, legacy, nodes, int(start_row), int(end_row), totals, grand_total,
                                 include_grand_total_row, started, flat=flat)
+    if query.ragged is None and frame._data is not None:
+        rows, color_scale_stats, has_nan = _legacy_rows_and_color_stats(frame._data, query, projection)
+        gt_has_nan = (
+            any(type(v) is float and v != v for v in grand_total.values())
+            if grand_total is not None
+            else False
+        )
+        append_gt = grand_total is not None and int(start_row) <= nodes <= int(end_row)
+        if append_gt and grand_total is not None:
+            rows.append(dict(grand_total))
+        return {
+            "rows": rows,
+            "total_rows": nodes + (1 if totals else 0),
+            "grand_total_row": grand_total if include_grand_total_row else None,
+            "color_scale_stats": color_scale_stats,
+            "_core_fast_meta": {
+                "normalized": not has_nan and (not append_gt or not gt_has_nan),
+                "gt_normalized": not gt_has_nan,
+            },
+            # Same profile layer as the legacy controller, so profile consumers keep working.
+            "profile": {"controller": {"operation": "hierarchy_view", "engine": "core",
+                                       "totalMs": round((time.perf_counter() - started) * 1000.0, 3)}},
+        }
     rows = [legacy(r) for r in frame.records()]  # pre-order: the window starts after the grand total
     if grand_total is not None and int(start_row) <= nodes <= int(end_row):
         rows.append(dict(grand_total))
