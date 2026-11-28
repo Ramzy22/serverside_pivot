@@ -238,7 +238,9 @@ export function useRenderHelpers({
         hierarchy: theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || theme.background || '#fff',
         normal: theme.leafBg || theme.surfaceBg || theme.background || '#fff',
         totalText: theme.totalText || theme.text || theme.primary,
-        grandTotalText: theme.totalTextStrong || theme.totalText || theme.primary,
+        // The grand-total row sits on the subtle total background, so it pairs with totalText;
+        // the strong pair (totalBgStrong/totalTextStrong) belongs to total headers.
+        grandTotalText: theme.totalText || theme.text || theme.primary,
     }), [theme]);
 
     /** @type {any} */

@@ -1,4 +1,4 @@
-import { j as e, I as F, a1 as ke, a2 as Ur, a3 as Vr, a4 as Ct, a5 as it, a6 as Kr, a7 as Yr, a8 as Zr, a9 as He, aa as st, ab as dt, E as Gr, ac as Xr, ad as qr, ae as Jr, af as Je, ag as sr, ah as Qr, ai as Gt, T as ne, aj as en, ak as tn, al as rn, am as Xt, an as nn, ao as ln } from "./index-BO6HjsL-.js";
+import { j as e, I as F, a1 as ke, a2 as Ur, a3 as Vr, a4 as Ct, a5 as it, a6 as Kr, a7 as Yr, a8 as Gt, a9 as Zr, aa as Gr, ab as He, ac as st, ad as dt, E as Xr, ae as qr, af as Jr, ag as Qr, ah as Je, ai as sr, aj as en, ak as Xt, T as ne, al as tn, am as rn, an as nn, ao as ln } from "./index-vxH3rV1_.js";
 import { a as de, R as c } from "./charts-DthW1Q8W.js";
 const on = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, options: x, optionMeta: f, onSearchOptions: j, onLoadMoreOptions: y, onOpen: E }) => {
   const [s, h] = de.useState(!1), W = l && (l.conditions || l.value), P = () => h(!1), M = () => {
@@ -359,7 +359,215 @@ const on = ({ column: t, theme: n, styles: i, onFilter: o, currentFilter: l, opt
       ]
     }
   );
-}, cr = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, pr = /^[A-Za-z_][A-Za-z0-9_]*$/, ct = /\[([^\]]+)\]/g, an = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), sn = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Me = {
+};
+function an({
+  panelId: t,
+  panelLabel: n,
+  size: i,
+  onSizeChange: o,
+  getSidebarWidth: l = null,
+  onSidebarWidthChange: x = null,
+  theme: f,
+  outerStyle: j = {},
+  contentStyle: y = {},
+  children: E
+}) {
+  const s = c.useRef(null), h = c.useRef(null), W = c.useRef(null), P = c.useRef(null), M = c.useRef(null), $ = c.useRef(null), b = c.useRef(null), [C, A] = c.useState(null), [I, N] = c.useState(null), R = c.useMemo(() => Yr(t), [t]), O = c.useMemo(
+    () => Gt(t, i),
+    [t, i]
+  ), a = c.useRef(O);
+  a.current = O;
+  const k = c.useMemo(() => C ? Gt(t, {
+    width: C.width !== void 0 ? C.width : O.width,
+    height: C.height !== void 0 ? C.height : O.height
+  }) : O, [C, t, O]), w = c.useCallback((L = !0) => {
+    if (h.current) {
+      const g = h.current;
+      h.current = null, g(L);
+    }
+  }, []);
+  c.useEffect(() => (() => w(!1)), [w]);
+  const B = c.useCallback((L, g) => {
+    if (!s.current || typeof o != "function") return;
+    L.preventDefault(), L.stopPropagation(), w(!1);
+    const z = s.current.getBoundingClientRect(), V = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, D = typeof l == "function" ? Number(l()) : NaN, H = Number.isFinite(D) ? Math.max(200, Math.min(600, Math.round(D))) : null, Z = H !== null ? Math.max(0, Math.round(H - V.width)) : 0, Q = typeof x == "function" && H !== null;
+    H !== null && (a.current.width === null || $.current === null) && ($.current = H, b.current = Z);
+    const U = H !== null ? $.current !== null ? Math.min(H, $.current) : H : null, ee = b.current !== null ? b.current : Z, zt = Q ? Math.max(R.minWidth, Math.min(R.maxWidth, 600 - ee)) : Math.max(R.minWidth, Math.min(R.maxWidth, Math.floor(V.width))), le = {
+      startX: L.clientX,
+      startY: L.clientY,
+      startWidth: z.width,
+      startHeight: z.height,
+      startParentWidth: Math.floor(V.width),
+      startSidebarWidth: H,
+      baseSidebarWidth: U,
+      chromeWidth: ee,
+      canExpandSidebar: Q,
+      maxWidth: zt,
+      initialWidthProp: a.current.width
+    }, we = document.body.style.cursor, We = document.body.style.userSelect;
+    document.body.style.cursor = g === "both" ? "nwse-resize" : g === "width" ? "ew-resize" : "ns-resize", document.body.style.userSelect = "none", P.current = null, M.current = null, N(g);
+    const Ce = () => {
+      W.current = null, P.current && A(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
+    }, fe = (Ae) => {
+      const ge = Ae.clientX - le.startX, me = Ae.clientY - le.startY, Ve = {};
+      if (g === "width" || g === "both" && (le.initialWidthProp !== null || Math.abs(ge) >= 3)) {
+        const ve = Math.max(R.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ge)));
+        if (Ve.width = ve, s.current && (s.current.style.width = `${ve}px`), le.canExpandSidebar) {
+          const pt = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, ut = Math.max(
+            pt,
+            Math.min(600, ve + le.chromeWidth)
+          );
+          M.current = ut;
+        }
+      }
+      if (g === "height" || g === "both") {
+        const ve = Math.max(R.minHeight, Math.min(R.maxHeight, Math.round(le.startHeight + me)));
+        Ve.height = ve, s.current && (s.current.style.height = `${ve}px`);
+      }
+      Object.keys(Ve).length !== 0 && (P.current = Ve, typeof window < "u" && typeof window.requestAnimationFrame == "function" ? W.current === null && (W.current = window.requestAnimationFrame(Ce)) : Ce());
+    }, Re = (Ae = !0) => {
+      W.current !== null && typeof window < "u" && typeof window.cancelAnimationFrame == "function" && (window.cancelAnimationFrame(W.current), W.current = null), document.body.style.cursor = we, document.body.style.userSelect = We, window.removeEventListener("mousemove", fe), window.removeEventListener("mouseup", ce), window.removeEventListener("blur", ce);
+      const ge = P.current, me = M.current;
+      P.current = null, M.current = null, N(null), A(null), Ae ? (me !== null && typeof x == "function" && x(me), ge && o(t, ge)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
+    }, ce = () => w(!0);
+    h.current = Re, window.addEventListener("mousemove", fe), window.addEventListener("mouseup", ce), window.addEventListener("blur", ce);
+  }, [
+    l,
+    R.maxHeight,
+    R.maxWidth,
+    R.minHeight,
+    R.minWidth,
+    x,
+    o,
+    t,
+    w
+  ]), _ = c.useCallback((L, g) => {
+    g && (g.preventDefault(), g.stopPropagation()), w(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)));
+  }, [x, o, t, w]), Y = `${f.primary}55`;
+  return /* @__PURE__ */ e.jsxs(
+    "div",
+    {
+      ref: s,
+      style: {
+        position: "relative",
+        flexShrink: 0,
+        width: k.width === null ? "100%" : `${k.width}px`,
+        maxWidth: "100%",
+        height: `${k.height}px`,
+        minHeight: `${R.minHeight}px`,
+        maxHeight: `${R.maxHeight}px`,
+        boxSizing: "border-box",
+        overflow: "hidden",
+        ...j
+      },
+      children: [
+        /* @__PURE__ */ e.jsx(
+          "div",
+          {
+            style: {
+              width: "100%",
+              height: "100%",
+              overflow: "auto",
+              boxSizing: "border-box",
+              ...y
+            },
+            children: E
+          }
+        ),
+        /* @__PURE__ */ e.jsx(
+          "div",
+          {
+            className: "sp-resize-handle",
+            "data-resizing": I === "width" ? "true" : void 0,
+            onMouseDown: (L) => B(L, "width"),
+            onDoubleClick: (L) => _("width", L),
+            style: {
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: "12px",
+              width: "10px",
+              cursor: "ew-resize",
+              zIndex: 4,
+              touchAction: "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              paddingRight: "2px"
+            },
+            title: `Resize ${n} width`,
+            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "2px", height: "24px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
+          }
+        ),
+        /* @__PURE__ */ e.jsx(
+          "div",
+          {
+            className: "sp-resize-handle",
+            "data-resizing": I === "height" ? "true" : void 0,
+            onMouseDown: (L) => B(L, "height"),
+            onDoubleClick: (L) => _("height", L),
+            style: {
+              position: "absolute",
+              left: 0,
+              right: "12px",
+              bottom: 0,
+              height: "10px",
+              cursor: "ns-resize",
+              zIndex: 4,
+              touchAction: "none",
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              paddingBottom: "2px"
+            },
+            title: `Resize ${n} height`,
+            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "28px", height: "2px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
+          }
+        ),
+        /* @__PURE__ */ e.jsx(
+          "div",
+          {
+            className: "sp-resize-handle",
+            "data-resizing": I === "both" ? "true" : void 0,
+            onMouseDown: (L) => B(L, "both"),
+            onDoubleClick: (L) => _("both", L),
+            style: {
+              position: "absolute",
+              right: 0,
+              bottom: 0,
+              width: "14px",
+              height: "14px",
+              cursor: "nwse-resize",
+              zIndex: 5,
+              touchAction: "none"
+            },
+            title: `Resize ${n}`,
+            children: /* @__PURE__ */ e.jsx(
+              "div",
+              {
+                className: "sp-resize-pill",
+                "aria-hidden": "true",
+                style: {
+                  position: "absolute",
+                  right: "4px",
+                  bottom: "4px",
+                  width: "3px",
+                  height: "3px",
+                  borderRadius: "999px",
+                  background: Y,
+                  opacity: 0.55,
+                  boxShadow: `-4px 0 0 ${Y}, 0 -4px 0 ${Y}, -4px -4px 0 ${Y}`,
+                  pointerEvents: "none"
+                }
+              }
+            )
+          }
+        )
+      ]
+    }
+  );
+}
+const cr = /\b[A-Za-z_][A-Za-z0-9_]*\b/g, pr = /^[A-Za-z_][A-Za-z0-9_]*$/, ct = /\[([^\]]+)\]/g, sn = /* @__PURE__ */ new Set(["abs", "round", "ceil", "floor", "max", "min", "int", "float"]), dn = /* @__PURE__ */ new Set(["True", "False", "None", "and", "or", "not", "if", "else", "in", "is"]), Me = {
   type: "line",
   metric: "last",
   showCurrentValue: !0,
@@ -389,7 +597,7 @@ function Ue(t) {
 function Fe(t) {
   return Ue(t) === "columns";
 }
-const dn = [
+const cn = [
   { value: "eq", label: "Equals" },
   { value: "ne", label: "Does not equal" },
   { value: "contains", label: "Contains" },
@@ -403,7 +611,7 @@ const dn = [
   { value: "not_in", label: "Not in list" },
   { value: "is_null", label: "Is empty" },
   { value: "is_not_null", label: "Is not empty" }
-], qt = /* @__PURE__ */ new Set(["in", "not_in"]), cn = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
+], qt = /* @__PURE__ */ new Set(["in", "not_in"]), pn = /* @__PURE__ */ new Set(["is_null", "is_not_null"]);
 function xr(t) {
   return { field: t && t[0] || "", operator: "eq", value: "", values: [], caseSensitive: !1 };
 }
@@ -430,7 +638,7 @@ function Jt(t, n = null) {
     __isNew: !0
   };
 }
-function pn(t, n) {
+function un(t, n) {
   if (!n) return "string";
   const i = Array.isArray(t) ? t.slice(0, 250) : [];
   for (let o = 0; o < i.length; o += 1) {
@@ -451,8 +659,8 @@ function pn(t, n) {
   }
   return "string";
 }
-const at = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => pn(t, o) === i);
-function un(t, n) {
+const at = (t, n, i) => (Array.isArray(n) ? n : []).filter((o) => un(t, o) === i);
+function xn(t, n) {
   const o = at(n, t, "date")[0] || t[0] || "", l = st(`${o || "date"}_month`);
   return {
     id: l,
@@ -466,7 +674,7 @@ function un(t, n) {
     __isNew: !0
   };
 }
-function xn(t, n) {
+function fn(t, n) {
   const o = at(n, t, "number")[0] || t[0] || "", l = st(`${o || "number"}_bins`);
   return {
     id: l,
@@ -483,7 +691,7 @@ function xn(t, n) {
   };
 }
 const Qt = (t) => String(t || "").split(",").map((n) => n.trim()).filter(Boolean), er = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase(), gr = (t) => t && (t.__editingField || t.field) ? t.__editingField || t.field : "";
-function fn(t, n) {
+function gn(t, n) {
   const i = Array.isArray(t) ? t : [], o = gr(n);
   if (!o) return i;
   const l = i.findIndex(
@@ -506,29 +714,29 @@ function tr(t) {
     }
   ), Array.from(new Set(n));
 }
-function gn(t, n) {
-  const i = (Array.isArray(t) ? t : []).filter((o) => o && typeof o == "object").filter((o) => !o._isTotal && o._path !== "__grand_total__" && o._path !== "__color_scale_stats__");
-  return Yr(i, n || []);
-}
 function yn(t, n) {
+  const i = (Array.isArray(t) ? t : []).filter((o) => o && typeof o == "object").filter((o) => !o._isTotal && o._path !== "__grand_total__" && o._path !== "__color_scale_stats__");
+  return Zr(i, n || []);
+}
+function hn(t, n) {
   return !Array.isArray(t) || t.length === 0 || !Array.isArray(n) || n.length === 0 ? !1 : n.every((i) => t.some((o) => o && Object.prototype.hasOwnProperty.call(o, i)));
 }
-const hn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
+const bn = (t, n) => (n && Array.isArray(n.rules) ? n.rules : []).map(
   /** @param {any} [rule] @returns {any} */
   (i) => ({
     label: i && i.label ? i.label : "Rule",
     count: t.reduce(
       /** @param {any} [matches] @param {any} [row] @returns {any} */
-      (o, l) => Zr(l, i.condition) ? o + 1 : o,
+      (o, l) => Gr(l, i.condition) ? o + 1 : o,
       0
     )
   })
-), bn = c.lazy(() => import(
+), mn = c.lazy(() => import(
   /* webpackChunkName: "pivot-report-editor" */
-  "./ReportEditor-BTh14WY9.js"
+  "./ReportEditor-BBeI-b4y.js"
 ).then((t) => ({
   default: t.ReportEditor
-}))), mn = (t) => /* @__PURE__ */ e.jsx(c.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(bn, { ...t }) });
+}))), vn = (t) => /* @__PURE__ */ e.jsx(c.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(mn, { ...t }) });
 function rr({
   availableFields: t,
   customDimensions: n,
@@ -549,7 +757,7 @@ function rr({
     () => He(n || []),
     [n]
   ), [s, h] = c.useState(null), W = c.useMemo(
-    () => fn(E, s),
+    () => gn(E, s),
     [s, E]
   ), P = c.useMemo(() => {
     const a = /* @__PURE__ */ new Set(), k = [];
@@ -577,7 +785,7 @@ function rr({
     },
     [y, o]
   ), b = c.useMemo(
-    () => gn(o, W),
+    () => yn(o, W),
     [W, o]
   ), C = c.useMemo(() => ({
     border: `1px solid ${l.border}`,
@@ -658,8 +866,8 @@ function rr({
         return;
       }
       const L = tr(a);
-      if (yn(b, L)) {
-        const g = hn(b, a).find(
+      if (hn(b, L)) {
+        const g = bn(b, a).find(
           /** @param {any} [summary] @returns {any} */
           (z) => z.count === 0
         );
@@ -730,7 +938,7 @@ function rr({
         "button",
         {
           type: "button",
-          onClick: () => h(un(y, o)),
+          onClick: () => h(xn(y, o)),
           disabled: M.length === 0,
           style: { ...A(), opacity: M.length === 0 ? 0.5 : 1, cursor: M.length === 0 ? "not-allowed" : "pointer" },
           title: M.length === 0 ? "No date fields detected" : "Create date buckets",
@@ -744,7 +952,7 @@ function rr({
         "button",
         {
           type: "button",
-          onClick: () => h(xn(y, o)),
+          onClick: () => h(fn(y, o)),
           disabled: $.length === 0,
           style: { ...A(), opacity: $.length === 0 ? 0.5 : 1, cursor: $.length === 0 ? "not-allowed" : "pointer" },
           title: $.length === 0 ? "No numeric fields detected" : "Create numeric bins",
@@ -934,7 +1142,7 @@ function rr({
                         value: s.granularity || "month",
                         onChange: (a) => h({ ...s, granularity: a.target.value }),
                         style: { ...C, width: "100%" },
-                        children: Array.from(tn).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
+                        children: Array.from(rn).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ke(a) }, a))
                       }
                     )
                   ] }),
@@ -1088,7 +1296,7 @@ function rr({
                       B.map(
                         /** @param {any} [clause] @param {any} [clauseIndex] @returns {any} */
                         (_, Y) => {
-                          const L = cn.has(_.operator), g = qt.has(_.operator);
+                          const L = pn.has(_.operator), g = qt.has(_.operator);
                           return /* @__PURE__ */ e.jsxs("div", { style: { display: "grid", gridTemplateColumns: L ? "1fr 130px 28px" : "1fr 130px 1fr 28px", gap: "6px", alignItems: "center" }, children: [
                             /* @__PURE__ */ e.jsx(
                               ne,
@@ -1118,7 +1326,7 @@ function rr({
                                   });
                                 },
                                 style: { ...C, width: "100%" },
-                                children: dn.map((z) => /* @__PURE__ */ e.jsx("option", { value: z.value, children: z.label }, z.value))
+                                children: cn.map((z) => /* @__PURE__ */ e.jsx("option", { value: z.value, children: z.label }, z.value))
                               }
                             ),
                             !L && /* @__PURE__ */ e.jsx(
@@ -1223,7 +1431,7 @@ function nr(t, n = []) {
     /** @param {any} [token] @param {any} [offset] @returns {any} */
     (y, E) => {
       const s = f.slice(E + y.length).trimStart();
-      return sn.has(y) || an.has(y) && s.startsWith("(") || x(y), y;
+      return dn.has(y) || sn.has(y) && s.startsWith("(") || x(y), y;
     }
   ), o;
 }
@@ -1235,7 +1443,7 @@ function Ee(t) {
   const n = String(t || "").trim();
   return n ? pr.test(n) ? n : `[${n}]` : "";
 }
-function vn(t, n, i = "formula") {
+function Sn(t, n, i = "formula") {
   const o = _e(t, i), l = new Set(
     (Array.isArray(n) ? n : []).map((j) => j ? j.agg === "formula" ? J(j) : j.field : null).filter(Boolean).map((j) => String(j).toLowerCase())
   );
@@ -1245,7 +1453,7 @@ function vn(t, n, i = "formula") {
     x += 1, f = `${o}${x}`;
   return f;
 }
-function Sn(t, n, i) {
+function jn(t, n, i) {
   if (!t || !n || n === i) return t;
   const o = Ee(i), l = [];
   let f = String(t).replace(ct, (j, y) => String(y || "").trim() === n ? o : (l.push(j), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${ur(n)}\\b`, "g"), o);
@@ -1265,7 +1473,7 @@ function Rt(t, n, i) {
 function lr(t) {
   return !t || typeof t.closest != "function" ? !1 : !!t.closest('button, input, select, textarea, [contenteditable="true"]');
 }
-function jn(t) {
+function kn(t) {
   if (!t || typeof t != "object") return "";
   const n = t.field === void 0 || t.field === null ? "" : String(t.field), i = t.agg === void 0 || t.agg === null ? "" : String(t.agg);
   return `${n}::${i}`;
@@ -1281,7 +1489,7 @@ function At(t) {
     negativeColor: n.negativeColor || ""
   } : null;
 }
-function kn(t) {
+function wn(t) {
   const n = {
     ...Me,
     ...t || {}
@@ -1314,7 +1522,7 @@ function $t(t, n) {
   return !n || !n.canUseAny ? !1 : t === "field" ? n.canUseFieldSeries : n.canUsePivotSeries;
 }
 function br(t, n) {
-  const i = kn(t);
+  const i = wn(t);
   return !n || !n.canUseAny ? null : $t(i.source, n) ? i : {
     ...i,
     source: n.defaultSource
@@ -1329,7 +1537,7 @@ function or(t) {
   const n = (Array.isArray(t) ? t : []).map((i) => i && i.id).filter(Boolean);
   return n.length === 0 ? "" : n.length === 1 ? `${se(n[0])} * 100` : `${se(n[0])} - ${se(n[1])}`;
 }
-function wn(t) {
+function Cn(t) {
   const n = new Set(
     (Array.isArray(t) ? t : []).map((o) => o && o.field).filter(Boolean)
   );
@@ -1337,7 +1545,7 @@ function wn(t) {
   for (; n.has(`formula_${i}`); ) i += 1;
   return `formula_${i}`;
 }
-function Cn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
+function Rn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
   const j = String(t || "").trim(), y = Fe(l);
   if (!j)
     return {
@@ -1484,7 +1692,7 @@ function Cn(t, n, i = null, o = null, l = "measures", x = [], f = []) {
     text: `Using ${A.join(", ")}`
   };
 }
-function Rn(t) {
+function An(t) {
   if (!Array.isArray(t) || t.length === 0) return [];
   const n = t.map((i) => i && Ee(i.field)).filter(Boolean);
   return n.length === 0 ? [] : n.length === 1 ? [{ label: "Scale x100", value: `${n[0]} * 100` }] : [
@@ -1493,7 +1701,7 @@ function Rn(t) {
     { label: "Margin %", value: `((${n[0]} - ${n[1]}) / ${n[0]}) * 100` }
   ];
 }
-function An(t) {
+function Dn(t) {
   const n = (Array.isArray(t) ? t : []).map((i) => i && i.id).filter(Boolean);
   return n.length === 0 ? [] : n.length === 1 ? [{ label: "Scale x100", value: `${se(n[0])} * 100` }] : [
     { label: "Difference", value: `${se(n[0])} - ${se(n[1])}` },
@@ -1501,7 +1709,7 @@ function An(t) {
     { label: "Spread %", value: `((${se(n[0])} - ${se(n[1])}) / ${se(n[0])}) * 100` }
   ];
 }
-function Dn(t, n) {
+function $n(t, n) {
   const i = {
     muted: {
       text: t.textSec,
@@ -1521,7 +1729,7 @@ function Dn(t, n) {
   };
   return i[n] || i.muted;
 }
-function $n({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], onClose: x }) {
+function zn({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], onClose: x }) {
   const f = c.useMemo(
     () => At(t && t.sparkline) || { ...Me },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1847,7 +2055,7 @@ function $n({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], on
   );
 }
 function mr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fixedSparklineValueKeySet: x = /* @__PURE__ */ new Set(), showNotification: f }) {
-  const [j, y] = c.useState(!1), E = At(t && t.sparkline), s = jn(t), h = !!(s && x && x.has(s)), W = c.useMemo(
+  const [j, y] = c.useState(!1), E = At(t && t.sparkline), s = kn(t), h = !!(s && x && x.has(s)), W = c.useMemo(
     () => hr(t, l),
     [l, t]
   ), P = !!E, M = !!(E && $t(E.source || "pivot", W)), $ = c.useCallback((I) => I.stopPropagation(), []), b = c.useCallback(() => {
@@ -1955,7 +2163,7 @@ function mr({ item: t, idx: n, setValConfigs: i, theme: o, colFields: l = [], fi
           t.sparkline && t.sparkline.metric || "last"
         ] }),
         j && /* @__PURE__ */ e.jsx(
-          $n,
+          zn,
           {
             item: t,
             idx: n,
@@ -2021,7 +2229,7 @@ function ir({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
             ] }),
             M && /* @__PURE__ */ e.jsxs("div", { style: { marginTop: "2px", fontSize: "9px", color: "#B45309" }, children: [
               "⚠ ",
-              zn[M] || M
+              Fn[M] || M
             ] })
           ] })
         ] }),
@@ -2063,13 +2271,13 @@ function ir({ item: t, idx: n, selected: i, onSelect: o, onRemove: l, setValConf
     }
   );
 }
-const zn = {
+const Fn = {
   self_reference: "Formula references itself (server)",
   circular_reference: "Circular dependency with another formula (server)",
   expression_error: "Expression could not be evaluated (server)",
   missing_reference: "Unknown field reference (server)"
 };
-function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: j = [], availableRawFields: y = [], serverError: E = null }) {
+function En({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClose: x, onRemove: f, displayedColumnOptions: j = [], availableRawFields: y = [], serverError: E = null }) {
   const s = c.useRef(null), [h, W] = c.useState({
     label: t.label || "",
     formula: t.formula || "",
@@ -2121,7 +2329,7 @@ function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
     },
     [y, M]
   ), I = c.useMemo(
-    () => Cn(
+    () => Rn(
       h.formula,
       M,
       t.field,
@@ -2132,10 +2340,10 @@ function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
     ),
     [C, h.formula, h.formulaRef, h.formulaScope, t.field, M, A]
   ), N = c.useMemo(
-    () => Dn(l, I.tone),
+    () => $n(l, I.tone),
     [I.tone, l]
   ), R = c.useMemo(
-    () => Fe(h.formulaScope) ? An(C) : Rn($),
+    () => Fe(h.formulaScope) ? Dn(C) : An($),
     [C, h.formulaScope, $]
   ), O = c.useMemo(
     () => Fe(h.formulaScope) ? or(C) || "[column_id] - [other_column_id]" : Dt($) || `${Ee(h.formulaRef || t.field)} * 100`,
@@ -2170,7 +2378,7 @@ function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
             const ee = V[U];
             !ee || ee.agg !== "formula" || !ee.formula || (V[U] = {
               ...ee,
-              formula: Sn(ee.formula, H, Z)
+              formula: jn(ee.formula, H, Z)
             });
           }
         return V;
@@ -2574,213 +2782,6 @@ function Fn({ item: t, idx: n, valConfigs: i, setValConfigs: o, theme: l, onClos
     }
   );
 }
-function En({
-  panelId: t,
-  panelLabel: n,
-  size: i,
-  onSizeChange: o,
-  getSidebarWidth: l = null,
-  onSidebarWidthChange: x = null,
-  theme: f,
-  outerStyle: j = {},
-  contentStyle: y = {},
-  children: E
-}) {
-  const s = c.useRef(null), h = c.useRef(null), W = c.useRef(null), P = c.useRef(null), M = c.useRef(null), $ = c.useRef(null), b = c.useRef(null), [C, A] = c.useState(null), [I, N] = c.useState(null), R = c.useMemo(() => rn(t), [t]), O = c.useMemo(
-    () => Xt(t, i),
-    [t, i]
-  ), a = c.useRef(O);
-  a.current = O;
-  const k = c.useMemo(() => C ? Xt(t, {
-    width: C.width !== void 0 ? C.width : O.width,
-    height: C.height !== void 0 ? C.height : O.height
-  }) : O, [C, t, O]), w = c.useCallback((L = !0) => {
-    if (h.current) {
-      const g = h.current;
-      h.current = null, g(L);
-    }
-  }, []);
-  c.useEffect(() => (() => w(!1)), [w]);
-  const B = c.useCallback((L, g) => {
-    if (!s.current || typeof o != "function") return;
-    L.preventDefault(), L.stopPropagation(), w(!1);
-    const z = s.current.getBoundingClientRect(), V = s.current.parentElement ? s.current.parentElement.getBoundingClientRect() : z, D = typeof l == "function" ? Number(l()) : NaN, H = Number.isFinite(D) ? Math.max(200, Math.min(600, Math.round(D))) : null, Z = H !== null ? Math.max(0, Math.round(H - V.width)) : 0, Q = typeof x == "function" && H !== null;
-    H !== null && (a.current.width === null || $.current === null) && ($.current = H, b.current = Z);
-    const U = H !== null ? $.current !== null ? Math.min(H, $.current) : H : null, ee = b.current !== null ? b.current : Z, zt = Q ? Math.max(R.minWidth, Math.min(R.maxWidth, 600 - ee)) : Math.max(R.minWidth, Math.min(R.maxWidth, Math.floor(V.width))), le = {
-      startX: L.clientX,
-      startY: L.clientY,
-      startWidth: z.width,
-      startHeight: z.height,
-      startParentWidth: Math.floor(V.width),
-      startSidebarWidth: H,
-      baseSidebarWidth: U,
-      chromeWidth: ee,
-      canExpandSidebar: Q,
-      maxWidth: zt,
-      initialWidthProp: a.current.width
-    }, we = document.body.style.cursor, We = document.body.style.userSelect;
-    document.body.style.cursor = g === "both" ? "nwse-resize" : g === "width" ? "ew-resize" : "ns-resize", document.body.style.userSelect = "none", P.current = null, M.current = null, N(g);
-    const Ce = () => {
-      W.current = null, P.current && A(P.current), M.current !== null && typeof x == "function" && (x(M.current), M.current = null);
-    }, fe = (Ae) => {
-      const ge = Ae.clientX - le.startX, me = Ae.clientY - le.startY, Ve = {};
-      if (g === "width" || g === "both" && (le.initialWidthProp !== null || Math.abs(ge) >= 3)) {
-        const ve = Math.max(R.minWidth, Math.min(le.maxWidth, Math.round(le.startWidth + ge)));
-        if (Ve.width = ve, s.current && (s.current.style.width = `${ve}px`), le.canExpandSidebar) {
-          const pt = le.baseSidebarWidth !== null ? le.baseSidebarWidth : le.startSidebarWidth, ut = Math.max(
-            pt,
-            Math.min(600, ve + le.chromeWidth)
-          );
-          M.current = ut;
-        }
-      }
-      if (g === "height" || g === "both") {
-        const ve = Math.max(R.minHeight, Math.min(R.maxHeight, Math.round(le.startHeight + me)));
-        Ve.height = ve, s.current && (s.current.style.height = `${ve}px`);
-      }
-      Object.keys(Ve).length !== 0 && (P.current = Ve, typeof window < "u" && typeof window.requestAnimationFrame == "function" ? W.current === null && (W.current = window.requestAnimationFrame(Ce)) : Ce());
-    }, Re = (Ae = !0) => {
-      W.current !== null && typeof window < "u" && typeof window.cancelAnimationFrame == "function" && (window.cancelAnimationFrame(W.current), W.current = null), document.body.style.cursor = we, document.body.style.userSelect = We, window.removeEventListener("mousemove", fe), window.removeEventListener("mouseup", ce), window.removeEventListener("blur", ce);
-      const ge = P.current, me = M.current;
-      P.current = null, M.current = null, N(null), A(null), Ae ? (me !== null && typeof x == "function" && x(me), ge && o(t, ge)) : s.current && (s.current.style.width = a.current.width === null ? "100%" : `${a.current.width}px`, s.current.style.height = `${a.current.height}px`);
-    }, ce = () => w(!0);
-    h.current = Re, window.addEventListener("mousemove", fe), window.addEventListener("mouseup", ce), window.addEventListener("blur", ce);
-  }, [
-    l,
-    R.maxHeight,
-    R.maxWidth,
-    R.minHeight,
-    R.minWidth,
-    x,
-    o,
-    t,
-    w
-  ]), _ = c.useCallback((L, g) => {
-    g && (g.preventDefault(), g.stopPropagation()), w(!1), typeof o == "function" && (L === "width" ? (o(t, { width: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)) : L === "height" ? o(t, { height: null }) : (o(t, { width: null, height: null }), $.current !== null && typeof x == "function" && (x($.current), $.current = null, b.current = null)));
-  }, [x, o, t, w]), Y = `${f.primary}55`;
-  return /* @__PURE__ */ e.jsxs(
-    "div",
-    {
-      ref: s,
-      style: {
-        position: "relative",
-        flexShrink: 0,
-        width: k.width === null ? "100%" : `${k.width}px`,
-        maxWidth: "100%",
-        height: `${k.height}px`,
-        minHeight: `${R.minHeight}px`,
-        maxHeight: `${R.maxHeight}px`,
-        boxSizing: "border-box",
-        overflow: "hidden",
-        ...j
-      },
-      children: [
-        /* @__PURE__ */ e.jsx(
-          "div",
-          {
-            style: {
-              width: "100%",
-              height: "100%",
-              overflow: "auto",
-              boxSizing: "border-box",
-              ...y
-            },
-            children: E
-          }
-        ),
-        /* @__PURE__ */ e.jsx(
-          "div",
-          {
-            className: "sp-resize-handle",
-            "data-resizing": I === "width" ? "true" : void 0,
-            onMouseDown: (L) => B(L, "width"),
-            onDoubleClick: (L) => _("width", L),
-            style: {
-              position: "absolute",
-              top: 0,
-              right: 0,
-              bottom: "12px",
-              width: "10px",
-              cursor: "ew-resize",
-              zIndex: 4,
-              touchAction: "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-end",
-              paddingRight: "2px"
-            },
-            title: `Resize ${n} width`,
-            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "2px", height: "24px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
-          }
-        ),
-        /* @__PURE__ */ e.jsx(
-          "div",
-          {
-            className: "sp-resize-handle",
-            "data-resizing": I === "height" ? "true" : void 0,
-            onMouseDown: (L) => B(L, "height"),
-            onDoubleClick: (L) => _("height", L),
-            style: {
-              position: "absolute",
-              left: 0,
-              right: "12px",
-              bottom: 0,
-              height: "10px",
-              cursor: "ns-resize",
-              zIndex: 4,
-              touchAction: "none",
-              display: "flex",
-              alignItems: "flex-end",
-              justifyContent: "center",
-              paddingBottom: "2px"
-            },
-            title: `Resize ${n} height`,
-            children: /* @__PURE__ */ e.jsx("span", { className: "sp-resize-pill", "aria-hidden": "true", style: { width: "28px", height: "2px", borderRadius: "999px", background: Y, opacity: 0.45, pointerEvents: "none" } })
-          }
-        ),
-        /* @__PURE__ */ e.jsx(
-          "div",
-          {
-            className: "sp-resize-handle",
-            "data-resizing": I === "both" ? "true" : void 0,
-            onMouseDown: (L) => B(L, "both"),
-            onDoubleClick: (L) => _("both", L),
-            style: {
-              position: "absolute",
-              right: 0,
-              bottom: 0,
-              width: "14px",
-              height: "14px",
-              cursor: "nwse-resize",
-              zIndex: 5,
-              touchAction: "none"
-            },
-            title: `Resize ${n}`,
-            children: /* @__PURE__ */ e.jsx(
-              "div",
-              {
-                className: "sp-resize-pill",
-                "aria-hidden": "true",
-                style: {
-                  position: "absolute",
-                  right: "4px",
-                  bottom: "4px",
-                  width: "3px",
-                  height: "3px",
-                  borderRadius: "999px",
-                  background: Y,
-                  opacity: 0.55,
-                  boxShadow: `-4px 0 0 ${Y}, 0 -4px 0 ${Y}, -4px -4px 0 ${Y}`,
-                  pointerEvents: "none"
-                }
-              }
-            )
-          }
-        )
-      ]
-    }
-  );
-}
 function ar({ measureAxis: t, setMeasureAxis: n, theme: i, valueSelectStyle: o, regularValueCount: l }) {
   const x = c.useMemo(() => Je(t), [t]), f = c.useCallback((y) => {
     typeof n == "function" && n(
@@ -2944,8 +2945,8 @@ const Bn = c.memo(
     formulaErrors: Ie = {},
     serverSide: Qe = !1
   }) {
-    Gr("SidebarPanel");
-    const { theme: d, styles: G } = Xr(), {
+    Xr("SidebarPanel");
+    const { theme: d, styles: G } = qr(), {
       filters: pe,
       setFilters: xt,
       pivotMode: jr,
@@ -2957,7 +2958,7 @@ const Bn = c.memo(
       setActiveReportId: Dr,
       customDimensions: Se,
       setCustomDimensions: Ft
-    } = qr(), [et, Et] = c.useState({ columnId: null, anchorEl: null }), [Te, Be] = c.useState(null), [ye, De] = c.useState(null), [$e, ft] = c.useState("report"), tt = c.useRef(null), [$r, rt] = c.useState(null), ue = c.useRef(null), Mt = c.useRef(0), Ke = c.useRef(null), he = c.useRef(null), [q, gt] = c.useState(null), [yt, _t] = c.useState(""), [ht, zr] = c.useState(() => Mn()), Fr = c.useCallback(() => {
+    } = Jr(), [et, Et] = c.useState({ columnId: null, anchorEl: null }), [Te, Be] = c.useState(null), [ye, De] = c.useState(null), [$e, ft] = c.useState("report"), tt = c.useRef(null), [$r, rt] = c.useState(null), ue = c.useRef(null), Mt = c.useRef(0), Ke = c.useRef(null), he = c.useRef(null), [q, gt] = c.useState(null), [yt, _t] = c.useState(""), [ht, zr] = c.useState(() => Mn()), Fr = c.useCallback(() => {
       zr(
         /** @param {boolean} previous */
         (r) => {
@@ -2969,7 +2970,7 @@ const Bn = c.memo(
       () => new Set(Array.isArray(me) ? me : []),
       [me]
     ), te = c.useCallback(
-      (r) => Jr(r, Se),
+      (r) => Qr(r, Se),
       [Se]
     ), Wt = c.useMemo(
       () => Je(E),
@@ -3123,7 +3124,7 @@ const Bn = c.memo(
       typeof ge == "function" && ge(
         /** @param {any} [prev] @returns {any} */
         (p) => {
-          const m = Qr(p, r, u), v = p && p[r] ? p[r] : null, T = m[r];
+          const m = en(p, r, u), v = p && p[r] ? p[r] : null, T = m[r];
           return v && v.width === T.width && v.height === T.height ? p : m;
         }
       );
@@ -3160,7 +3161,7 @@ const Bn = c.memo(
         (p) => {
           const m = [...p], v = m[r];
           if (!v) return p;
-          if (Gt(u) && !v.weightField) {
+          if (Xt(u) && !v.weightField) {
             const T = Array.isArray(re) && re.length > 0 ? re.find((K) => K !== v.field) || re[0] : "", X = typeof window < "u" ? window.prompt(
               `Weight field for weighted average of ${ke(v.field)}`,
               v.weightField || T || ""
@@ -3194,10 +3195,10 @@ const Bn = c.memo(
         }
       );
     }, [y]), Ut = c.useCallback(() => {
-      const r = wn(j), u = j.filter(
+      const r = Cn(j), u = j.filter(
         /** @param {any} [config] @returns {any} */
         (T) => T && T.agg !== "formula"
-      ), p = `Formula ${ze + 1}`, m = Dt(u), v = vn(p, j, r);
+      ), p = `Formula ${ze + 1}`, m = Dt(u), v = Sn(p, j, r);
       Be(r), De(r), y(
         /** @param {any} [prev] @returns {any} */
         (T) => [
@@ -3474,7 +3475,7 @@ const Bn = c.memo(
           )
         ] }),
         Ne && $e === "report" ? /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "0 12px 12px" }, children: /* @__PURE__ */ e.jsx(
-          mn,
+          vn,
           {
             reportDef: kr,
             setReportDef: wr,
@@ -3700,7 +3701,7 @@ const Bn = c.memo(
             ] }),
             Yt(Pe.length, mt.length),
             /* @__PURE__ */ e.jsxs(
-              En,
+              an,
               {
                 panelId: "availableFields",
                 panelLabel: "Available Fields",
@@ -3920,7 +3921,7 @@ const Bn = c.memo(
                                           /* @__PURE__ */ e.jsx("option", { value: "weighted_avg", children: "WAvg" }),
                                           /* @__PURE__ */ e.jsx("option", { value: "array_agg", children: "Series" })
                                         ] }),
-                                        Gt(p.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: p.weightField || "", onClick: (S) => S.stopPropagation(), onChange: (S) => Lr(m, S.target.value), style: { ...be, width: "96px" }, title: "Weight field", children: [
+                                        Xt(p.agg) && /* @__PURE__ */ e.jsxs(ne, { size: "sm", value: p.weightField || "", onClick: (S) => S.stopPropagation(), onChange: (S) => Lr(m, S.target.value), style: { ...be, width: "96px" }, title: "Weight field", children: [
                                           /* @__PURE__ */ e.jsx("option", { value: "", disabled: !0, children: "Weight" }),
                                           re.map(
                                             /** @param {any} [fieldName] @returns {any} */
@@ -3979,7 +3980,7 @@ const Bn = c.memo(
                                         }, className: "sp-chip-remove", style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(F.Close, {}) })
                                       ] }),
                                       r.id === "filter" && et.columnId === v && /* @__PURE__ */ e.jsx(
-                                        en,
+                                        tn,
                                         {
                                           column: { header: T, id: v },
                                           anchorEl: et.anchorEl,
@@ -4481,7 +4482,7 @@ const Bn = c.memo(
         ] })
       ] }),
       jt && /* @__PURE__ */ e.jsx(
-        Fn,
+        En,
         {
           item: jt,
           idx: St,

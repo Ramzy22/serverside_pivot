@@ -849,9 +849,9 @@ const THEME_CORE_COLOR_FIELDS = [
 const THEME_STRUCTURE_COLOR_FIELDS = [
     { key: 'hierarchyBg', label: 'Hierarchy Bg' },
     { key: 'totalBg', label: 'Total Bg' },
-    { key: 'totalBgStrong', label: 'Grand Total Bg' },
+    { key: 'totalBgStrong', label: 'Total Header Bg' },
     { key: 'totalText', label: 'Total Text' },
-    { key: 'totalTextStrong', label: 'Grand Total Text' },
+    { key: 'totalTextStrong', label: 'Total Header Text' },
 ];
 
 /** @type {any[]} */
@@ -1087,7 +1087,7 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
                             fontSize: '11px',
                             fontWeight: 700,
                         }}>
-                            Grand Total
+                            Total Header
                         </div>
                     </div>
                 </div>

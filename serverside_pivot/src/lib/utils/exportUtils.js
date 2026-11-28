@@ -305,7 +305,7 @@ function _buildSmlStyles(tc) {
     /** @type {any} */
     const hdrFg  = _normColor((tc || {}).headerText, '#FFFFFF');
     /** @type {any} */
-    const totBg  = _normColor((tc || {}).totalBgStrong || (tc || {}).totalBg, '#E8EEF8');
+    const totBg  = _normColor((tc || {}).totalBg || (tc || {}).totalBgStrong, '#E8EEF8');
     /** @type {any} */
     const totFg  = _normColor((tc || {}).totalText || (tc || {}).text, '#1A2B3C');
     /** @type {any} */

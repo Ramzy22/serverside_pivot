@@ -39,7 +39,16 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
         /** @returns {any} */
         const updatePosition = () => {
             /** @type {any} */
-            const rect = target.getBoundingClientRect();
+            const anchorRect = target.getBoundingClientRect();
+            // Open below the whole column header (not the icon inside it), aligned to the icon.
+            /** @type {any} */
+            const header = typeof target.closest === 'function' ? target.closest('[role="columnheader"]') : null;
+            /** @type {any} */
+            const headerRect = header && typeof header.getBoundingClientRect === 'function' ? header.getBoundingClientRect() : null;
+            /** @type {any} */
+            const rect = headerRect
+                ? { top: headerRect.top, bottom: headerRect.bottom, left: anchorRect.left }
+                : anchorRect;
             /** @type {any} */
             const popover = popoverRef.current;
             /** @type {any} */

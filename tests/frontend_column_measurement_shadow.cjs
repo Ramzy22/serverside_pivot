@@ -30,7 +30,8 @@ function removeTempDir(directory) {
     const tempRoot = path.resolve(os.tmpdir());
     assert.equal(path.dirname(resolved), tempRoot);
     assert.match(path.basename(resolved), /^pivot-shadow-measurement-/);
-    fs.rmSync(resolved, {recursive: true, force: true});
+    // Chrome helper processes can hold profile files briefly after the browser exits on Windows.
+    fs.rmSync(resolved, {recursive: true, force: true, maxRetries: 20, retryDelay: 100});
 }
 
 async function availablePort() {

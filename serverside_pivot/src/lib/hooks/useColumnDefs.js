@@ -247,6 +247,11 @@ export function useColumnDefs({
                 : (getConfigDisplayFormat(config) || defaultValueFormat || null);
             return formatValue(numericValue, effectiveFormat, cellDec, effectiveGroupSeparator);
         };
+        /** A change always carries its sign: "+48", "-12", "0". @param {any} value @param {any} config @param {any} columnId @returns {string} */
+        const formatSparklineDeltaValue = (value, config, columnId) => {
+            const label = formatSparklineMetricValue(value, config, columnId);
+            return label && Number(value) > 0 && !label.startsWith('+') ? `+${label}` : label;
+        };
         /** @param {any} [headerLabel] @param {any} [points] @param {any} [currentLabel] @param {any} [deltaLabel] @returns {any} */
         const buildSparklineCellTitle = (headerLabel, points, currentLabel, deltaLabel) => {
             if (!Array.isArray(points) || points.length === 0) return headerLabel || '';
@@ -569,14 +574,14 @@ export function useColumnDefs({
                     showCurrentValue={compact ? false : sparklineConfig.showCurrentValue}
                     showDelta={compact ? false : sparklineConfig.showDelta}
                     currentLabel={formatSparklineMetricValue(summaryMetric, config, columnId)}
-                    deltaLabel={formatSparklineMetricValue(deltaMetric, config, columnId)}
+                    deltaLabel={formatSparklineDeltaValue(deltaMetric, config, columnId)}
                     deltaValue={deltaMetric}
                     compact={compact || sparklineConfig.compact}
                     title={buildSparklineCellTitle(
                         headerLabel,
                         points,
                         formatSparklineMetricValue(summaryMetric, config, columnId),
-                        formatSparklineMetricValue(deltaMetric, config, columnId),
+                        formatSparklineDeltaValue(deltaMetric, config, columnId),
                     )}
                 />
             );
@@ -957,7 +962,7 @@ export function useColumnDefs({
                         headerLabel,
                         points,
                         formatSparklineMetricValue(metricValue, config, columnId),
-                        formatSparklineMetricValue(deltaMetric, config, columnId),
+                        formatSparklineDeltaValue(deltaMetric, config, columnId),
                     )}
                 >
                     {renderedNode}

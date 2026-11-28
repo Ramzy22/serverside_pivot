@@ -372,7 +372,7 @@ export function useRuntimeClipboardExportPresentation({
     const groupWeightVal = resolveDepthVal(theme.groupFontWeight, depth);
     /** @type {any} */
     const background = isGrandTotalRow
-      ? (theme.totalBgStrong || theme.totalBg || theme.select || theme.background)
+      ? (theme.totalBg || theme.select || theme.background)
       : isTotalCol
         ? (theme.totalBg || theme.select || theme.background)
         : !isLeafRow && groupBgVal

@@ -117,7 +117,8 @@ def test_export_job_lifecycle_executes_shared_frontend_commands_and_overlay():
     result = subprocess.run(
         [node, str(Path(__file__).with_name("frontend_export_job_lifecycle.cjs"))],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
-        timeout=30, check=False,
+        # The runner Babel-transforms its source graph (~16s alone); leave headroom under -n auto.
+        timeout=120, check=False,
     )
     assert result.returncode == 0, result.stderr or result.stdout
 
@@ -4066,8 +4067,8 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "editedCellText" in app_bar_source
     assert "Structure" in app_bar_source
     assert "Hierarchy Bg" in app_bar_source
-    assert "Grand Total Bg" in app_bar_source
-    assert "Grand Total Text" in app_bar_source
+    assert "Total Header Bg" in app_bar_source
+    assert "Total Header Text" in app_bar_source
     assert "resolveEditedCellMarker" in render_helper_source
     assert "buildEditedCellVisualStyle" in render_helper_source
     assert "export const EDITED_CELL_FORMAT_KEY = '__edited_cells__';" in formatting_source

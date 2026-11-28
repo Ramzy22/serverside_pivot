@@ -38,7 +38,7 @@ class BoundStatement:
         backend._run_pre_execute_hooks(self.expr)
         cursor = backend.con.cursor()
         try:
-            return cursor.execute(self.sql, self.params or None).fetch_arrow_table()
+            return cursor.execute(self.sql, self.params or None).to_arrow_table()
         finally:
             cursor.close()
 
