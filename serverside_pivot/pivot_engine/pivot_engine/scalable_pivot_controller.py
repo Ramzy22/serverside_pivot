@@ -38,6 +38,8 @@ from .util.sql_builder import quote_ident
 
 #: Core results depend on the data: every data load or mutation clears them through the cache coordinator.
 CORE_RESULT_NAMESPACE = "core.result"
+CORE_CATALOG_NAMESPACE = "core.catalog"
+CORE_LEVEL_NAMESPACE = "core.level"
 
 
 class ScalablePivotController:
@@ -131,7 +133,7 @@ class ScalablePivotController:
         self.catalog_store = CatalogStore(self.con, budget=self.resource_governor.limits.cache_bytes)
         object.__setattr__(self.con, "_pivot_catalog_store", self.catalog_store)
         self.cache_coordinator.register_namespace(
-            "core.catalog", owner="controller",
+            CORE_CATALOG_NAMESPACE, owner="controller",
             key_dimensions=("dataset", "revision", "scope_fingerprint", "filters", "columns", "order"),
             size_getter=lambda: {"bytes": self.catalog_store.cache.used_bytes("catalog")},
             invalidator=lambda event: self._invalidate_core(lambda: self.catalog_store.invalidate(event.table)),
@@ -142,7 +144,7 @@ class ScalablePivotController:
             self.level_store = LevelTableStore(self.con, budget=self.resource_governor.limits.cache_bytes)
             object.__setattr__(self.con, "_pivot_level_store", self.level_store)
             self.cache_coordinator.register_namespace(
-                "core.level",
+                CORE_LEVEL_NAMESPACE,
                 owner="controller",
                 key_dimensions=("dataset", "level_meaning", "scope_fingerprint", "revision"),
                 size_getter=lambda: {"bytes": self.level_store.cache.used_bytes("level")},
@@ -244,12 +246,12 @@ class ScalablePivotController:
     def core_result_dict(self, spec: Any, table: pa.Table) -> Dict[str, Any]:
         """Reuse the JSON-ready response next to its Arrow result, with isolated caller ownership."""
         key = key_for("result", str(spec.table), spec_fingerprint(spec))
-        entry = self.core_cache.get(key)
+        entry = self.core_cache.peek(key)
         if entry is not None and entry[1] is table and len(entry) > 2 and entry[2] is not None:
             return copy.deepcopy(entry[2])
         result = self._convert_table_to_dict(table, spec)
         with self._core_epoch_lock:
-            current = self.core_cache.get(key)
+            current = self.core_cache.peek(key)
             if current is entry and entry is not None and entry[1] is table:
                 self.core_cache.put(key, (entry[0], table, copy.deepcopy(result)))
         return result
@@ -929,7 +931,8 @@ class ScalablePivotController:
     def _clear_mutation_caches(self, table_name: Optional[str] = None, structural: bool = False) -> None:
         """Invalidate the caches a row mutation makes stale, without flushing unrelated namespaces."""
         self.cache_coordinator.invalidate(
-            [CORE_RESULT_NAMESPACE],
+            # Level tables and catalogs hold aggregates of the data: a mutation makes them stale too.
+            [CORE_RESULT_NAMESPACE, CORE_CATALOG_NAMESPACE, CORE_LEVEL_NAMESPACE],
             event="mutation",
             reason="row_mutation",
             table=table_name,

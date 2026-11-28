@@ -78,6 +78,12 @@ class CacheManager:
             self.hits += 1
             return item[0]
 
+    def peek(self, key: CacheKey) -> Optional[Any]:
+        """The entry, if present, without counting a hit or a miss (bookkeeping, not a read)."""
+        with self._lock:
+            item = self._entries[key.tier].get(key)
+            return None if item is None else item[0]
+
     def put(self, key: CacheKey, value: Any) -> None:
         size = max(0, int(self._sizeof(value)))
         with self._lock:

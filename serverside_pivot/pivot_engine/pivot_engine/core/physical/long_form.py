@@ -371,7 +371,11 @@ def _grouping_sql_and_schema(source: Any, schema: Any, q: PivotQuery, depths: Li
     cache_key = key_for(
         "plan",
         q.dataset,
-        f"gsql:{backend.name}:{hash(op)}:{tuple(depths)}:{q.columns}:{bool(q.measure_filters)}:{q.ragged is not None}",
+        # Everything the SQL text depends on beyond the aggregate: the projected keys, the measure
+        # aliases, the visibility relation (measure filters over E0) and the ragged filter.
+        f"gsql:{backend.name}:{hash(op)}:{tuple(depths)}:{q.rows}:{q.columns}:"
+        f"{tuple(m.alias for m in q.measures)}:{hash(eligible.op()) if q.measure_filters else None}:"
+        f"{plan.values_from}:{q.ragged is not None}",
     )
     saved = _cached(cache_key, op)
     if saved is not None:
@@ -547,7 +551,15 @@ def view(query: PivotQuery, relation: Any, blocks: Dict[int, Any], *, parameteri
     if parameterized:
         plan = replace(plan, levels=tuple(ParameterLevel(level.depth, level.keys, None) for level in plan.levels))
     union, order = ua.tree(plan, relation, None, lambda _source, _plan: provider)
-    nodes = ua.ordered_tree(plan, relation, union, order)
+    # Without window functions the tree has no ORD: its order travels as key columns, because a
+    # join need not keep the left side's row order (Polars >= 2 does not), and is applied again after it.
+    order_keys = _order_keys(order) if query.columns and not window_functions(relation) else []
+    if order_keys:
+        union = union.mutate(**{name: expr for name, expr, _, _ in order_keys})
+        nodes = union.order_by(_sorted_by(union, order_keys))
+        nodes = nodes.select(*ua.output_columns(plan), *[n for n, _, _, _ in order_keys])
+    else:
+        nodes = ua.ordered_tree(plan, relation, union, order)
     if parameterized:
         nodes = nodes.filter((nodes[ORD] == 0) | (nodes[DEPTH] == 0) |
                              ((nodes[ORD] >= value("offset", "int64")) &
@@ -579,7 +591,27 @@ def view(query: PivotQuery, relation: Any, blocks: Dict[int, Any], *, parameteri
     joined = nodes.left_join(cells, predicates)
     result = joined.select(*[joined[c] for c in nodes.columns],
                            *[joined[c] for c in cells.columns if not c.startswith("__row") and c != "__cd"])
+    if order_keys:
+        return result.order_by(_sorted_by(result, order_keys)).drop(*[n for n, _, _, _ in order_keys])
     return result.order_by(ORD) if ORD in nodes.columns else result
+
+
+def _order_keys(order: Sequence[Any]) -> List[Tuple[str, Any, bool, bool]]:
+    """``(column, value, ascending, nulls_first)`` for each sort key of ``order``."""
+    from ibis.expr import operations as ops
+
+    keys = []
+    for i, key in enumerate(order):
+        op = key.op()
+        if isinstance(op, ops.SortKey):
+            keys.append((f"__ok{i}", op.arg.to_expr(), bool(op.ascending), bool(op.nulls_first)))
+        else:
+            keys.append((f"__ok{i}", key, True, False))
+    return keys
+
+
+def _sorted_by(table: Any, keys: Sequence[Tuple[str, Any, bool, bool]]) -> List[Any]:
+    return [table[n].asc(nulls_first=first) if asc else table[n].desc(nulls_first=first) for n, _, asc, first in keys]
 
 
 @dataclass(frozen=True)

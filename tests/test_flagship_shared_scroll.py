@@ -91,7 +91,7 @@ def test_vertical_window_round_trip():
         later = window(client, 2, start=100, end=119)
         restored = window(client, 3)
     for response, start, end in ((first, 0, 4), (later, 100, 119), (restored, 0, 4)):
-        assert_rows(response, start, end, 23)
+        assert_rows(response, start, end, 0)  # REQ-PIV-002: the catalog defaults to label order
         assert response["rowCount"] == 121
     assert restored["data"] == first["data"]
 
@@ -102,9 +102,9 @@ def test_horizontal_window_round_trip():
         last_period = window(client, 2, col_start=69, col_end=71)
         totals = window(client, 3, col_start=72, col_end=74)
         restored = window(client, 4)
-    for response, period in ((first, 23), (last_period, 0), (restored, 23)):
+    for response, period in ((first, 0), (last_period, 23), (restored, 0)):  # label order (REQ-PIV-002)
         assert_rows(response, 0, 4, period)
-    for response, start, period in ((first, 0, 23), (last_period, 69, 0), (totals, 72, None)):
+    for response, start, period in ((first, 0, 0), (last_period, 69, 23), (totals, 72, None)):
         columns = [column for column in response["colSchema"]["columns"] if column]
         expected = [f"P{period:02d}_{measure}_sum" if period is not None else f"__RowTotal__{measure}_sum"
                     for measure in FIELDS]
@@ -126,6 +126,6 @@ def test_cached_row_block_preserves_layout_revision():
         cached_slice = window(client, 2, start=5, end=9, needs_schema=False)
         restored = window(client, 3, start=5, end=9, needs_schema=False)
     for response in (cached_slice, restored):
-        assert_rows(response, 5, 9, 23)
+        assert_rows(response, 5, 9, 0)
         assert response["layoutRevision"] == initial["layoutRevision"]
         assert response["colSchema"] is None
