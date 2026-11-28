@@ -1,4 +1,4 @@
-import { j as e, I as a } from "./index-vxH3rV1_.js";
+import { j as e, I as a } from "./index-BQa2DugC.js";
 import { a as B } from "./charts-DthW1Q8W.js";
 function R({
   detailState: i,

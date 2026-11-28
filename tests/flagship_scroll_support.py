@@ -72,7 +72,7 @@ if (!window.__pivotScrollTrace) {
         schema: Array.isArray(value.payload?.colSchema?.columns)
           ? value.payload.colSchema.columns.map(column => ({index:column.index,id:column.id,layoutId:column.layoutId})) : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
-          first: row?.['P23_unités_sum'], last: row?.['P00_unités_sum'],
+          first: row?.['P00_unités_sum'], last: row?.['P23_unités_sum'],
           total: row?.['__RowTotal__unités_sum'],
           totalKeys: row?._id === 'R000' ? Object.keys(row).filter(key => key.includes('Total')) : []}))});
       return;
@@ -179,7 +179,7 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 25)
         scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
-        first_column = "P23_unités_sum"
+        first_column = "P00_unités_sum"
         last_column = "__RowTotal__écart_sum"
         wait.until(lambda current: _cell(_visible_cells(current), "R000", first_column, "1"))
         first_header = _wait_for_visible_workspace_element(
@@ -311,8 +311,8 @@ def qualify_custom_pivot_order(host: str) -> None:
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 25)
         scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
-        first = "P23_unités_sum"
-        moved = "P00_unités_sum"
+        first = "P00_unités_sum"
+        moved = "P23_unités_sum"
         wait.until(lambda current: _cell(_visible_cells(current), "R000", first, "1"))
         driver.execute_script("arguments[0].scrollLeft=arguments[0].scrollWidth", scroller)
         wait.until(lambda current: _cell(_visible_cells(current), "R000", moved, "1"))
@@ -328,7 +328,7 @@ def qualify_custom_pivot_order(host: str) -> None:
             if not replies:
                 return False
             schema = replies[-1]["schema"]
-            return bool(schema and schema[0]["id"].startswith("P00_")
+            return bool(schema and schema[0]["id"].startswith("P23_")
                         and _cell(_visible_cells(current), "R000", moved, "1"))
 
         wait.until(moved_first)
@@ -396,11 +396,11 @@ def qualify_custom_pivot_order(host: str) -> None:
         )) if entry.get("kind") == "export" and entry.get("phase") == "request"
             and entry.get("format") == "html")
         assert copied_request["colIds"][:4] == [
-            "hierarchy", "P00_unités_sum", "P00_ventes_€_sum", "P00_écart_sum",
+            "hierarchy", "P23_unités_sum", "P23_ventes_€_sum", "P23_écart_sum",
         ]
         assert len(clipboard_rows[0]) == len(copied_request["colIds"])
         assert clipboard_rows[0][:4] == ["Region > Account", "Unités", "Ventes (€)", "Écart"]
-        assert clipboard_rows[1][:4] == ["R000", "1", "0", "0"]
+        assert clipboard_rows[1][:4] == ["R000", "1", "23", "0"]
         assert all(len(row) == len(clipboard_rows[0]) for row in clipboard_rows)
 
         started_at = time.time()
@@ -410,9 +410,9 @@ def qualify_custom_pivot_order(host: str) -> None:
         sheet = workbook.active
         workbook_rows = list(sheet.values)
         assert sheet.merged_cells.ranges, "Pivot group headers were not merged in XLSX"
-        assert workbook_rows[0][1] == "P00"
+        assert workbook_rows[0][1] == "P23"
         assert workbook_rows[1][1] == "Unités"
-        assert workbook_rows[2][:4] == ("R000", 1, 0.25, 0)
+        assert workbook_rows[2][:4] == ("R000", 1, 23.25, 0)
         assert workbook_rows[-1][0] == "Grand Total"
         grand_total_count = sum(row[0] == "Grand Total" for row in workbook_rows)
         observation["workbook"] = {"file": downloaded.name, "rows": workbook_rows[:6],

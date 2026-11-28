@@ -236,7 +236,15 @@ def test_reference_display_application_callbacks(reference_run, requirement, mod
             expected_sales = ['100.25', '20.00', '49.75', '30.00'] if decimals == 2 else ['100.3', '20.0', '49.8', '30.0']
             def ready(d):
                 cells = _flat_presentation(d)
-                return cells if [c['text'] for c in cells if c['column'] == SALES] == expected_sales else False
+                if [c['text'] for c in cells if c['column'] == SALES] != expected_sales:
+                    return False
+                if len([c for c in cells if c['column'] == 'scale_control']) != 4:
+                    return False
+                if mode == 'bars':
+                    scale_cells = [c for c in cells if c['column'] == 'scale_value']
+                    if len(scale_cells) != 4 or not all(c['bar'] and c['bar']['usable'] > 0 for c in scale_cells):
+                        return False
+                return cells
             cells = WebDriverWait(driver, 10).until(ready)
             by_column = {field: [c for c in cells if c['column'] == field]
                          for field in (SALES, 'format_edge', 'scale_value', 'scale_control')}

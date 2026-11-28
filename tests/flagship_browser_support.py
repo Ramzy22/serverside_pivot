@@ -856,6 +856,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             observation["beforeHideColumnIds"] = _selection_column_order(driver)
             toggle = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]')
             if not any(item.is_displayed() for item in _workspace_elements(driver, '[data-sidebar-drop-zone="vals"]')):
+                driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", toggle)
                 toggle.click()
             tab = wait.until(lambda current: next((element for element in _workspace_elements(current, 'div[style*="cursor: pointer"]')
                 if element.is_displayed() and element.text == "Columns"
@@ -870,7 +871,9 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", hide)
             hide.click()
             wait.until(lambda current: variance not in _selection_column_order(current))
-            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
+            close_toggle = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]')
+            driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", close_toggle)
+            close_toggle.click()
             columns = sorted([units, sales], key=_selection_column_order(driver).index)
             observation["hiddenColumnId"] = variance
             observation["actions"].append("native Columns sidebar search and Hide Column click for Q1 variance between endpoints")
@@ -1357,6 +1360,11 @@ def qualify_native_input_copy(host: str) -> None:
         wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
         search = wait.until(lambda current: _native_copy_input_target(current, '[data-testid="pivot-global-search"]'))
         copy_focused_input(search, "M\u00fcnchen", "global search")
+        hierarchy_header = wait.until(lambda current: next((header for header in _workspace_elements(current,
+            '[role="columnheader"][data-header-column-id="hierarchy"]')
+            if header.is_displayed()), False))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", hierarchy_header)
+        ActionChains(driver).move_to_element(hierarchy_header).perform()
         filter_button = wait.until(lambda current: next((button for button in _workspace_elements(current,
             '[role="columnheader"][data-header-column-id="hierarchy"] [aria-label="Filter Column"]')
             if button.is_displayed()), False))
@@ -2647,6 +2655,13 @@ def qualify_header_filter(host: str) -> None:
                    {region, "M\u00fcnchen", "Grand Total"})
 
         def click_filter():
+            from selenium.webdriver.common.action_chains import ActionChains
+            header = wait.until(lambda current: next((header
+                for header in _workspace_elements(current,
+                    '[role="columnheader"][data-header-column-id="hierarchy"]')
+                if header.is_displayed() and "Region" in header.text), False))
+            driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", header)
+            ActionChains(driver).move_to_element(header).perform()
             button = wait.until(lambda current: next((button
                 for header in _workspace_elements(current,
                     '[role="columnheader"][data-header-column-id="hierarchy"]')

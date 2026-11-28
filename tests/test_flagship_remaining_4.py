@@ -152,16 +152,16 @@ def test_scroll_oracle_requires_nonzero_both_axes_exact_logical_cells_and_tolera
 
 
 def _analysis_case():
-    ids = ['hierarchy'] + [f'{prefix}_{field}_{agg}' for prefix in ('Éclair|東京', 'München|القاهرة')
+    ids = ['hierarchy'] + [f'{prefix}_{field}_{agg}' for prefix in ('München|القاهرة', 'Éclair|東京')
                           for field, agg in (('ventes_€', 'avg'), ('unités', 'sum'), ('écart', 'sum'))]
     ids += ['__RowTotal__unités_sum', '__RowTotal__ventes_€_avg', '__RowTotal__écart_sum']
     request = {'state': {'rowFields': ['period'], 'colFields': ['region', 'account'],
                          'valConfigs': [{'field': f, 'agg': a} for f, a in
                             (('ventes_€', 'avg'), ('unités', 'sum'), ('écart', 'sum'))], 'filters': _part_manifest()['filters']},
                'payload': {'colIds': ids, 'style': {'headerLabels': {c: c for c in ids}}}}
-    rows = [list(ids), ['Q1', '100.25', '2', '-12.5', '49.75', '3', '4.25', '5', '75', '-8.25'],
-            ['Q2', '20', '1', '2.5', '30', '4', '-1', '5', '25', '1.5'],
-            ['Grand Total', '60.125', '3', '-10', '39.875', '7', '3.25', '10', '50', '-6.75']]
+    rows = [list(ids), ['Q1', '49.75', '3', '4.25', '100.25', '2', '-12.5', '5', '75', '-8.25'],
+            ['Q2', '30', '4', '-1', '20', '1', '2.5', '5', '25', '1.5'],
+            ['Grand Total', '39.875', '7', '3.25', '60.125', '3', '-10', '10', '50', '-6.75']]
     return rows, request
 
 

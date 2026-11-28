@@ -1580,8 +1580,25 @@ export const useServerSideRowModel = ({
         /** @type {any} */
         const shouldDispatchImmediately = blockJumpDistance >= 4 || columnJumpDistance >= 12 || columnRangeUrgent;
         const recentImmediateViewport = lastImmediateViewportRef.current;
+        const recentViewportPendingOrInflight = Boolean(
+            (queuedViewportRef.current
+                && queuedViewportRef.current.stateEpoch === stateEpoch
+                && queuedViewportRef.current.abortGeneration === abortGeneration
+                && queuedViewportRef.current.overrideColStart === colStart
+                && queuedViewportRef.current.overrideColEnd === colEnd)
+            || (inflightRequestRef.current
+                && inflightRequestRef.current.stateEpoch === stateEpoch
+                && inflightRequestRef.current.abortGeneration === abortGeneration
+                && columnWindowCovers(
+                    inflightRequestRef.current.colStart,
+                    inflightRequestRef.current.colEnd,
+                    colStart,
+                    colEnd
+                ))
+        );
         const matchesRecentImmediateViewport = (
-            recentImmediateViewport.startBlock === startBlock
+            recentViewportPendingOrInflight
+            && recentImmediateViewport.startBlock === startBlock
             && recentImmediateViewport.endBlock === endBlock
             && recentImmediateViewport.colStart === colStart
             && recentImmediateViewport.colEnd === colEnd
@@ -1632,10 +1649,20 @@ export const useServerSideRowModel = ({
                 lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
             }
         } else {
-            // The current visible range is already satisfied. Any deferred target
-            // belongs to an older scroll position and must not be merged into the
-            // next request after the user moves again.
-            queuedViewportRef.current = null;
+            // The current visible range is already satisfied. Clear any deferred
+            // target for this column window, but do not cancel a pending urgent
+            // jump queued for a different column range before React commits its
+            // new colStart/colEnd props.
+            const queued = queuedViewportRef.current;
+            const queuedForDifferentColumns = Boolean(
+                queued
+                && queued.stateEpoch === stateEpoch
+                && queued.abortGeneration === abortGeneration
+                && (queued.overrideColStart !== colStart || queued.overrideColEnd !== colEnd)
+            );
+            if (!queuedForDifferentColumns) {
+                queuedViewportRef.current = null;
+            }
             if (columnRangeUrgent) {
                 lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
             }

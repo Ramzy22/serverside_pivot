@@ -256,7 +256,7 @@ def _save_scroll(driver, host, wait, observation, downloads):
     _wheel(driver, 850, 2500)
     wait.until(lambda d: _scroll_snapshot(d)['top'] > 0 and _scroll_snapshot(d)['left'] > 0)
     saved = _stable_scroll(driver, wait)
-    assert saved['firstRow'] != 'R000' and saved['firstColumn'] != 'P23_unités_sum'
+    assert saved['firstRow'] != 'R000' and not saved['firstColumn'].startswith('P00_')
     observation['savedWindow'] = wait.until(lambda d: scroll_window_response(_trace(d), saved['firstRow'], checkpoint))
     if s._totals_control_button(driver, 'Save View') is None:
         s._click_totals_control(driver, 'Theme')
@@ -486,7 +486,7 @@ def _analysis_two_decimal_display(driver, wait):
     from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element as element
     if not any(e.is_displayed() for e in _workspace_elements(driver, '[title="Increase decimal places"]')):
         element(driver, '[data-testid="pivot-toolbar-format"]').click()
-    initial = _analysis_format(driver)
+    initial = wait.until(lambda d: _analysis_format(d) or False)
     assert '0 dp' in initial, ('Fresh analysis fixture must start at zero decimals', initial)
     # This fresh fixture starts at zero decimals and has no selected cells.
     # The global title also guards against accidentally formatting a selection.
@@ -665,10 +665,10 @@ def assert_analysis_csv(rows, request):
     assert [(c['field'], c['agg']) for c in state['valConfigs']] == measures
     assert state['filters']['scope']['conditions'][0]['value'] == 'Included'
     ids = payload['colIds']
-    # Transpose creates new pivot groups; the existing total group retains its
-    # saved leaf order across the sum-to-average change (stable measure identity).
+    # Transpose creates new pivot groups (default REQ-PIV-002 label-ascending order);
+    # the existing total group retains its saved leaf order across the sum-to-average change.
     assert ids == ['hierarchy'] + [f'{prefix}_{field}_{agg}'
-        for prefix in ('Éclair|東京', 'München|القاهرة') for field, agg in measures] + [
+        for prefix in ('München|القاهرة', 'Éclair|東京') for field, agg in measures] + [
             '__RowTotal__unités_sum', '__RowTotal__ventes_€_avg', '__RowTotal__écart_sum']
     assert len(rows) == 4 and [r[0] for r in rows[1:]] == ['Q1', 'Q2', 'Grand Total']
     assert rows[0] == [payload['style']['headerLabels'].get(c, c) for c in ids]
