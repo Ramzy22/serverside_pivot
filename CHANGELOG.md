@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-28
+
+### Changed
+- Improved pivot query performance across hierarchy and wide layouts: memoized DuckDB type resolution, materialized two-stage depth-1 rollups, single-parent depth-2 filters, CTAS filtered level-block population, streamlined Top-N view reads, and memory-aware DuckDB thread sizing.
+- Streamlined response mapping, column layout resolution, and viewport caching to avoid redundant row conversions and dictionary copies.
+- Added DuckDB 1.4/1.5 Arrow fetch compatibility for bound statements.
+
 ## [0.0.99] - 2026-11-27
 
 ### Added
